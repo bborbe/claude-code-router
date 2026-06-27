@@ -6,11 +6,8 @@
 package cli
 
 import (
-	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 
 	libhttp "github.com/bborbe/http"
 	"github.com/spf13/cobra"
@@ -22,6 +19,10 @@ import (
 var version = "dev"
 
 // NewCommand returns the root cobra command.
+//
+// Returns *cobra.Command (concrete) rather than an interface — cobra's
+// builder API requires the concrete type, and wrapping it adds no
+// testability gain since cobra commands are themselves the test surface.
 func NewCommand() *cobra.Command {
 	var listen string
 
@@ -31,13 +32,10 @@ func NewCommand() *cobra.Command {
 		Long:    "Local HTTP router for Claude Code. Forwards /v1/messages requests to one of several LLM providers based on the request's model field.",
 		Version: version,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
-
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 			slog.Info("starting claude-code-router", "listen", listen, "version", version)
 
-			return libhttp.NewServer(listen, factory.CreateRouter()).Run(ctx)
+			return libhttp.NewServer(listen, factory.CreateRouter()).Run(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8788", "address to listen on")

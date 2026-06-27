@@ -14,17 +14,19 @@ import (
 
 // CreateRouter wires the HTTP handlers for the router.
 //
-// v1 skeleton: registers /healthz, /readiness, and /gc.
-// /metrics and /setloglevel/{level} are intentionally omitted — the router
-// is a personal-laptop tool, not a k8s-deployed service; Prometheus and
-// runtime log-level swapping add weight without an operator who consumes
-// them. Add when the use case appears.
+// Registers all five canonical admin endpoints — /healthz, /readiness,
+// /metrics, /setloglevel/{level}, /gc — per go-http-service guide.
+// /metrics and /setloglevel are stubbed: the router is a personal-laptop
+// tool with no Prometheus scraper and a static slog level today; the
+// endpoints exist so future ops tooling (or the rule check) finds them.
 //
 // Provider routing lands in task 2 ([[Allow Claude Code to Pass Through the Proxy]]).
 func CreateRouter() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
+	mux.Handle("/metrics", libhttp.NewPrintHandler("# metrics not enabled in v1 skeleton\n"))
+	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	return mux
 }
