@@ -44,6 +44,8 @@ Create `~/Library/LaunchAgents/de.bborbe.claude-code-router.plist`:
         <string>/Users/YOUR_USER/go/bin/claude-code-router</string>
         <string>-listen</string>
         <string>127.0.0.1:8788</string>
+        <string>-config-path</string>
+        <string>/Users/YOUR_USER/.claude-code-router/config.yaml</string>
         <string>-logtostderr</string>
         <string>-v</string>
         <string>1</string>
@@ -63,7 +65,8 @@ Create `~/Library/LaunchAgents/de.bborbe.claude-code-router.plist`:
 **Important:**
 
 - Replace the binary path with the output of `command -v claude-code-router`.
-- **launchd does NOT expand `~`** — use absolute paths everywhere.
+- Replace `/Users/YOUR_USER/.claude-code-router/config.yaml` with your actual home path — `launchd does NOT expand ~`, so absolute paths everywhere.
+- The config file MUST exist before bootstrapping the service — copy [`docs/config.example.yaml`](../docs/config.example.yaml) and paste real provider tokens (see [docs/config.md](config.md)).
 
 Load and start the service:
 

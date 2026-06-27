@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- README refreshed for v0.4.0 reality: drop "v1 skeleton state" language, correct config path `~/.dark-factory/...` → `~/.claude-code-router/...`, add Install step 2 (create config from example), add "Switching providers mid-session" section showing `/model` usage. Replaced lone "WICHTIG" with "IMPORTANT" (English consistency).
+- launchd + systemd service docs now include the `-config-path` flag in `ProgramArguments` / `ExecStart` — without it the binary loads the default path (`~/.claude-code-router/config.yaml`), which is fine, but explicit-in-the-doc avoids the "where do I plug the config?" question.
+- Service docs note the config file must exist before `launchctl bootstrap` / `systemctl --user enable --now` — agent crash-loops if config is missing.
+
 ## v0.4.0
 
 - **Multi-provider routing via YAML config.** Router now loads `~/.claude-code-router/config.yaml` (override with `--config-path`) and dispatches `/v1/*` requests by the body's `model` field. Each provider declares its upstream URL, optional `token:` (replaces Authorization with `Bearer <token>`; absent = forward client's OAuth bearer untouched), and a list of `filepath.Match` glob patterns. Unmatched models fall through to `router.default_provider`.

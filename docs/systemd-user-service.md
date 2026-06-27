@@ -39,7 +39,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=%h/go/bin/claude-code-router -listen 127.0.0.1:8788 -logtostderr -v 1
+ExecStart=%h/go/bin/claude-code-router -listen 127.0.0.1:8788 -config-path %h/.claude-code-router/config.yaml -logtostderr -v 1
 Restart=on-failure
 RestartSec=5
 
@@ -51,6 +51,7 @@ WantedBy=default.target
 
 - `%h` expands to the user's home directory — no need for absolute paths.
 - If `claude-code-router` is installed elsewhere, update the `ExecStart` path to match `command -v claude-code-router`.
+- The config file MUST exist before `systemctl --user enable --now` — copy [`docs/config.example.yaml`](../docs/config.example.yaml) and paste real provider tokens (see [docs/config.md](config.md)).
 
 ## 2. Enable and start
 
