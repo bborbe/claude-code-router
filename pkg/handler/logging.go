@@ -16,20 +16,40 @@ import (
 // provider's own logging.
 func NewLoggingHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		rec := &statusRecorder{ResponseWriter: w}
 		next.ServeHTTP(rec, r)
-		glog.V(1).Infof("[req] %s %s -> %d", r.Method, r.URL.Path, rec.status)
+		status := rec.status
+		if status == 0 {
+			// Handler returned without writing — match net/http's default.
+			status = http.StatusOK
+		}
+		glog.V(1).Infof("[req] %s %s -> %d", r.Method, r.URL.Path, status)
 	})
 }
 
 // statusRecorder captures the response status code so the wrapping
-// logger can include it in the log line.
+// logger can include it in the log line. Both WriteHeader and Write
+// are overridden — Write triggers an implicit WriteHeader(200) per
+// the http.ResponseWriter contract, so without overriding Write the
+// status would be missed for handlers that call Write directly
+// (e.g. libhttp.NewPrintHandler).
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
-	s.status = code
-	s.ResponseWriter.WriteHeader(code)
+	if !s.wroteHeader {
+		s.status = code
+		s.wroteHeader = true
+		s.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if !s.wroteHeader {
+		s.WriteHeader(http.StatusOK)
+	}
+	return s.ResponseWriter.Write(b)
 }
