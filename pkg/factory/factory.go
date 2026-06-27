@@ -37,5 +37,5 @@ func CreateRouter() http.Handler {
 	mux.Handle("/metrics", libhttp.NewPrintHandler("# metrics not enabled in v1 skeleton\n"))
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
-	return mux
+	return handler.NewLoggingHandler(mux)
 }
