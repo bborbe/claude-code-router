@@ -2,41 +2,44 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package cli builds the root cobra command for claude-code-router.
+// Package cli holds the application struct that service.MainCmd parses
+// CLI args into, plus the Run entry-point that delegates to the injected
+// server factory. The factory itself lives in pkg/factory; this package
+// is import-free of factory to keep the dependency direction (main ->
+// factory -> ...) intact.
 package cli
 
 import (
-	"log/slog"
-	"os"
+	"context"
 
-	"github.com/spf13/cobra"
-
-	"github.com/bborbe/claude-code-router/pkg/factory"
+	librun "github.com/bborbe/run"
+	"github.com/golang/glog"
 )
 
-// version is injected at build time via -ldflags by the Makefile.
+// version is injected at build time via -ldflags by the Makefile
+// (-X github.com/bborbe/claude-code-router/pkg/cli.version=...).
 var version = "dev"
 
-// NewCommand returns the root cobra command.
-//
-// Returns *cobra.Command (concrete) rather than an interface — cobra's
-// builder API requires the concrete type, and wrapping it adds no
-// testability gain since cobra commands are themselves the test surface.
-func NewCommand() *cobra.Command {
-	var listen string
+// ServerFactory is the dep cli requires to start the HTTP listener.
+// Satisfied by factory.CreateServer.
+type ServerFactory func(listen string) librun.Func
 
-	cmd := &cobra.Command{
-		Use:     "claude-code-router",
-		Short:   "Multi-provider Claude Code router",
-		Long:    "Local HTTP router for Claude Code. Forwards /v1/messages requests to one of several LLM providers based on the request's model field.",
-		Version: version,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
-			slog.Info("starting claude-code-router", "listen", listen, "version", version)
+// App is the application wired by main and parsed by service.MainCmd's
+// argument tagger. Exported fields with tags are CLI args; unexported
+// fields are dependencies injected by main.
+type App struct {
+	Listen string `arg:"listen" default:"127.0.0.1:8788" env:"LISTEN" required:"true" usage:"address to listen to"`
 
-			return factory.CreateServer(listen)(cmd.Context())
-		},
-	}
-	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8788", "address to listen on")
-	return cmd
+	serverFactory ServerFactory
+}
+
+// NewApp constructs the App with the server factory injected.
+func NewApp(serverFactory ServerFactory) *App {
+	return &App{serverFactory: serverFactory}
+}
+
+// Run is invoked by service.MainCmd after argument parsing.
+func (a *App) Run(ctx context.Context) error {
+	glog.V(1).Infof("starting claude-code-router version=%s listen=%s", version, a.Listen)
+	return a.serverFactory(a.Listen)(ctx)
 }

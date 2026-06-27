@@ -2,24 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// No main_test.go: the gexec.Build "Compiles" smoke test commonly OOMs the
-// CI runner under -race. Skip per the Setup New Go Service runbook; the
-// build is verified by golangci-lint + go test in make precommit.
 package main
 
 import (
 	"context"
 	"os"
-	"os/signal"
-	"syscall"
+
+	"github.com/bborbe/service"
 
 	"github.com/bborbe/claude-code-router/pkg/cli"
+	"github.com/bborbe/claude-code-router/pkg/factory"
 )
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	if err := cli.NewCommand().ExecuteContext(ctx); err != nil {
-		os.Exit(1)
-	}
+	os.Exit(service.MainCmd(context.Background(), cli.NewApp(factory.CreateServer)))
 }
