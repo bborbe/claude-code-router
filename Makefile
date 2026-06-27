@@ -9,7 +9,10 @@ default: precommit
 
 .PHONY: run
 run:
-	@go run main.go
+	@go run -mod=mod main.go \
+		-listen=127.0.0.1:8788 \
+		-logtostderr \
+		-v=2
 
 .PHONY: build
 build:
