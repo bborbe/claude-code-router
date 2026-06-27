@@ -6,12 +6,16 @@ package factory
 
 import (
 	"net/http"
+	"net/url"
 
 	libhttp "github.com/bborbe/http"
 	librun "github.com/bborbe/run"
+	"github.com/golang/glog"
 
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
+
+const defaultAnthropicAPI = "https://api.anthropic.com"
 
 // CreateServer wires the HTTP server bound to listen, with the canonical
 // router (CreateRouter) as the handler. The cli package consumes this —
@@ -29,7 +33,10 @@ func CreateServer(listen string) librun.Func {
 // tool with no Prometheus scraper and a static slog level today; the
 // endpoints exist so future ops tooling (or the rule check) finds them.
 //
-// Provider routing lands in task 2 ([[Allow Claude Code to Pass Through the Proxy]]).
+// /v1/ mounts the Anthropic reverse proxy — every Claude Code request
+// (/v1/messages, /v1/models, etc.) is forwarded verbatim to api.anthropic.com.
+// The Authorization header (subscription OAuth bearer) passes through.
+// Per-provider model-name routing lands in task 3.
 func CreateRouter() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
@@ -37,5 +44,14 @@ func CreateRouter() http.Handler {
 	mux.Handle("/metrics", libhttp.NewPrintHandler("# metrics not enabled in v1 skeleton\n"))
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
+	mux.Handle("/v1/", handler.NewAnthropicProxyHandler(mustParseURL(defaultAnthropicAPI), nil))
 	return handler.NewLoggingHandler(mux)
+}
+
+func mustParseURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		glog.Exitf("BUG: failed to parse hardcoded upstream URL %q: %v", raw, err)
+	}
+	return u
 }
