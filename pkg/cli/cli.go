@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 
-	libhttp "github.com/bborbe/http"
 	"github.com/spf13/cobra"
 
 	"github.com/bborbe/claude-code-router/pkg/factory"
@@ -35,7 +34,7 @@ func NewCommand() *cobra.Command {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 			slog.Info("starting claude-code-router", "listen", listen, "version", version)
 
-			return libhttp.NewServer(listen, factory.CreateRouter()).Run(cmd.Context())
+			return factory.CreateServer(listen)(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8788", "address to listen on")

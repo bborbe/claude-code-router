@@ -8,9 +8,18 @@ import (
 	"net/http"
 
 	libhttp "github.com/bborbe/http"
+	librun "github.com/bborbe/run"
 
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
+
+// CreateServer wires the HTTP server bound to listen, with the canonical
+// router (CreateRouter) as the handler. The cli package consumes this —
+// all dep wiring lives here, not in cli. Returns a run.Func; call it
+// with a context to start and graceful-shutdown the listener.
+func CreateServer(listen string) librun.Func {
+	return libhttp.NewServer(listen, CreateRouter())
+}
 
 // CreateRouter wires the HTTP handlers for the router.
 //
