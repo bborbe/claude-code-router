@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **Multi-provider routing via YAML config.** Router now loads `~/.claude-code-router/config.yaml` (override with `--config-path`) and dispatches `/v1/*` requests by the body's `model` field. Each provider declares its upstream URL, optional `token:` (replaces Authorization with `Bearer <token>`; absent = forward client's OAuth bearer untouched), and a list of `filepath.Match` glob patterns. Unmatched models fall through to `router.default_provider`.
+- New packages: `pkg/config` (YAML loader + validation), `pkg/handler/NewModelRouter` (body-parses `model` field, glob-matches, dispatches), `pkg/handler/NewAuthSwapTransport` (per-request Authorization swap, request cloned so caller's headers aren't mutated).
+- `pkg/factory.CreateRouterFromConfig` wires per-provider proxies + the model-router; `factory.CreateServer` signature changed to `(listen, configPath)` and now returns `(run.Func, error)` to surface config-load failures.
+- Sample config at `docs/config.example.yaml`; full schema reference in `docs/config.md`.
+- Mid-session switching: `/model <name>` in Claude Code is all that's needed — no router restart.
+
 ## v0.3.0
 
 - Mount Anthropic reverse proxy on `/v1/` — every Claude Code request (`/v1/messages`, `/v1/models`, etc.) now forwards verbatim to `https://api.anthropic.com`. The Authorization header (subscription OAuth bearer) passes through untouched; upstream errors surface as `502 Bad Gateway` with the error message. Task 3 will add model-name routing to other providers.

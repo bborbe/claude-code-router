@@ -9,6 +9,7 @@ require (
 	github.com/golang/glog v1.2.5
 	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

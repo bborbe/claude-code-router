@@ -5,53 +5,69 @@
 package factory
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 
 	libhttp "github.com/bborbe/http"
 	librun "github.com/bborbe/run"
-	"github.com/golang/glog"
 
+	"github.com/bborbe/claude-code-router/pkg/config"
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
 
-const defaultAnthropicAPI = "https://api.anthropic.com"
-
-// CreateServer wires the HTTP server bound to listen, with the canonical
-// router (CreateRouter) as the handler. The cli package consumes this —
-// all dep wiring lives here, not in cli. Returns a run.Func; call it
-// with a context to start and graceful-shutdown the listener.
-func CreateServer(listen string) librun.Func {
-	return libhttp.NewServer(listen, CreateRouter())
+// CreateServer loads the config at configPath, wires the model router
+// + per-provider proxies, and returns a run.Func that starts the HTTP
+// listener with graceful shutdown on ctx cancel.
+func CreateServer(listen, configPath string) (librun.Func, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	router, err := CreateRouterFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build router: %w", err)
+	}
+	return libhttp.NewServer(listen, router), nil
 }
 
-// CreateRouter wires the HTTP handlers for the router.
-//
-// Registers all five canonical admin endpoints — /healthz, /readiness,
-// /metrics, /setloglevel/{level}, /gc — per go-http-service guide.
-// /metrics and /setloglevel are stubbed: the router is a personal-laptop
-// tool with no Prometheus scraper and a static slog level today; the
-// endpoints exist so future ops tooling (or the rule check) finds them.
-//
-// /v1/ mounts the Anthropic reverse proxy — every Claude Code request
-// (/v1/messages, /v1/models, etc.) is forwarded verbatim to api.anthropic.com.
-// The Authorization header (subscription OAuth bearer) passes through.
-// Per-provider model-name routing lands in task 3.
-func CreateRouter() http.Handler {
+// CreateRouterFromConfig builds the HTTP handler tree from a parsed
+// config: per-provider reverse-proxies with token-swap transports, a
+// model-name dispatcher on /v1/, the canonical admin endpoints, and
+// the logging wrapper around the whole mux.
+func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
+	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
+	var routes []handler.ModelRoute
+
+	for name, prov := range cfg.Providers {
+		upstream, err := url.Parse(prov.Upstream)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: parse upstream %q: %w", name, prov.Upstream, err)
+		}
+		transport := handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token)
+		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
+		providerHandlers[name] = proxy
+		for _, pattern := range prov.Models {
+			routes = append(routes, handler.ModelRoute{Pattern: pattern, Handler: proxy})
+		}
+	}
+
+	defaultHandler, ok := providerHandlers[cfg.Router.DefaultProvider]
+	if !ok {
+		// Defensive: Config.Validate already caught this, but keep the
+		// safety net so future callers of CreateRouterFromConfig can't
+		// bypass it.
+		return nil, fmt.Errorf("default_provider %q not in providers", cfg.Router.DefaultProvider)
+	}
+
+	modelRouter := handler.NewModelRouter(routes, defaultHandler)
+
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
 	mux.Handle("/metrics", libhttp.NewPrintHandler("# metrics not enabled in v1 skeleton\n"))
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
-	mux.Handle("/v1/", handler.NewAnthropicProxyHandler(mustParseURL(defaultAnthropicAPI), nil))
-	return handler.NewLoggingHandler(mux)
-}
-
-func mustParseURL(raw string) *url.URL {
-	u, err := url.Parse(raw)
-	if err != nil {
-		glog.Exitf("BUG: failed to parse hardcoded upstream URL %q: %v", raw, err)
-	}
-	return u
+	mux.Handle("/v1/", modelRouter)
+	return handler.NewLoggingHandler(mux), nil
 }

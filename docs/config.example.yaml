@@ -1,0 +1,38 @@
+# claude-code-router example config
+# Copy to ~/.claude-code-router/config.yaml and chmod 600
+# Full reference: docs/config.md
+
+router:
+  default_provider: anthropic-subscription
+
+providers:
+
+  anthropic-subscription:
+    upstream: https://api.anthropic.com
+    # no token: → router forwards client's Authorization header
+    #   (Claude Code's subscription OAuth bearer passes through untouched)
+    models:
+      - "claude-opus-*"
+      - "claude-sonnet-*"
+      - "claude-haiku-*"
+      - "opus"
+      - "sonnet"
+      - "haiku"
+
+  minimax:
+    upstream: https://api.minimax.io/anthropic
+    token: "PASTE_FROM_TEAMVAULT_MOPmQL"
+    models:
+      - "MiniMax-*"
+
+  seibert-vllm:
+    upstream: https://vllm.seibert.tools
+    token: "PASTE_FROM_TEAMVAULT_SM_0DaxOm"
+    models:
+      - "deepseek-*"
+
+  ollama-local:
+    upstream: http://localhost:11434
+    token: "ollama"
+    models:
+      - "qwen*"
