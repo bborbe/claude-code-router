@@ -92,18 +92,41 @@ var _ = Describe("AnthropicProxyHandler", func() {
 		Expect(stub.captured.Header.Get("Authorization")).To(Equal("Bearer sk-oauth-bearer-secret"))
 	})
 
-	It("returns 502 when the upstream transport fails", func() {
-		h := handler.NewAnthropicProxyHandler(
-			upstreamURL,
-			errTransport{err: errors.New("connection refused")},
-		)
+	It(
+		"returns 502 with generic body when upstream transport fails (no internal error leak)",
+		func() {
+			h := handler.NewAnthropicProxyHandler(
+				upstreamURL,
+				errTransport{err: errors.New("dial tcp 10.0.0.5:443: connection refused")},
+			)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+
+			h.ServeHTTP(rec, req)
+
+			Expect(rec.Code).To(Equal(http.StatusBadGateway))
+			body, _ := io.ReadAll(rec.Body)
+			Expect(string(body)).To(Equal("upstream unavailable"))
+			// Internal details (IP, "dial tcp", "connection refused") must NOT leak.
+			Expect(string(body)).NotTo(ContainSubstring("10.0.0.5"))
+			Expect(string(body)).NotTo(ContainSubstring("dial tcp"))
+		},
+	)
+
+	It("preserves query parameters through the proxy", func() {
+		stub := &stubTransport{
+			upstream: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}),
+		}
+
+		h := handler.NewAnthropicProxyHandler(upstreamURL, stub)
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+		req := httptest.NewRequest(http.MethodGet, "/v1/messages?version=2023-01-01&beta=true", nil)
 
 		h.ServeHTTP(rec, req)
 
-		Expect(rec.Code).To(Equal(http.StatusBadGateway))
-		body, _ := io.ReadAll(rec.Body)
-		Expect(string(body)).To(ContainSubstring("connection refused"))
+		Expect(stub.captured).NotTo(BeNil())
+		Expect(stub.captured.URL.RawQuery).To(Equal("version=2023-01-01&beta=true"))
 	})
 })
