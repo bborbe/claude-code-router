@@ -33,8 +33,11 @@ func CreateServer(listen, configPath string) (librun.Func, error) {
 
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
 // config: per-provider reverse-proxies with token-swap transports, a
-// model-name dispatcher on /v1/, the canonical admin endpoints, and
-// the logging wrapper around the whole mux.
+// model-name dispatcher on /v1/, and the canonical admin endpoints
+// (/healthz, /readiness, /metrics, /setloglevel/, /gc). The model
+// router emits its own structured one-line log per request at V(1)
+// (`[req] METHOD path model=... provider=... status=... latency=...`),
+// so no outer logging wrapper is needed — admin endpoints stay quiet.
 func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
@@ -48,7 +51,11 @@ func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
 		providerHandlers[name] = proxy
 		for _, pattern := range prov.Models {
-			routes = append(routes, handler.ModelRoute{Pattern: pattern, Handler: proxy})
+			routes = append(routes, handler.ModelRoute{
+				Pattern:      pattern,
+				ProviderName: name,
+				Handler:      proxy,
+			})
 		}
 	}
 
@@ -60,7 +67,12 @@ func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 		return nil, fmt.Errorf("default_provider %q not in providers", cfg.Router.DefaultProvider)
 	}
 
-	modelRouter := handler.NewModelRouter(routes, defaultHandler, cfg.Aliases)
+	modelRouter := handler.NewModelRouter(
+		routes,
+		cfg.Router.DefaultProvider,
+		defaultHandler,
+		cfg.Aliases,
+	)
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
@@ -69,5 +81,5 @@ func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	mux.Handle("/v1/", modelRouter)
-	return handler.NewLoggingHandler(mux), nil
+	return mux, nil
 }

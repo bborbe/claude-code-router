@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/bborbe/http v1.26.13
+	github.com/bborbe/log v1.6.14
 	github.com/bborbe/run v1.9.28
 	github.com/bborbe/service v1.10.1
 	github.com/golang/glog v1.2.5
@@ -18,7 +19,6 @@ require (
 	github.com/bborbe/collection v1.20.12 // indirect
 	github.com/bborbe/errors v1.5.13 // indirect
 	github.com/bborbe/kv v1.21.1 // indirect
-	github.com/bborbe/log v1.6.14 // indirect
 	github.com/bborbe/math v1.3.11 // indirect
 	github.com/bborbe/parse v1.10.12 // indirect
 	github.com/bborbe/sentry v1.9.18 // indirect

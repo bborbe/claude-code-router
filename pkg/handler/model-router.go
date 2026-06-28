@@ -11,36 +11,51 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"time"
 
 	"github.com/golang/glog"
 )
 
 // ModelRoute pairs a glob pattern (filepath.Match syntax) with the
-// handler to invoke when an incoming request's `model` field matches.
+// provider name + handler to invoke when an incoming request's `model`
+// field matches. ProviderName is what appears in the structured log
+// (`provider=minimax`) and is the same key as in the YAML config's
+// `providers:` map.
 type ModelRoute struct {
-	Pattern string
-	Handler http.Handler
+	Pattern      string
+	ProviderName string
+	Handler      http.Handler
 }
 
 // NewModelRouter returns an HTTP handler that body-parses each request's
 // JSON `model` field, resolves it through the aliases map (single-hop,
 // case-sensitive exact match), then dispatches to the first matching
 // ModelRoute. Unmatched models (and non-JSON / no-model requests) fall
-// through to defaultHandler. The body is fully read and replayed for
-// the downstream handler — fine for /v1/messages JSON payloads
-// (typically <100 KB); not suitable for unbounded upload bodies.
+// through to defaultHandler (logged as provider=defaultProviderName).
+// The body is fully read and replayed for the downstream handler —
+// fine for /v1/messages JSON payloads (typically <100 KB); not suitable
+// for unbounded upload bodies.
 //
-// aliases may be nil or empty — both mean "no alias rewriting", same
-// as today's behavior. On a hit, the body's top-level .model field is
-// re-marshaled to the resolved value before route dispatch, so the
-// upstream sees the full model name. A single glog.V(1) line is
-// emitted on hit: "[alias] <short> -> <resolved>".
+// aliases may be nil or empty — both mean "no alias rewriting". On a
+// hit, the body's top-level .model field is re-marshaled to the resolved
+// value before route dispatch, so the upstream sees the full model name.
+//
+// One structured `[req]` log line per request at V(1):
+//
+//	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms
+//
+// At V(2), alias resolution and route match get their own `[alias]` /
+// `[route]` detail lines.
 func NewModelRouter(
 	routes []ModelRoute,
+	defaultProviderName string,
 	defaultHandler http.Handler,
 	aliases map[string]string,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			glog.Errorf("[model-router] read body failed: %v", err)
@@ -51,7 +66,9 @@ func NewModelRouter(
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
 
-		model := extractModel(body)
+		origModel := extractModel(body)
+		model := origModel
+		var aliasResolved string
 
 		if resolved, ok := aliases[model]; ok && model != "" {
 			rewritten, rerr := rewriteModelField(body, resolved)
@@ -60,23 +77,50 @@ func NewModelRouter(
 				http.Error(w, "alias rewrite failed", http.StatusInternalServerError)
 				return
 			}
-			glog.V(1).Infof("[alias] %s -> %s", model, resolved)
+			glog.V(2).Infof("[alias] %s -> %s", model, resolved)
 			body = rewritten
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
+			aliasResolved = resolved
 			model = resolved
 		}
 
+		providerName := defaultProviderName
+		target := defaultHandler
 		for _, route := range routes {
 			ok, _ := path.Match(route.Pattern, model)
 			if ok {
-				glog.V(1).Infof("[route] model=%q matched %q", model, route.Pattern)
-				route.Handler.ServeHTTP(w, r)
-				return
+				providerName = route.ProviderName
+				target = route.Handler
+				glog.V(2).
+					Infof("[route] model=%q matched %q -> provider=%s", model, route.Pattern, providerName)
+				break
 			}
 		}
-		glog.V(1).Infof("[route] model=%q no match, using default", model)
-		defaultHandler.ServeHTTP(w, r)
+
+		target.ServeHTTP(rec, r)
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		// e2e wall-time: includes body read + JSON parse + alias rewrite
+		// + upstream round-trip. That's the operator-relevant number
+		// ("how long did this `/model X` turn take?"), not the upstream-
+		// only segment.
+		latency := time.Since(start).Round(time.Millisecond)
+
+		if aliasResolved != "" {
+			glog.V(1).Infof(
+				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency,
+			)
+		} else {
+			glog.V(1).Infof(
+				"[req] %s %s model=%s provider=%s status=%d latency=%s",
+				r.Method, r.URL.Path, origModel, providerName, status, latency,
+			)
+		}
 	})
 }
 
@@ -96,7 +140,6 @@ func rewriteModelField(body []byte, resolved string) ([]byte, error) {
 	}
 	resolvedJSON, err := json.Marshal(resolved)
 	if err != nil {
-		// Should never happen — string marshal is infallible.
 		return nil, fmt.Errorf("marshal resolved model: %w", err)
 	}
 	obj["model"] = resolvedJSON

@@ -6,11 +6,15 @@ package handler_test
 
 import (
 	"encoding/json"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 
+	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -26,6 +30,25 @@ func labelHandler(label string) http.Handler {
 	})
 }
 
+// captureStderr runs fn with os.Stderr piped into a buffer and returns
+// what was written. glog logs to stderr by default once -logtostderr is
+// set; this lets tests assert on the structured log line shape.
+func captureStderr(fn func()) string {
+	origStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		buf, _ := io.ReadAll(r)
+		done <- string(buf)
+	}()
+	fn()
+	glog.Flush()
+	_ = w.Close()
+	os.Stderr = origStderr
+	return <-done
+}
+
 var _ = Describe("ModelRouter", func() {
 	var (
 		anthropic = labelHandler("anthropic")
@@ -39,13 +62,13 @@ var _ = Describe("ModelRouter", func() {
 
 	BeforeEach(func() {
 		routes = []handler.ModelRoute{
-			{Pattern: "claude-*", Handler: anthropic},
-			{Pattern: "opus", Handler: anthropic},
-			{Pattern: "sonnet", Handler: anthropic},
-			{Pattern: "MiniMax-*", Handler: minimax},
-			{Pattern: "qwen*", Handler: ollama},
+			{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: anthropic},
+			{Pattern: "opus", ProviderName: "anthropic-subscription", Handler: anthropic},
+			{Pattern: "sonnet", ProviderName: "anthropic-subscription", Handler: anthropic},
+			{Pattern: "MiniMax-*", ProviderName: "minimax", Handler: minimax},
+			{Pattern: "qwen*", ProviderName: "ollama-local", Handler: ollama},
 		}
-		mux = handler.NewModelRouter(routes, fallback, nil)
+		mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil)
 		rec = httptest.NewRecorder()
 	})
 
@@ -99,7 +122,10 @@ var _ = Describe("ModelRouter", func() {
 			seen = string(b)
 		})
 		mux = handler.NewModelRouter(
-			[]handler.ModelRoute{{Pattern: "claude-*", Handler: capturing}},
+			[]handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: capturing},
+			},
+			"default-fallback",
 			fallback,
 			nil,
 		)
@@ -118,7 +144,10 @@ var _ = Describe("ModelRouter", func() {
 			})
 			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
 			mux = handler.NewModelRouter(
-				[]handler.ModelRoute{{Pattern: "qwen*", Handler: capturing}},
+				[]handler.ModelRoute{
+					{Pattern: "qwen*", ProviderName: "ollama-local", Handler: capturing},
+				},
+				"default-fallback",
 				fallback,
 				aliases,
 			)
@@ -133,7 +162,14 @@ var _ = Describe("ModelRouter", func() {
 		It("routes the rewritten body to the matching glob", func() {
 			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
 			mux = handler.NewModelRouter(
-				[]handler.ModelRoute{{Pattern: "qwen*", Handler: labelHandler("ollama")}},
+				[]handler.ModelRoute{
+					{
+						Pattern:      "qwen*",
+						ProviderName: "ollama-local",
+						Handler:      labelHandler("ollama"),
+					},
+				},
+				"default-fallback",
 				fallback,
 				aliases,
 			)
@@ -148,7 +184,10 @@ var _ = Describe("ModelRouter", func() {
 			})
 			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
 			mux = handler.NewModelRouter(
-				[]handler.ModelRoute{{Pattern: "qwen*", Handler: capturing}},
+				[]handler.ModelRoute{
+					{Pattern: "qwen*", ProviderName: "ollama-local", Handler: capturing},
+				},
+				"default-fallback",
 				fallback,
 				aliases,
 			)
@@ -176,7 +215,14 @@ var _ = Describe("ModelRouter", func() {
 			})
 			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
 			mux = handler.NewModelRouter(
-				[]handler.ModelRoute{{Pattern: "claude-opus*", Handler: capturing}},
+				[]handler.ModelRoute{
+					{
+						Pattern:      "claude-opus*",
+						ProviderName: "anthropic-subscription",
+						Handler:      capturing,
+					},
+				},
+				"default-fallback",
 				fallback,
 				aliases,
 			)
@@ -194,7 +240,14 @@ var _ = Describe("ModelRouter", func() {
 				capturedContentLength = r.ContentLength
 			})
 			mux = handler.NewModelRouter(
-				[]handler.ModelRoute{{Pattern: "claude-opus*", Handler: capturing}},
+				[]handler.ModelRoute{
+					{
+						Pattern:      "claude-opus*",
+						ProviderName: "anthropic-subscription",
+						Handler:      capturing,
+					},
+				},
+				"default-fallback",
 				fallback,
 				nil,
 			)
@@ -211,11 +264,62 @@ var _ = Describe("ModelRouter", func() {
 				capturedBody, _ = io.ReadAll(r.Body)
 				capturedContentLength = r.ContentLength
 			})
-			mux = handler.NewModelRouter(nil, capturing, map[string]string{"": "should-not-fire"})
+			mux = handler.NewModelRouter(
+				nil,
+				"default-fallback",
+				capturing,
+				map[string]string{"": "should-not-fire"},
+			)
 			originalBody := `{"other":"thing"}`
 			mux.ServeHTTP(rec, post(originalBody))
 			Expect(string(capturedBody)).To(Equal(originalBody))
 			Expect(capturedContentLength).To(Equal(int64(len(originalBody))))
+		})
+	})
+
+	Context("structured request log", func() {
+		BeforeEach(func() {
+			// glog initialized once globally; bump verbosity for these specs.
+			_ = flag.Set("logtostderr", "true")
+			_ = flag.Set("v", "2")
+		})
+
+		It("emits one [req] line with model, provider, status, and latency on a route hit", func() {
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+			})
+			Expect(
+				out,
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=MiniMax-M3-highspeed provider=minimax status=200 latency=\d+m?s`))
+		})
+
+		It("emits [req] with alias= field on alias hit", func() {
+			aliases := map[string]string{"m3": "MiniMax-M3-highspeed"}
+			mux = handler.NewModelRouter(routes, "default-fallback", fallback, aliases)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"m3"}`))
+			})
+			Expect(
+				out,
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=`))
+		})
+
+		It("emits [req] with default provider name on fallback", func() {
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"gemini-3-pro"}`))
+			})
+			Expect(
+				out,
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=gemini-3-pro provider=default-fallback status=200 latency=`))
+		})
+
+		It("latency value is non-zero and ends in ms or s", func() {
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"opus"}`))
+			})
+			latency := regexp.MustCompile(`latency=(\S+)`).FindStringSubmatch(out)
+			Expect(latency).To(HaveLen(2))
+			Expect(latency[1]).To(MatchRegexp(`^\d+(\.\d+)?(m?s)$`))
 		})
 	})
 })
