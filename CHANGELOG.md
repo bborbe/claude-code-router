@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.10.0
 
 - **feat: V(3) outbound header logging with credential redaction.** New `[upstream.headers]` glog V(3) line per upstream RoundTrip — dumps the request headers (after the auth-swap transport applied its `Authorization`) so operators can see exactly what went on the wire. `Authorization`, `Cookie`, `Set-Cookie`, and any header name matching `api-key`/`auth-token`/`secret`/`password`/`bearer` get value-redacted as `<redacted len=N>`. Helper `RedactHeadersForLog` lives in `pkg/handler/redact.go` for reuse by upcoming V(4) body-sample work. Silent at default V(1)/V(2); enable via `curl http://127.0.0.1:8788/setloglevel/3`.
 
