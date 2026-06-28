@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-06-28T09:33:43Z"
 generating: "2026-06-28T09:41:36Z"
 prompted: "2026-06-28T09:41:36Z"
 verifying: "2026-06-28T09:54:07Z"
+completed: "2026-06-28T10:20:59Z"
 branch: dark-factory/add-model-aliases
 ---
 
