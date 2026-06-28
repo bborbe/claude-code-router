@@ -69,6 +69,10 @@ The router decides per-request. Inside any `clauder` Claude Code session:
 
 The matching is glob-based (`claude-*`, `MiniMax-*`, etc.) — patterns are declared per provider in the YAML. Unmatched model names fall through to `default_provider`.
 
+## Integrations
+
+- [Dark-factory ↔ claude-code-router](docs/dark-factory-integration.md) — route YOLO container prompts through the host router for unified token storage + observability
+
 ## Develop
 
 ```bash

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- docs: add `docs/dark-factory-integration.md` — end-to-end recipe for routing dark-factory's YOLO containers through the local router. Covers the 4 required changes (router `0.0.0.0` bind, claude-yolo tinyproxy allowlist, `--add-host=host.docker.internal:host-gateway` for Linux portability, `~/.dark-factory/config.yaml` redirect), the platform matrix (Docker Desktop / OrbStack / Rancher Desktop auto-resolve `host.docker.internal`; raw Linux `dockerd` doesn't), verification curl/launchd procedure, and failure-mode table.
+
 ## v0.5.0
 
 - feat: Add `aliases:` YAML block to router config for mapping short model names to full model strings, with collision validation and orphan-target warning
