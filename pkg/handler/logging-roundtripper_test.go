@@ -6,6 +6,7 @@ package handler_test
 
 import (
 	"errors"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 
@@ -55,5 +56,75 @@ var _ = Describe("LoggingRoundTripper", func() {
 		resp, err := rt.RoundTrip(req)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp).To(Equal(want))
+	})
+
+	Context("V(3) outbound header logging", func() {
+		BeforeEach(func() {
+			_ = flag.Set("logtostderr", "true")
+		})
+
+		AfterEach(func() {
+			// Reset verbosity so other specs are not affected.
+			_ = flag.Set("v", "0")
+		})
+
+		makeRT := func() http.RoundTripper {
+			return handler.NewLoggingRoundTripper(
+				roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 200}, nil
+				}),
+			)
+		}
+
+		It("emits [upstream.headers] line with redacted Authorization at V(3)", func() {
+			_ = flag.Set("v", "3")
+			rt := makeRT()
+			req := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", nil)
+			req.Header.Set("Authorization", "Bearer test-token-v3")
+			out := captureStderr(func() {
+				_, _ = rt.RoundTrip(req)
+			})
+			Expect(out).To(ContainSubstring("[upstream.headers]"))
+			Expect(out).To(ContainSubstring("<redacted"))
+		})
+
+		It("does not emit [upstream.headers] at V(1)", func() {
+			_ = flag.Set("v", "1")
+			rt := makeRT()
+			req := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", nil)
+			out := captureStderr(func() {
+				_, _ = rt.RoundTrip(req)
+			})
+			Expect(out).NotTo(ContainSubstring("[upstream.headers]"))
+		})
+
+		It("does not emit [upstream.headers] at V(2)", func() {
+			_ = flag.Set("v", "2")
+			rt := makeRT()
+			req := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", nil)
+			out := captureStderr(func() {
+				_, _ = rt.RoundTrip(req)
+			})
+			Expect(out).NotTo(ContainSubstring("[upstream.headers]"))
+		})
+
+		It(
+			"canary: leak-canary-v3 value in Authorization header does not appear in V(3) log output",
+			func() {
+				_ = flag.Set("v", "3")
+				rt := makeRT()
+				req := httptest.NewRequest(
+					http.MethodPost,
+					"https://api.example.com/v1/messages",
+					nil,
+				)
+				req.Header.Set("Authorization", "Bearer leak-canary-v3")
+				out := captureStderr(func() {
+					_, _ = rt.RoundTrip(req)
+				})
+				Expect(out).To(ContainSubstring("[upstream.headers]"))
+				Expect(out).NotTo(ContainSubstring("leak-canary-v3"))
+			},
+		)
 	})
 })

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **feat: V(3) outbound header logging with credential redaction.** New `[upstream.headers]` glog V(3) line per upstream RoundTrip — dumps the request headers (after the auth-swap transport applied its `Authorization`) so operators can see exactly what went on the wire. `Authorization`, `Cookie`, `Set-Cookie`, and any header name matching `api-key`/`auth-token`/`secret`/`password`/`bearer` get value-redacted as `<redacted len=N>`. Helper `RedactHeadersForLog` lives in `pkg/handler/redact.go` for reuse by upcoming V(4) body-sample work. Silent at default V(1)/V(2); enable via `curl http://127.0.0.1:8788/setloglevel/3`.
+
 ## v0.9.1
 
 - **fix: raise `DefaultProxyTransport.ResponseHeaderTimeout` from 60s to 5min.** Long-generation requests (e.g. `/compact` on a large session, big code-gen prompts) regularly need 60-300s before Anthropic sends the first byte of response headers. The old 60s cap produced `net/http: timeout awaiting response headers` 502s mid-flight, which in claude-code manifested as `/compact` appearing to hang at 95% — claude-code's SDK silently retried after each 502, so what looked like a stuck 7-minute `/compact` was actually multiple stuck 60s rounds plus one successful round. Bump to 5 minutes covers the worst observed case while still bounding a genuinely-wedged connection.

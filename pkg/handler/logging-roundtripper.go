@@ -5,25 +5,38 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
 )
 
-// NewLoggingRoundTripper wraps inner with a V(4) `[upstream.start]` /
-// `[upstream.end]` log-line pair per call: method + path on start,
-// method + path + TTFB (time-to-first-byte from when inner.RoundTrip
-// was invoked until it returned with the response headers) + status
-// code (or error) on end. Useful for debugging slow upstream behavior
-// — distinguishes "Anthropic took 90s to start sending headers" (high
-// TTFB) from "Anthropic sent headers fast but body streaming was slow"
-// (low TTFB, high total latency in the surrounding `[req]` line).
+// NewLoggingRoundTripper wraps inner with upstream-call logging at two
+// verbosity tiers:
 //
-// If inner is nil, http.DefaultTransport is used (defensive — matches
-// the nil-default pattern in NewAnthropicProxyHandler).
+//   - V(3) [upstream.headers]: emitted before the inner RoundTrip call;
+//     dumps the outbound request headers (after the auth-swap transport has
+//     applied its Authorization rewrite) as a JSON object with
+//     credential-shaped values redacted via RedactHeadersForLog. Useful for
+//     confirming exactly what token / headers reached the provider. Enable via
+//     `curl http://127.0.0.1:8788/setloglevel/3`.
 //
-// Silent at default V(1)-V(3); enable via `curl http://127.0.0.1:8788/setloglevel/4`.
+//   - V(4) [upstream.start] / [upstream.end]: method + path on start; method
+//
+//   - path + TTFB (time-to-first-byte from when inner.RoundTrip was invoked
+//     until it returned with response headers) + status code (or error) on end.
+//     Useful for debugging slow upstream behavior — distinguishes "Anthropic
+//     took 90s to send first byte" (high TTFB) from "body streaming was slow"
+//     (low TTFB, high total latency in the surrounding [req] line). Enable via
+//     `curl http://127.0.0.1:8788/setloglevel/4`.
+//
+// If inner is nil, http.DefaultTransport is used (matches the nil-default
+// pattern in NewAnthropicProxyHandler).
+//
+// Silent at default V(1)-V(2).
 func NewLoggingRoundTripper(inner http.RoundTripper) http.RoundTripper {
 	if inner == nil {
 		inner = http.DefaultTransport
@@ -38,6 +51,15 @@ type loggingRoundTripper struct {
 func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	glog.V(4).
 		Infof("[upstream.start] %s %s%s", req.Method, req.URL.Host, req.URL.Path)
+	if glog.V(3) {
+		redacted := RedactHeadersForLog(req.Header)
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(redacted)
+		glog.V(3).
+			Infof("[upstream.headers] %s %s%s headers=%s", req.Method, req.URL.Host, req.URL.Path, strings.TrimSpace(buf.String()))
+	}
 	start := time.Now()
 	resp, err := l.inner.RoundTrip(req)
 	ttfb := time.Since(start).Round(time.Millisecond)
