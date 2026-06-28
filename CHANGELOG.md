@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.9.1
 
 - **docs: inline the full sample config in `README.md`** so new operators see the YAML shape at a glance instead of clicking through to `docs/config.example.yaml`. Adds the canonical 3-badge set (Go Reference, Go Report Card, DeepWiki) per `readme-guide.md` — was CI-only before.
 - **docs: scrub internal-org references** from public docs. Removes the `seibert-vllm` provider example, teamvault token-paste hints, and the `→ seibert-vllm` example comment from `README.md`, `docs/config.example.yaml`, `docs/config.md`, and `docs/dark-factory-integration.md`. Replaced with generic `<YOUR_MINIMAX_API_KEY>` / `<your MiniMax API key>` placeholders. Public-repo hygiene — the docs should be useful to anyone setting up a router, not gated on internal credential-store access.
