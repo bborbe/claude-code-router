@@ -14,12 +14,18 @@ import (
 	"regexp"
 	"strings"
 
+	liblog "github.com/bborbe/log"
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
+
+// alwaysSample is the test-default sampler — always returns true, so
+// every request emits its `[req]` line. Specs that exercise the 10s
+// sampling behavior construct their own sampler inline.
+var alwaysSample = liblog.NewSamplerTrue()
 
 // labelHandler writes its label to the body so tests can assert which
 // route was chosen.
@@ -68,7 +74,7 @@ var _ = Describe("ModelRouter", func() {
 			{Pattern: "MiniMax-*", ProviderName: "minimax", Handler: minimax},
 			{Pattern: "qwen*", ProviderName: "ollama-local", Handler: ollama},
 		}
-		mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil)
+		mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, alwaysSample)
 		rec = httptest.NewRecorder()
 	})
 
@@ -128,6 +134,7 @@ var _ = Describe("ModelRouter", func() {
 			"default-fallback",
 			fallback,
 			nil,
+			alwaysSample,
 		)
 		body := `{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}]}`
 		mux.ServeHTTP(rec, post(body))
@@ -150,6 +157,7 @@ var _ = Describe("ModelRouter", func() {
 				"default-fallback",
 				fallback,
 				aliases,
+				alwaysSample,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
 
@@ -172,6 +180,7 @@ var _ = Describe("ModelRouter", func() {
 				"default-fallback",
 				fallback,
 				aliases,
+				alwaysSample,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
 			Expect(rec.Body.String()).To(Equal("ollama"))
@@ -190,6 +199,7 @@ var _ = Describe("ModelRouter", func() {
 				"default-fallback",
 				fallback,
 				aliases,
+				alwaysSample,
 			)
 			body := `{"model":"qwen","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
 			mux.ServeHTTP(rec, post(body))
@@ -225,6 +235,7 @@ var _ = Describe("ModelRouter", func() {
 				"default-fallback",
 				fallback,
 				aliases,
+				alwaysSample,
 			)
 			originalBody := `{"model":"claude-opus-4-7"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -250,6 +261,7 @@ var _ = Describe("ModelRouter", func() {
 				"default-fallback",
 				fallback,
 				nil,
+				alwaysSample,
 			)
 			originalBody := `{"model":"claude-opus-4-7"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -269,6 +281,7 @@ var _ = Describe("ModelRouter", func() {
 				"default-fallback",
 				capturing,
 				map[string]string{"": "should-not-fire"},
+				alwaysSample,
 			)
 			originalBody := `{"other":"thing"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -295,7 +308,13 @@ var _ = Describe("ModelRouter", func() {
 
 		It("emits [req] with alias= field on alias hit", func() {
 			aliases := map[string]string{"m3": "MiniMax-M3-highspeed"}
-			mux = handler.NewModelRouter(routes, "default-fallback", fallback, aliases)
+			mux = handler.NewModelRouter(
+				routes,
+				"default-fallback",
+				fallback,
+				aliases,
+				alwaysSample,
+			)
 			out := captureStderr(func() {
 				mux.ServeHTTP(rec, post(`{"model":"m3"}`))
 			})
@@ -320,6 +339,45 @@ var _ = Describe("ModelRouter", func() {
 			latency := regexp.MustCompile(`latency=(\S+)`).FindStringSubmatch(out)
 			Expect(latency).To(HaveLen(2))
 			Expect(latency[1]).To(MatchRegexp(`^\d+(\.\d+)?(m?s)$`))
+		})
+
+		Context("sampler gating", func() {
+			It("suppresses 200 [req] lines when the sampler returns false", func() {
+				never := liblog.SamplerFunc(func() bool { return false })
+				mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, never)
+				out := captureStderr(func() {
+					mux.ServeHTTP(rec, post(`{"model":"opus"}`))
+				})
+				Expect(out).NotTo(ContainSubstring("[req]"))
+				// Request still served end-to-end, just not logged.
+				Expect(rec.Body.String()).To(Equal("anthropic"))
+			})
+
+			It("always logs non-200 even when the sampler returns false", func() {
+				never := liblog.SamplerFunc(func() bool { return false })
+				erroring := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusBadGateway)
+					_, _ = w.Write([]byte("upstream unavailable"))
+				})
+				erroringRoute := []handler.ModelRoute{
+					{
+						Pattern:      "claude-*",
+						ProviderName: "anthropic-subscription",
+						Handler:      erroring,
+					},
+				}
+				mux = handler.NewModelRouter(
+					erroringRoute,
+					"default-fallback",
+					fallback,
+					nil,
+					never,
+				)
+				out := captureStderr(func() {
+					mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+				})
+				Expect(out).To(ContainSubstring("status=502"))
+			})
 		})
 	})
 })
