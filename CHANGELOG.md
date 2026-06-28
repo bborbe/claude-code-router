@@ -6,6 +6,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## v0.10.0
 
+- **fix: cap inbound `/v1/*` request body at 1 MB via `http.MaxBytesReader`.** Closes a pre-existing concern raised by the bot reviewer on PR #6: `io.ReadAll(r.Body)` in `NewModelRouter` had no size bound, so an adversarial / accidental multi-GB upload could exhaust router memory. 1 MB cap is ~10x typical Anthropic-shaped payloads (<100 KB system+context+user+attachments). Over-limit requests return HTTP 413 + generic "request body too large" body — no internal state leaked. Threat model is low (personal-tool, local-only listener behind macOS firewall), so the change is defensive rather than urgent.
 - **feat: V(3) outbound header logging with credential redaction.** New `[upstream.headers]` glog V(3) line per upstream RoundTrip — dumps the request headers (after the auth-swap transport applied its `Authorization`) so operators can see exactly what went on the wire. `Authorization`, `Cookie`, `Set-Cookie`, and any header name matching `api-key`/`auth-token`/`secret`/`password`/`bearer` get value-redacted as `<redacted len=N>`. Helper `RedactHeadersForLog` lives in `pkg/handler/redact.go` for reuse by upcoming V(4) body-sample work. Silent at default V(1)/V(2); enable via `curl http://127.0.0.1:8788/setloglevel/3`.
 
 ## v0.9.1

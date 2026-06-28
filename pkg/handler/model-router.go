@@ -7,6 +7,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,16 @@ import (
 	liblog "github.com/bborbe/log"
 	"github.com/golang/glog"
 )
+
+// MaxRequestBodyBytes caps inbound /v1/* request bodies at 1 MB. Real
+// Anthropic-shaped payloads are <100 KB (system prompt + context +
+// user message + small attachments); 1 MB gives ~10x headroom while
+// preventing an adversarial / accidental multi-GB upload from
+// exhausting router memory via io.ReadAll. On overflow, the wrapped
+// body returns *http.MaxBytesError; the router responds with
+// HTTP 413 Request Entity Too Large + a generic body (no internal
+// state leaked).
+const MaxRequestBodyBytes = 1 << 20 // 1 MB
 
 // ModelRoute pairs a glob pattern (filepath.Match syntax) with the
 // provider name + handler to invoke when an incoming request's `model`
@@ -68,8 +79,18 @@ func NewModelRouter(
 		glog.V(4).Infof("[inbound.start] %s %s", r.Method, r.URL.Path)
 		rec := &statusRecorder{ResponseWriter: w}
 
+		r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				glog.Warningf(
+					"[model-router] request body too large: limit=%d bytes",
+					maxBytesErr.Limit,
+				)
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			glog.Errorf("[model-router] read body failed: %v", err)
 			http.Error(w, "read body failed", http.StatusBadRequest)
 			return
