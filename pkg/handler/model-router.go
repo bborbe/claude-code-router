@@ -61,6 +61,7 @@ func NewModelRouter(
 	defaultHandler http.Handler,
 	aliases map[string]string,
 	sampler liblog.Sampler,
+	metrics *Metrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -88,6 +89,7 @@ func NewModelRouter(
 				return
 			}
 			glog.V(2).Infof("[alias] %s -> %s", model, resolved)
+			metrics.ObserveAliasResolution(origModel, resolved)
 			body = rewritten
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
@@ -120,6 +122,7 @@ func NewModelRouter(
 		// only segment.
 		latency := time.Since(start).Round(time.Millisecond)
 
+		metrics.ObserveRequest(providerName, origModel, status, latency.Seconds())
 		logReq(r, status, latency, origModel, aliasResolved, providerName, sampler)
 	})
 }

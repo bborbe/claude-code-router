@@ -18,6 +18,7 @@ import (
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
@@ -26,6 +27,8 @@ import (
 // every request emits its `[req]` line. Specs that exercise the 10s
 // sampling behavior construct their own sampler inline.
 var alwaysSample = liblog.NewSamplerTrue()
+
+var testMetrics = handler.NewMetrics()
 
 // labelHandler writes its label to the body so tests can assert which
 // route was chosen.
@@ -74,7 +77,14 @@ var _ = Describe("ModelRouter", func() {
 			{Pattern: "MiniMax-*", ProviderName: "minimax", Handler: minimax},
 			{Pattern: "qwen*", ProviderName: "ollama-local", Handler: ollama},
 		}
-		mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, alwaysSample)
+		mux = handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			fallback,
+			nil,
+			alwaysSample,
+			testMetrics,
+		)
 		rec = httptest.NewRecorder()
 	})
 
@@ -135,6 +145,7 @@ var _ = Describe("ModelRouter", func() {
 			fallback,
 			nil,
 			alwaysSample,
+			testMetrics,
 		)
 		body := `{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}]}`
 		mux.ServeHTTP(rec, post(body))
@@ -158,6 +169,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				aliases,
 				alwaysSample,
+				testMetrics,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
 
@@ -181,6 +193,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				aliases,
 				alwaysSample,
+				testMetrics,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
 			Expect(rec.Body.String()).To(Equal("ollama"))
@@ -200,6 +213,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				aliases,
 				alwaysSample,
+				testMetrics,
 			)
 			body := `{"model":"qwen","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
 			mux.ServeHTTP(rec, post(body))
@@ -236,6 +250,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				aliases,
 				alwaysSample,
+				testMetrics,
 			)
 			originalBody := `{"model":"claude-opus-4-7"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -262,6 +277,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				nil,
 				alwaysSample,
+				testMetrics,
 			)
 			originalBody := `{"model":"claude-opus-4-7"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -282,6 +298,7 @@ var _ = Describe("ModelRouter", func() {
 				capturing,
 				map[string]string{"": "should-not-fire"},
 				alwaysSample,
+				testMetrics,
 			)
 			originalBody := `{"other":"thing"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -314,6 +331,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				aliases,
 				alwaysSample,
+				testMetrics,
 			)
 			out := captureStderr(func() {
 				mux.ServeHTTP(rec, post(`{"model":"m3"}`))
@@ -344,7 +362,14 @@ var _ = Describe("ModelRouter", func() {
 		Context("sampler gating", func() {
 			It("suppresses 200 [req] lines when the sampler returns false", func() {
 				never := liblog.SamplerFunc(func() bool { return false })
-				mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, never)
+				mux = handler.NewModelRouter(
+					routes,
+					"default-fallback",
+					fallback,
+					nil,
+					never,
+					testMetrics,
+				)
 				out := captureStderr(func() {
 					mux.ServeHTTP(rec, post(`{"model":"opus"}`))
 				})
@@ -372,12 +397,57 @@ var _ = Describe("ModelRouter", func() {
 					fallback,
 					nil,
 					never,
+					testMetrics,
 				)
 				out := captureStderr(func() {
 					mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
 				})
 				Expect(out).To(ContainSubstring("status=502"))
 			})
+		})
+	})
+
+	Context("metrics", func() {
+		var m *handler.Metrics
+
+		BeforeEach(func() {
+			m = handler.NewMetrics()
+			mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, alwaysSample, m)
+			rec = httptest.NewRecorder()
+		})
+
+		It("increments requests_total counter on a successful dispatch", func() {
+			mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+			Expect(
+				testutil.ToFloat64(
+					m.RequestsTotal.WithLabelValues("minimax", "MiniMax-M3-highspeed", "2xx"),
+				),
+			).To(Equal(float64(1)))
+		})
+
+		It("records one histogram observation after a dispatch", func() {
+			before := testutil.CollectAndCount(m.RequestDuration)
+			mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+			after := testutil.CollectAndCount(m.RequestDuration)
+			Expect(after - before).To(Equal(1))
+		})
+
+		It("increments alias_resolutions_total on an alias hit", func() {
+			aliases := map[string]string{"m3": "MiniMax-M3-highspeed"}
+			mux = handler.NewModelRouter(
+				routes,
+				"default-fallback",
+				fallback,
+				aliases,
+				alwaysSample,
+				m,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"m3"}`))
+			Expect(
+				testutil.ToFloat64(
+					m.AliasResolutions.WithLabelValues("m3", "MiniMax-M3-highspeed"),
+				),
+			).To(Equal(float64(1)))
 		})
 	})
 })

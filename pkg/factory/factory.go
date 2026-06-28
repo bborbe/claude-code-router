@@ -12,6 +12,8 @@ import (
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	pkgcfg "github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/handler"
@@ -68,18 +70,24 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		return nil, fmt.Errorf("default_provider %q not in providers", cfg.Router.DefaultProvider)
 	}
 
+	metrics := handler.NewMetrics()
+	reg := prometheus.NewRegistry()
+	if err := metrics.Register(reg); err != nil {
+		return nil, fmt.Errorf("register metrics: %w", err)
+	}
 	modelRouter := handler.NewModelRouter(
 		routes,
 		cfg.Router.DefaultProvider,
 		defaultHandler,
 		cfg.Aliases,
 		liblog.DefaultSamplerFactory.Sampler(),
+		metrics,
 	)
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
-	mux.Handle("/metrics", libhttp.NewPrintHandler("# metrics not enabled in v1 skeleton\n"))
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	mux.Handle("/v1/", modelRouter)
