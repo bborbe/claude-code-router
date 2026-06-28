@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **refactor: replace 3× `fmt.Errorf` in `rewriteModelField` with `bberrors.Wrapf(ctx, ...)` from `github.com/bborbe/errors`.** Threads `r.Context()` into `rewriteModelField` so wraps carry the request-scoped context per the `no-fmt-errorf` rule. **Breaking: `rewriteModelField` signature now takes `(ctx context.Context, body []byte, resolved string)`** — unexported, no external callers.
+- **refactor: inject `libtime.CurrentDateTimeGetter` into `NewModelRouter` to replace the direct `time.Now()` at request start.** Closes the `no-time-now-direct` rule violation the bot raised on PR #12 and was deferred. Factory wires `libtime.NewCurrentDateTime()`; tests share a package-level `testDateTime`. **Breaking: `NewModelRouter` signature gains a 7th positional `currentDateTime libtime.CurrentDateTimeGetter` parameter** (factory + tests updated).
+
 ## v0.10.1
 
 - **feat: V(4) request+response body sample logging via SamplerList.** New `[upstream.req.body]` and `[upstream.resp.body]` glog V(4) lines per upstream RoundTrip, gated by `liblog.SamplerList{NewSampleTime(1s), NewSamplerGlogLevel(5)}` — body dumps fire at most 1/second at V(4), OR unconditionally at V(5) for deep-debug sessions. Body captured up to 4 KB; total length printed alongside (`body_len=N sample=...`) so operators know if truncation happened. `Bearer\s+\S+` substrings are regex-redacted via new `RedactBearerTokensInBody` helper in `pkg/handler/redact.go` — defense-in-depth for the rare case where Anthropic echoes a credential in a `metadata:` SSE field. **Breaking: `handler.NewLoggingRoundTripper` signature gains a `liblog.Sampler` parameter** (factory updated, no external callers).

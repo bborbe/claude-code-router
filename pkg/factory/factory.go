@@ -13,6 +13,7 @@ import (
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
+	libtime "github.com/bborbe/time"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -109,6 +110,7 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		cfg.Aliases,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
+		libtime.NewCurrentDateTime(),
 	)
 
 	mux := http.NewServeMux()
