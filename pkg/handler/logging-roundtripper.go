@@ -30,15 +30,17 @@ type loggingRoundTripper struct {
 }
 
 func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	glog.V(4).
+		Infof("[upstream.start] %s %s%s", req.Method, req.URL.Host, req.URL.Path)
 	start := time.Now()
 	resp, err := l.inner.RoundTrip(req)
 	ttfb := time.Since(start).Round(time.Millisecond)
 	if err != nil {
 		glog.V(4).
-			Infof("[upstream] %s %s%s ttfb=%s err=%v", req.Method, req.URL.Host, req.URL.Path, ttfb, err)
+			Infof("[upstream.end] %s %s%s ttfb=%s err=%v", req.Method, req.URL.Host, req.URL.Path, ttfb, err)
 		return resp, err
 	}
 	glog.V(4).
-		Infof("[upstream] %s %s%s ttfb=%s status=%d", req.Method, req.URL.Host, req.URL.Path, ttfb, resp.StatusCode)
+		Infof("[upstream.end] %s %s%s ttfb=%s status=%d", req.Method, req.URL.Host, req.URL.Path, ttfb, resp.StatusCode)
 	return resp, nil
 }

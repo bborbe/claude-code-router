@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
@@ -31,28 +32,31 @@ func CreateServer(listen, configPath string) (librun.Func, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)
 	}
-	return libhttp.NewServer(listen, router, disableWriteTimeoutForStreaming), nil
+	return libhttp.NewServer(listen, router, streamingServerTimeouts), nil
 }
 
-// disableWriteTimeoutForStreaming disables the server's WriteTimeout
-// AND ReadTimeout (both 30s by default in libhttp.NewServer), which
-// would otherwise cap each leg of the streaming chain:
+// streamingServerTimeouts raises libhttp.NewServer's default 30s
+// ReadTimeout + 30s WriteTimeout to values that fit LLM-proxy streaming
+// while still bounding stuck connections — full chain:
 //
-//	claude → router (POST body)  — was capped by ReadTimeout=30s
-//	router → api → router        — TTFB capped by transport ResponseHeaderTimeout (5min)
-//	router → claude (SSE stream) — was capped by WriteTimeout=30s
+//	claude → router (POST body)  — ReadTimeout 5min  (large /compact context, localhost transfer in <5s normally)
+//	router → api → router        — transport ResponseHeaderTimeout 5min (TTFB)
+//	router → claude (SSE stream) — WriteTimeout 10min (worst observed body stream ~1min; 10min is generous 10x headroom)
 //
-// `/compact` and long code-gen prompts regularly exceed 30s on both
-// the read (large session context payload) and write (long SSE stream)
-// legs. Anthropic's per-request budget plus claude-code's client-side
-// timeouts are the real caps; the router doesn't add its own.
+// Defaults killed `/compact` two ways: ReadTimeout=30s cut off a large
+// session-context upload mid-flight; WriteTimeout=30s killed any SSE
+// response that streamed >30s (most /compact bodies). Setting these
+// to 0 (unlimited) would risk a wedged Anthropic outage piling up
+// goroutines forever as claude-code's SDK retries — so we cap at
+// generous-but-finite values that surface real wedges as clean
+// timeouts the operator can investigate.
 //
 // ReadHeaderTimeout (10s) and IdleTimeout (60s) stay at defaults —
 // those cap pre-body header reads and idle-keepalive recycling, both
 // of which are safe to bound at single-digit seconds even for streaming.
-func disableWriteTimeoutForStreaming(o *libhttp.ServerOptions) {
-	o.WriteTimeout = 0
-	o.ReadTimeout = 0
+func streamingServerTimeouts(o *libhttp.ServerOptions) {
+	o.ReadTimeout = 5 * time.Minute
+	o.WriteTimeout = 10 * time.Minute
 }
 
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed

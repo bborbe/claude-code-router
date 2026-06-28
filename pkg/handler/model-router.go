@@ -65,6 +65,7 @@ func NewModelRouter(
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		glog.V(4).Infof("[inbound.start] %s %s", r.Method, r.URL.Path)
 		rec := &statusRecorder{ResponseWriter: w}
 
 		body, err := io.ReadAll(r.Body)
