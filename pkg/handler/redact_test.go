@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -93,5 +94,53 @@ var _ = Describe("RedactHeadersForLog", func() {
 		b, _ := json.Marshal(result)
 		Expect(string(b)).To(ContainSubstring("sk-leak-canary-value"),
 			"intentional: header-name-only redaction; document the boundary")
+	})
+})
+
+var _ = Describe("RedactBearerTokensInBody", func() {
+	It("redacts a Bearer token and does not expose the canary in the output", func() {
+		input := []byte("Authorization: Bearer sk-leak-canary-body")
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(string(out)).To(ContainSubstring("Bearer <redacted>"))
+		Expect(string(out)).NotTo(ContainSubstring("sk-leak-canary-body"))
+	})
+
+	It("returns the input unchanged (same bytes) when no Bearer token is present", func() {
+		input := []byte("plain text with no token here")
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(out).To(Equal(input))
+	})
+
+	It("redacts multiple Bearer tokens in the same body", func() {
+		input := []byte(`{"auth1":"Bearer token-one","auth2":"Bearer token-two"}`)
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(string(out)).NotTo(ContainSubstring("token-one"))
+		Expect(string(out)).NotTo(ContainSubstring("token-two"))
+		// Both occurrences replaced
+		Expect(bytes.Count(out, []byte("Bearer <redacted>"))).To(Equal(2))
+	})
+
+	It(
+		"leaves the JSON closing bracket intact when a token is directly adjacent (no `,;\"'` between)",
+		func() {
+			// Regression for the bot review on PR #17: pre-fix, the regex stopped
+			// at `,;"'` but NOT `}` / `]`, so a JSON value like `{"k":"Bearer x"}`
+			// matched `Bearer x"}` and replacement produced malformed JSON
+			// (`{"k":"Bearer <redacted>` — missing the closing `"}`).
+			input := []byte(`{"auth":"Bearer sk-trailing-bracket-canary"}`)
+			out := handler.RedactBearerTokensInBody(input)
+			Expect(string(out)).NotTo(ContainSubstring("sk-trailing-bracket-canary"))
+			Expect(
+				string(out),
+			).To(HaveSuffix(`"}`), "closing `\"}` must survive replacement; got: %s", out)
+		},
+	)
+
+	It("leaves a `]` close-bracket intact for array-of-tokens style", func() {
+		input := []byte(`{"tokens":["Bearer sk-array-canary"]}`)
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(string(out)).NotTo(ContainSubstring("sk-array-canary"))
+		Expect(string(out)).To(ContainSubstring(`"]}`),
+			"closing `\"]}` must survive; got: %s", out)
 	})
 })

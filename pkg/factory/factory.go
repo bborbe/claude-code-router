@@ -77,6 +77,7 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		}
 		transport := handler.NewLoggingRoundTripper(
 			handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token),
+			liblog.SamplerList{liblog.NewSampleTime(time.Second), liblog.NewSamplerGlogLevel(5)},
 		)
 		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
 		providerHandlers[name] = proxy

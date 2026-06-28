@@ -6,6 +6,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## v0.10.1
 
+- **feat: V(4) request+response body sample logging via SamplerList.** New `[upstream.req.body]` and `[upstream.resp.body]` glog V(4) lines per upstream RoundTrip, gated by `liblog.SamplerList{NewSampleTime(1s), NewSamplerGlogLevel(5)}` — body dumps fire at most 1/second at V(4), OR unconditionally at V(5) for deep-debug sessions. Body captured up to 4 KB; total length printed alongside (`body_len=N sample=...`) so operators know if truncation happened. `Bearer\s+\S+` substrings are regex-redacted via new `RedactBearerTokensInBody` helper in `pkg/handler/redact.go` — defense-in-depth for the rare case where Anthropic echoes a credential in a `metadata:` SSE field. **Breaking: `handler.NewLoggingRoundTripper` signature gains a `liblog.Sampler` parameter** (factory updated, no external callers).
 - **refactor: move alias counter pre-initialization from factory into `NewMetrics` constructor.** `NewMetrics` now takes `aliases map[string]string` and seeds `ccrouter_alias_resolutions_total{alias,resolved}` series to zero for each declared alias, so the wiring sits next to the counter it primes instead of one call layer up in `CreateRouterFromConfig`. A `nil` aliases map is safe (no panic, zero iterations). Operator-side observability guarantee preserved: alerts for unhit aliases still evaluate to `0` instead of no-data.
 
 ## v0.10.0
