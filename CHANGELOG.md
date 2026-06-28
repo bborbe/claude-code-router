@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.6.0
 
 - **feat: structured per-request log line.** Replace the two-line `[route]` + `[req]` pair with a single structured line at glog V(1): `[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms`. Fields cover incoming model, alias resolution (if any), provider name from the YAML config, HTTP status, and total wall-time latency rounded to ms. Alias-resolution + route-match detail demoted to V(2). Outer `NewLoggingHandler` middleware removed — admin endpoints (`/healthz`, `/readiness`, etc.) no longer log per request.
 - **feat: runtime log-level toggle via `/setloglevel/<level>`.** Replace the noop stub with a real handler backed by `bborbe/log.LogLevelSetter`. `curl http://127.0.0.1:8788/setloglevel/3` bumps verbosity without restarting the launchd agent; auto-reverts to V(1) after 5 minutes so a forgotten bump can't leave the router in verbose mode indefinitely. Returns 400 on a non-integer level.
