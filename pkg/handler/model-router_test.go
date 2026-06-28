@@ -450,4 +450,55 @@ var _ = Describe("ModelRouter", func() {
 			).To(Equal(float64(1)))
 		})
 	})
+
+	Context("SSE flush passthrough (regression)", func() {
+		It("forwards http.NewResponseController().Flush() to the underlying writer", func() {
+			// Repro for the /compact-stuck-at-95% bug: the inner handler
+			// represents Anthropic's SSE upstream (writes a chunk, then
+			// calls the response controller's Flush — exactly what
+			// httputil.ReverseProxy does between SSE chunks). The model-
+			// router wraps the writer in *statusRecorder; without an
+			// Unwrap method the Flush call cannot reach the underlying
+			// writer and bytes pile up in an intermediate buffer.
+			spy := &flushTrackingWriter{ResponseRecorder: httptest.NewRecorder()}
+
+			streaming := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("data: hello\n\n"))
+				Expect(http.NewResponseController(w).Flush()).To(Succeed())
+			})
+			streamRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
+			}
+			mux = handler.NewModelRouter(
+				streamRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				handler.NewMetrics(),
+			)
+			mux.ServeHTTP(spy, post(`{"model":"claude-opus-4-7"}`))
+
+			Expect(spy.flushed).To(
+				BeNumerically(">", 0),
+				"Flush did not reach the underlying writer — statusRecorder.Unwrap missing?",
+			)
+		})
+	})
 })
+
+// flushTrackingWriter is an http.ResponseWriter that counts Flush calls.
+// Used by the SSE-flush regression spec to assert that
+// statusRecorder.Unwrap routes http.NewResponseController(w).Flush()
+// through to the underlying writer.
+type flushTrackingWriter struct {
+	*httptest.ResponseRecorder
+	flushed int
+}
+
+func (f *flushTrackingWriter) Flush() {
+	f.flushed++
+	f.ResponseRecorder.Flush()
+}
