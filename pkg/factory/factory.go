@@ -31,7 +31,28 @@ func CreateServer(listen, configPath string) (librun.Func, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)
 	}
-	return libhttp.NewServer(listen, router), nil
+	return libhttp.NewServer(listen, router, disableWriteTimeoutForStreaming), nil
+}
+
+// disableWriteTimeoutForStreaming disables the server's WriteTimeout
+// AND ReadTimeout (both 30s by default in libhttp.NewServer), which
+// would otherwise cap each leg of the streaming chain:
+//
+//	claude → router (POST body)  — was capped by ReadTimeout=30s
+//	router → api → router        — TTFB capped by transport ResponseHeaderTimeout (5min)
+//	router → claude (SSE stream) — was capped by WriteTimeout=30s
+//
+// `/compact` and long code-gen prompts regularly exceed 30s on both
+// the read (large session context payload) and write (long SSE stream)
+// legs. Anthropic's per-request budget plus claude-code's client-side
+// timeouts are the real caps; the router doesn't add its own.
+//
+// ReadHeaderTimeout (10s) and IdleTimeout (60s) stay at defaults —
+// those cap pre-body header reads and idle-keepalive recycling, both
+// of which are safe to bound at single-digit seconds even for streaming.
+func disableWriteTimeoutForStreaming(o *libhttp.ServerOptions) {
+	o.WriteTimeout = 0
+	o.ReadTimeout = 0
 }
 
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
@@ -50,7 +71,9 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: parse upstream %q: %w", name, prov.Upstream, err)
 		}
-		transport := handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token)
+		transport := handler.NewLoggingRoundTripper(
+			handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token),
+		)
 		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
 		providerHandlers[name] = proxy
 		for _, pattern := range prov.Models {
