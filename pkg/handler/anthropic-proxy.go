@@ -15,9 +15,17 @@ import (
 )
 
 // DefaultProxyTransport returns an http.Transport with explicit timeouts
-// suitable for upstream LLM API calls. Long ResponseHeaderTimeout because
-// LLM completions can take 30s+ for the first byte (SSE); short Dial
-// because connections are local-network or quick HTTPS to api.anthropic.com.
+// suitable for upstream LLM API calls. Generous ResponseHeaderTimeout
+// because long-generation requests (`/compact` on a large session, big
+// code-gen prompts) can delay 60-300s before Anthropic sends the first
+// byte of headers; short Dial because connections are quick HTTPS to
+// api.anthropic.com.
+//
+// Observed 2026-06-28: previous 60s ResponseHeaderTimeout produced
+// `net/http: timeout awaiting response headers` 502s on `/compact`
+// that took several minutes total. 300s (5 min) is generous enough
+// for the worst observed case while still bounding a genuinely-wedged
+// connection.
 func DefaultProxyTransport() *http.Transport {
 	return &http.Transport{
 		DialContext: (&net.Dialer{
@@ -29,7 +37,7 @@ func DefaultProxyTransport() *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Minute,
 	}
 }
 

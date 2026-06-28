@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **fix: raise `DefaultProxyTransport.ResponseHeaderTimeout` from 60s to 5min.** Long-generation requests (e.g. `/compact` on a large session, big code-gen prompts) regularly need 60-300s before Anthropic sends the first byte of response headers. The old 60s cap produced `net/http: timeout awaiting response headers` 502s mid-flight, which in claude-code manifested as `/compact` appearing to hang at 95% — claude-code's SDK silently retried after each 502, so what looked like a stuck 7-minute `/compact` was actually multiple stuck 60s rounds plus one successful round. Bump to 5 minutes covers the worst observed case while still bounding a genuinely-wedged connection.
+
 ## v0.9.0
 
 - **feat: Prometheus `/metrics` endpoint.** Replace the `# metrics not enabled in v1 skeleton` stub with `promhttp.Handler()` against the default Prometheus registry (matches go-skeleton convention — also exposes `go_gc_*`, `go_memstats_*`, `process_*` runtime series for spotting GC pressure / memory growth on the long-running router daemon). Three `ccrouter_*` application series: `ccrouter_requests_total{provider,model,status_class}` counter, `ccrouter_request_duration_seconds_bucket{provider,model}` histogram (LLM-shaped buckets 100ms…60s), `ccrouter_alias_resolutions_total{alias,resolved}` counter. Cardinality ~1k application series total at 5 providers × 15 models. Metrics emit unconditionally per request (NOT sampled — log sampling stays at the V(1) `[req]` line). Operator scrape config + Grafana queries in `docs/metrics.md`. Closes the open backlog item under [[Multi-Provider Claude Code Proxy]].
