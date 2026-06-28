@@ -71,6 +71,12 @@ func (t *teeBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Close closes the inner ReadCloser and then invokes onClose with the
+// captured prefix + cumulative byte count. The order matters — inner
+// close runs first so the callback's log line is the LAST event for
+// the response; the inner close error is returned to the caller
+// unchanged (NOT swallowed), so the proxy chain still surfaces any I/O
+// failure on close.
 func (t *teeBody) Close() error {
 	err := t.rc.Close()
 	if t.onClose != nil {

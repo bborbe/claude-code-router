@@ -119,4 +119,28 @@ var _ = Describe("RedactBearerTokensInBody", func() {
 		// Both occurrences replaced
 		Expect(bytes.Count(out, []byte("Bearer <redacted>"))).To(Equal(2))
 	})
+
+	It(
+		"leaves the JSON closing bracket intact when a token is directly adjacent (no `,;\"'` between)",
+		func() {
+			// Regression for the bot review on PR #17: pre-fix, the regex stopped
+			// at `,;"'` but NOT `}` / `]`, so a JSON value like `{"k":"Bearer x"}`
+			// matched `Bearer x"}` and replacement produced malformed JSON
+			// (`{"k":"Bearer <redacted>` — missing the closing `"}`).
+			input := []byte(`{"auth":"Bearer sk-trailing-bracket-canary"}`)
+			out := handler.RedactBearerTokensInBody(input)
+			Expect(string(out)).NotTo(ContainSubstring("sk-trailing-bracket-canary"))
+			Expect(
+				string(out),
+			).To(HaveSuffix(`"}`), "closing `\"}` must survive replacement; got: %s", out)
+		},
+	)
+
+	It("leaves a `]` close-bracket intact for array-of-tokens style", func() {
+		input := []byte(`{"tokens":["Bearer sk-array-canary"]}`)
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(string(out)).NotTo(ContainSubstring("sk-array-canary"))
+		Expect(string(out)).To(ContainSubstring(`"]}`),
+			"closing `\"]}` must survive; got: %s", out)
+	})
 })

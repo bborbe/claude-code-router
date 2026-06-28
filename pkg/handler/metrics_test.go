@@ -17,7 +17,7 @@ var _ = Describe("Metrics", func() {
 	var m *handler.Metrics
 
 	BeforeEach(func() {
-		m = handler.NewMetrics()
+		m = handler.NewMetrics(nil)
 	})
 
 	It("NewMetrics returns non-nil collectors", func() {
@@ -102,5 +102,21 @@ var _ = Describe("Metrics", func() {
 		Expect(
 			testutil.ToFloat64(m.AliasResolutions.WithLabelValues("m3", "MiniMax-M3-highspeed")),
 		).To(Equal(float64(1)))
+	})
+
+	Context("NewMetrics with alias map", func() {
+		It("pre-initializes one counter series per declared alias", func() {
+			aliasMetrics := handler.NewMetrics(map[string]string{
+				"qwen": "qwen-coder",
+				"m3":   "MiniMax-M3-highspeed",
+			})
+			Expect(testutil.CollectAndCount(aliasMetrics.AliasResolutions)).To(Equal(2))
+		})
+
+		It("creates no series and does not panic when aliases is nil", func() {
+			var m *handler.Metrics
+			Expect(func() { m = handler.NewMetrics(nil) }).NotTo(Panic())
+			Expect(testutil.CollectAndCount(m.AliasResolutions)).To(Equal(0))
+		})
 	})
 })

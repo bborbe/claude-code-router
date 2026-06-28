@@ -14,10 +14,14 @@ import (
 // bearerRE matches Bearer tokens in body content for redaction.
 // Compiled once at package init — case-insensitive, covers both
 // "Bearer sk-..." and "bearer sk-..." as they can appear in SSE/JSON bodies.
-// bearerRE stops at whitespace or common JSON/HTTP delimiters (", , ; ')
-// so that adjacent Bearer tokens in a JSON body are each redacted individually
-// rather than the greedy \S+ swallowing everything up to the next space.
-var bearerRE = regexp.MustCompile(`(?i)Bearer\s+[^\s,;"']+`)
+// bearerRE stops at whitespace or common JSON/HTTP delimiters
+// (", , ; ' } ]) so that adjacent Bearer tokens in a JSON body are each
+// redacted individually rather than a greedy \S+ swallowing everything
+// up to the next space. `}` and `]` are included so a token immediately
+// before a JSON closing bracket (e.g. `{"auth":"Bearer sk-xxx"}`) leaves
+// the bracket intact — replacement otherwise produced malformed-JSON
+// log lines (`{"auth":"Bearer <redacted>` — missing the closing `"}`).
+var bearerRE = regexp.MustCompile(`(?i)Bearer\s+[^\s,;"'}\]]+`)
 
 // RedactBearerTokensInBody returns a copy of b with every
 // "Bearer <token>" substring replaced by "Bearer <redacted>".

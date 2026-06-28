@@ -28,7 +28,7 @@ import (
 // sampling behavior construct their own sampler inline.
 var alwaysSample = liblog.NewSamplerTrue()
 
-var testMetrics = handler.NewMetrics()
+var testMetrics = handler.NewMetrics(nil)
 
 // labelHandler writes its label to the body so tests can assert which
 // route was chosen.
@@ -411,7 +411,7 @@ var _ = Describe("ModelRouter", func() {
 		var m *handler.Metrics
 
 		BeforeEach(func() {
-			m = handler.NewMetrics()
+			m = handler.NewMetrics(nil)
 			mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, alwaysSample, m)
 			rec = httptest.NewRecorder()
 		})
@@ -451,6 +451,38 @@ var _ = Describe("ModelRouter", func() {
 		})
 	})
 
+	Context("MaxRequestBodyBytes", func() {
+		// prefix/suffix overhead: len(`{"model":"claude-opus-4-7","pad":"`) + len(`"}`) = 36
+		const (
+			bodyPrefix   = `{"model":"claude-opus-4-7","pad":"`
+			bodySuffix   = `"}`
+			bodyOverhead = len(bodyPrefix) + len(bodySuffix) // 36
+		)
+
+		It("allows a body just under 1 MB", func() {
+			padding := strings.Repeat("x", (1<<20)-bodyOverhead-1) // body = (1<<20)-1 bytes
+			mux.ServeHTTP(rec, post(bodyPrefix+padding+bodySuffix))
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(rec.Body.String()).To(Equal("anthropic"))
+		})
+
+		It("allows a body exactly at 1 MB (boundary inclusive)", func() {
+			padding := strings.Repeat("x", (1<<20)-bodyOverhead) // body = 1<<20 bytes
+			mux.ServeHTTP(rec, post(bodyPrefix+padding+bodySuffix))
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(rec.Body.String()).To(Equal("anthropic"))
+		})
+
+		It("rejects a body just over 1 MB with 413 without leaking the limit", func() {
+			padding := strings.Repeat("x", (1<<20)-bodyOverhead+1) // body = (1<<20)+1 bytes
+			mux.ServeHTTP(rec, post(bodyPrefix+padding+bodySuffix))
+			Expect(rec.Code).To(Equal(http.StatusRequestEntityTooLarge))
+			Expect(rec.Body.String()).To(ContainSubstring("request body too large"))
+			// must not echo the numeric limit back to the caller
+			Expect(rec.Body.String()).NotTo(ContainSubstring("1048576"))
+		})
+	})
+
 	Context("SSE flush passthrough (regression)", func() {
 		It("forwards http.NewResponseController().Flush() to the underlying writer", func() {
 			// Repro for the /compact-stuck-at-95% bug: the inner handler
@@ -477,7 +509,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				nil,
 				alwaysSample,
-				handler.NewMetrics(),
+				handler.NewMetrics(nil),
 			)
 			mux.ServeHTTP(spy, post(`{"model":"claude-opus-4-7"}`))
 
