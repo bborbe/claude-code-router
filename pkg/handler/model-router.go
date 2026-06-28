@@ -104,6 +104,10 @@ func NewModelRouter(
 		if status == 0 {
 			status = http.StatusOK
 		}
+		// e2e wall-time: includes body read + JSON parse + alias rewrite
+		// + upstream round-trip. That's the operator-relevant number
+		// ("how long did this `/model X` turn take?"), not the upstream-
+		// only segment.
 		latency := time.Since(start).Round(time.Millisecond)
 
 		if aliasResolved != "" {
