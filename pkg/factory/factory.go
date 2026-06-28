@@ -13,6 +13,7 @@ import (
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
+	libtime "github.com/bborbe/time"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -102,6 +103,7 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
 		return nil, fmt.Errorf("register metrics: %w", err)
 	}
+	currentDateTime := libtime.NewCurrentDateTime()
 	modelRouter := handler.NewModelRouter(
 		routes,
 		cfg.Router.DefaultProvider,
@@ -109,6 +111,7 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		cfg.Aliases,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
+		currentDateTime,
 	)
 
 	mux := http.NewServeMux()
