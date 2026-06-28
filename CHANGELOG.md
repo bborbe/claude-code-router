@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **docs: inline the full sample config in `README.md`** so new operators see the YAML shape at a glance instead of clicking through to `docs/config.example.yaml`. Adds the canonical 3-badge set (Go Reference, Go Report Card, DeepWiki) per `readme-guide.md` — was CI-only before.
+- **docs: scrub internal-org references** from public docs. Removes the `seibert-vllm` provider example, teamvault token-paste hints, and the `→ seibert-vllm` example comment from `README.md`, `docs/config.example.yaml`, `docs/config.md`, and `docs/dark-factory-integration.md`. Replaced with generic `<YOUR_MINIMAX_API_KEY>` / `<your MiniMax API key>` placeholders. Public-repo hygiene — the docs should be useful to anyone setting up a router, not gated on internal credential-store access.
+
 ## v0.9.0
 
 - **feat: Prometheus `/metrics` endpoint.** Replace the `# metrics not enabled in v1 skeleton` stub with `promhttp.Handler()` against the default Prometheus registry (matches go-skeleton convention — also exposes `go_gc_*`, `go_memstats_*`, `process_*` runtime series for spotting GC pressure / memory growth on the long-running router daemon). Three `ccrouter_*` application series: `ccrouter_requests_total{provider,model,status_class}` counter, `ccrouter_request_duration_seconds_bucket{provider,model}` histogram (LLM-shaped buckets 100ms…60s), `ccrouter_alias_resolutions_total{alias,resolved}` counter. Cardinality ~1k application series total at 5 providers × 15 models. Metrics emit unconditionally per request (NOT sampled — log sampling stays at the V(1) `[req]` line). Operator scrape config + Grafana queries in `docs/metrics.md`. Closes the open backlog item under [[Multi-Provider Claude Code Proxy]].
