@@ -39,8 +39,13 @@ type Metrics struct {
 // them. Call Register on a *prometheus.Registry to expose them; that
 // split lets tests verify behavior against a fresh registry per spec
 // without colliding on the global default registry.
-func NewMetrics() *Metrics {
-	return &Metrics{
+//
+// aliases is used to pre-initialize the alias_resolutions counter so
+// that `rate(...) > X` alerts evaluate to 0 (not no-data) for aliases
+// that haven't been hit yet. A nil aliases map is safe — ranging a nil
+// map yields zero iterations.
+func NewMetrics(aliases map[string]string) *Metrics {
+	m := &Metrics{
 		RequestsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "ccrouter_requests_total",
@@ -64,6 +69,10 @@ func NewMetrics() *Metrics {
 			[]string{"alias", "resolved"},
 		),
 	}
+	for alias, resolved := range aliases {
+		m.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
+	}
+	return m
 }
 
 // Register registers all collectors against reg. Pass a fresh registry

@@ -28,7 +28,7 @@ import (
 // sampling behavior construct their own sampler inline.
 var alwaysSample = liblog.NewSamplerTrue()
 
-var testMetrics = handler.NewMetrics()
+var testMetrics = handler.NewMetrics(nil)
 
 // labelHandler writes its label to the body so tests can assert which
 // route was chosen.
@@ -411,7 +411,7 @@ var _ = Describe("ModelRouter", func() {
 		var m *handler.Metrics
 
 		BeforeEach(func() {
-			m = handler.NewMetrics()
+			m = handler.NewMetrics(nil)
 			mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, alwaysSample, m)
 			rec = httptest.NewRecorder()
 		})
@@ -477,7 +477,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				nil,
 				alwaysSample,
-				handler.NewMetrics(),
+				handler.NewMetrics(nil),
 			)
 			mux.ServeHTTP(spy, post(`{"model":"claude-opus-4-7"}`))
 

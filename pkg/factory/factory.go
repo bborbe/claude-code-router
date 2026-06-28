@@ -97,21 +97,9 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		return nil, fmt.Errorf("default_provider %q not in providers", cfg.Router.DefaultProvider)
 	}
 
-	metrics := handler.NewMetrics()
+	metrics := handler.NewMetrics(cfg.Aliases)
 	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
 		return nil, fmt.Errorf("register metrics: %w", err)
-	}
-	// Pre-initialize ccrouter_alias_resolutions_total{alias, resolved}
-	// for each (alias, resolved) pair declared in cfg.Aliases — per
-	// go-prometheus/counter-pre-initialization, so `rate(...) > X`
-	// alerts evaluate to 0 (not no-data) for aliases that haven't been
-	// hit yet. Request counter labels include unbounded `model` (any
-	// string operator types via /model X), so pre-init doesn't apply
-	// there — series are created on first hit, which is fine since
-	// alerts on the request counter usually use sum-by-provider not
-	// per-(provider,model,status_class) absolute thresholds.
-	for alias, resolved := range cfg.Aliases {
-		metrics.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
 	}
 	modelRouter := handler.NewModelRouter(
 		routes,
