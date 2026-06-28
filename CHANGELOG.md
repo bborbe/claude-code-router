@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **refactor: flatten `pkg/cli` + `pkg/config` into `pkg/`.** Aligns with [[Go Package Layout Guide]] — default is a single flat `pkg/` package with two conventional exceptions (`pkg/factory/` + `pkg/handler/`); none of the 5 split triggers (cycle break, >30 files, etc.) apply to `cli` or `config`. Removes `pkg/cli/cli.go` (1 file) and `pkg/config/config*.go` (3 files) — files moved to `pkg/cli.go`, `pkg/config.go`, `pkg/config_test.go` with `package pkg`. Duplicate `pkg/config/config_suite_test.go` dropped (`pkg/pkg_suite_test.go` already covers the `pkg_test` suite). Import-only impact: `cli.NewApp` → `pkg.NewApp`, `config.Load` / `config.Config` → `pkg.Load` / `pkg.Config`. No external callers; factory + main updated.
+
 ## v0.7.0
 
 - **feat: sample 200 `[req]` log lines.** `NewModelRouter` gains a `log.Sampler` parameter (factory passes `liblog.DefaultSamplerFactory.Sampler()` — `SamplerList{NewSampleTime(10s), NewSamplerGlogLevel(4)}`). Non-200 responses are always logged (errors are signal); 200s are logged at most once per 10s, OR unconditionally when `-v` ≥ 4 — so `curl /setloglevel/4` brings back per-request visibility for deep debug. Steady-state log becomes operator-readable under concurrent /model traffic.

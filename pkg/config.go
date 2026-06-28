@@ -10,7 +10,7 @@
 //
 // Routing is per-request: the model-router inspects the JSON body's
 // `model` field and forwards to the matching provider's reverse proxy.
-package config
+package pkg
 
 import (
 	"fmt"
