@@ -11,17 +11,23 @@ import (
 	"github.com/golang/glog"
 )
 
-// NewLoggingRoundTripper wraps inner with a V(4) `[upstream]` log
-// line per call: method + path + TTFB (time-to-first-byte from when
-// inner.RoundTrip was invoked until it returned with the response
-// headers) + status code (or error). Useful for debugging slow
-// upstream behavior — distinguishes "Anthropic took 90s to start
-// sending headers" (high TTFB) from "Anthropic sent headers fast
-// but body streaming was slow" (low TTFB, high total latency in
-// the surrounding `[req]` line).
+// NewLoggingRoundTripper wraps inner with a V(4) `[upstream.start]` /
+// `[upstream.end]` log-line pair per call: method + path on start,
+// method + path + TTFB (time-to-first-byte from when inner.RoundTrip
+// was invoked until it returned with the response headers) + status
+// code (or error) on end. Useful for debugging slow upstream behavior
+// — distinguishes "Anthropic took 90s to start sending headers" (high
+// TTFB) from "Anthropic sent headers fast but body streaming was slow"
+// (low TTFB, high total latency in the surrounding `[req]` line).
+//
+// If inner is nil, http.DefaultTransport is used (defensive — matches
+// the nil-default pattern in NewAnthropicProxyHandler).
 //
 // Silent at default V(1)-V(3); enable via `curl http://127.0.0.1:8788/setloglevel/4`.
 func NewLoggingRoundTripper(inner http.RoundTripper) http.RoundTripper {
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
 	return &loggingRoundTripper{inner: inner}
 }
 
@@ -38,7 +44,10 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	if err != nil {
 		glog.V(4).
 			Infof("[upstream.end] %s %s%s ttfb=%s err=%v", req.Method, req.URL.Host, req.URL.Path, ttfb, err)
-		return resp, err
+		// Return nil resp on error per net/http contract — callers
+		// must not inspect resp when err != nil; some inner transports
+		// return a non-nil resp alongside err which is a footgun.
+		return nil, err
 	}
 	glog.V(4).
 		Infof("[upstream.end] %s %s%s ttfb=%s status=%d", req.Method, req.URL.Host, req.URL.Path, ttfb, resp.StatusCode)

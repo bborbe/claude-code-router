@@ -124,6 +124,8 @@ func NewModelRouter(
 		latency := time.Since(start).Round(time.Millisecond)
 
 		metrics.ObserveRequest(providerName, origModel, status, latency.Seconds())
+		glog.V(4).
+			Infof("[inbound.end] %s %s status=%d latency=%s", r.Method, r.URL.Path, status, latency)
 		logReq(r, status, latency, origModel, aliasResolved, providerName, sampler)
 	})
 }
