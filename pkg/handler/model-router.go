@@ -66,6 +66,15 @@ type ModelRoute struct {
 // At V(2), alias resolution and route match get their own `[alias]` /
 // `[route]` detail lines (independent of the sampler — V(2) detail is
 // already operator-opt-in, additional gating buys nothing).
+//
+// match route → dispatch → observe metrics → emit logs. Each step's
+// branching is local and reads sequentially; extracting any of it into a
+// helper buys nothing (the prior `logReq` extraction was a naive line-count
+// fix per architecture audit 2026-06-28 — inlined back). If a second
+// log-event shape ever needs the same data, introduce a `requestLogger`
+// struct holding `sampler` + `metrics` then.
+//
+//nolint:gocognit,funlen // single-pass request flow: read body → resolve alias →
 func NewModelRouter(
 	routes []ModelRoute,
 	defaultProviderName string,
@@ -147,35 +156,26 @@ func NewModelRouter(
 		metrics.ObserveRequest(providerName, origModel, status, latency.Seconds())
 		glog.V(4).
 			Infof("[inbound.end] %s %s status=%d latency=%s", r.Method, r.URL.Path, status, latency)
-		logReq(r, status, latency, origModel, aliasResolved, providerName, sampler)
-	})
-}
 
-// logReq emits the structured `[req]` line. Always logs non-200 (errors
-// are signal); samples 200s to keep the steady-state log readable.
-// sampler.IsSample() is non-pure (time-based sampler advances its window)
-// — only consulted on the success path so the 10s window is paced by 200s.
-func logReq(
-	r *http.Request,
-	status int,
-	latency time.Duration,
-	origModel, aliasResolved, providerName string,
-	sampler liblog.Sampler,
-) {
-	if status == http.StatusOK && !sampler.IsSample() {
-		return
-	}
-	if aliasResolved != "" {
+		// Always log non-200 (errors are signal); sample 200s to keep the
+		// steady-state log readable. sampler.IsSample() is non-pure (time-
+		// based sampler advances its window) — only consult it on the 200
+		// path so the 10s window is paced by real success density.
+		if status == http.StatusOK && !sampler.IsSample() {
+			return
+		}
+		if aliasResolved != "" {
+			glog.V(1).Infof(
+				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency,
+			)
+			return
+		}
 		glog.V(1).Infof(
-			"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s",
-			r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency,
+			"[req] %s %s model=%s provider=%s status=%d latency=%s",
+			r.Method, r.URL.Path, origModel, providerName, status, latency,
 		)
-		return
-	}
-	glog.V(1).Infof(
-		"[req] %s %s model=%s provider=%s status=%d latency=%s",
-		r.Method, r.URL.Path, origModel, providerName, status, latency,
-	)
+	})
 }
 
 // rewriteModelField parses body as a JSON object, sets the top-level
