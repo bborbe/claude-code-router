@@ -71,8 +71,7 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 	}
 
 	metrics := handler.NewMetrics()
-	reg := prometheus.NewRegistry()
-	if err := metrics.Register(reg); err != nil {
+	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
 		return nil, fmt.Errorf("register metrics: %w", err)
 	}
 	modelRouter := handler.NewModelRouter(
@@ -87,7 +86,12 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
-	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	// /metrics uses the global default registry (matches go-skeleton
+	// convention) so process-level series (go_gc_*, go_memstats_*,
+	// process_*) get included alongside the ccrouter_* application
+	// series — useful for spotting GC pressure / memory growth on a
+	// long-running router daemon.
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	mux.Handle("/v1/", modelRouter)

@@ -1,6 +1,6 @@
 # Prometheus Metrics
 
-The `/metrics` endpoint exposes router telemetry via `promhttp.HandlerFor` backed by a fresh `prometheus.NewRegistry()` (process-level `go_*` series are excluded by default). All series use the `ccrouter_` prefix to avoid collisions with other local exporters.
+The `/metrics` endpoint exposes router telemetry via `promhttp.Handler()` against the Prometheus default registry. Application series use the `ccrouter_` prefix to avoid collisions with other local exporters; the default registry also exposes Go runtime series (`go_gc_*`, `go_memstats_*`, `process_*`) — useful for spotting GC pressure or memory growth on the long-running router daemon.
 
 ## Prometheus scrape config
 
