@@ -6,15 +6,17 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"path"
 	"time"
 
+	bberrors "github.com/bborbe/errors"
 	liblog "github.com/bborbe/log"
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 )
 
@@ -82,9 +84,10 @@ func NewModelRouter(
 	aliases map[string]string,
 	sampler liblog.Sampler,
 	metrics *Metrics,
+	currentDateTime libtime.CurrentDateTimeGetter,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+		start := currentDateTime.Now().Time()
 		glog.V(4).Infof("[inbound.start] %s %s", r.Method, r.URL.Path)
 		rec := &statusRecorder{ResponseWriter: w}
 
@@ -113,7 +116,7 @@ func NewModelRouter(
 		var aliasResolved string
 
 		if resolved, ok := aliases[model]; ok && model != "" {
-			rewritten, rerr := rewriteModelField(body, resolved)
+			rewritten, rerr := rewriteModelField(r.Context(), body, resolved)
 			if rerr != nil {
 				glog.Errorf("[alias] rewrite failed for %q -> %q: %v", model, resolved, rerr)
 				http.Error(w, "alias rewrite failed", http.StatusInternalServerError)
@@ -151,7 +154,7 @@ func NewModelRouter(
 		// + upstream round-trip. That's the operator-relevant number
 		// ("how long did this `/model X` turn take?"), not the upstream-
 		// only segment.
-		latency := time.Since(start).Round(time.Millisecond)
+		latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
 
 		metrics.ObserveRequest(providerName, origModel, status, latency.Seconds())
 		glog.V(4).
@@ -187,19 +190,19 @@ func NewModelRouter(
 // rewriteModelField is best-effort; a JSON body that extractModel accepted
 // will always re-marshal. The error return is defensive for unforeseen
 // input shapes.
-func rewriteModelField(body []byte, resolved string) ([]byte, error) {
+func rewriteModelField(ctx context.Context, body []byte, resolved string) ([]byte, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil, fmt.Errorf("parse body as JSON object: %w", err)
+		return nil, bberrors.Wrapf(ctx, err, "parse body as JSON object")
 	}
 	resolvedJSON, err := json.Marshal(resolved)
 	if err != nil {
-		return nil, fmt.Errorf("marshal resolved model: %w", err)
+		return nil, bberrors.Wrapf(ctx, err, "marshal resolved model")
 	}
 	obj["model"] = resolvedJSON
 	out, err := json.Marshal(obj)
 	if err != nil {
-		return nil, fmt.Errorf("re-marshal body: %w", err)
+		return nil, bberrors.Wrapf(ctx, err, "re-marshal body")
 	}
 	return out, nil
 }

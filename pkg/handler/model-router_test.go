@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	liblog "github.com/bborbe/log"
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,8 @@ import (
 var alwaysSample = liblog.NewSamplerTrue()
 
 var testMetrics = handler.NewMetrics(nil)
+
+var testDateTime = libtime.NewCurrentDateTime()
 
 // labelHandler writes its label to the body so tests can assert which
 // route was chosen.
@@ -84,6 +87,7 @@ var _ = Describe("ModelRouter", func() {
 			nil,
 			alwaysSample,
 			testMetrics,
+			testDateTime,
 		)
 		rec = httptest.NewRecorder()
 	})
@@ -146,6 +150,7 @@ var _ = Describe("ModelRouter", func() {
 			nil,
 			alwaysSample,
 			testMetrics,
+			testDateTime,
 		)
 		body := `{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}]}`
 		mux.ServeHTTP(rec, post(body))
@@ -170,6 +175,7 @@ var _ = Describe("ModelRouter", func() {
 				aliases,
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
 
@@ -194,6 +200,7 @@ var _ = Describe("ModelRouter", func() {
 				aliases,
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
 			Expect(rec.Body.String()).To(Equal("ollama"))
@@ -214,6 +221,7 @@ var _ = Describe("ModelRouter", func() {
 				aliases,
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			body := `{"model":"qwen","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
 			mux.ServeHTTP(rec, post(body))
@@ -251,6 +259,7 @@ var _ = Describe("ModelRouter", func() {
 				aliases,
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			originalBody := `{"model":"claude-opus-4-7"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -278,6 +287,7 @@ var _ = Describe("ModelRouter", func() {
 				nil,
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			originalBody := `{"model":"claude-opus-4-7"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -299,6 +309,7 @@ var _ = Describe("ModelRouter", func() {
 				map[string]string{"": "should-not-fire"},
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			originalBody := `{"other":"thing"}`
 			mux.ServeHTTP(rec, post(originalBody))
@@ -332,6 +343,7 @@ var _ = Describe("ModelRouter", func() {
 				aliases,
 				alwaysSample,
 				testMetrics,
+				testDateTime,
 			)
 			out := captureStderr(func() {
 				mux.ServeHTTP(rec, post(`{"model":"m3"}`))
@@ -369,6 +381,7 @@ var _ = Describe("ModelRouter", func() {
 					nil,
 					never,
 					testMetrics,
+					testDateTime,
 				)
 				out := captureStderr(func() {
 					mux.ServeHTTP(rec, post(`{"model":"opus"}`))
@@ -398,6 +411,7 @@ var _ = Describe("ModelRouter", func() {
 					nil,
 					never,
 					testMetrics,
+					testDateTime,
 				)
 				out := captureStderr(func() {
 					mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
@@ -412,7 +426,15 @@ var _ = Describe("ModelRouter", func() {
 
 		BeforeEach(func() {
 			m = handler.NewMetrics(nil)
-			mux = handler.NewModelRouter(routes, "default-fallback", fallback, nil, alwaysSample, m)
+			mux = handler.NewModelRouter(
+				routes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				m,
+				testDateTime,
+			)
 			rec = httptest.NewRecorder()
 		})
 
@@ -441,6 +463,7 @@ var _ = Describe("ModelRouter", func() {
 				aliases,
 				alwaysSample,
 				m,
+				testDateTime,
 			)
 			mux.ServeHTTP(rec, post(`{"model":"m3"}`))
 			Expect(
@@ -510,6 +533,7 @@ var _ = Describe("ModelRouter", func() {
 				nil,
 				alwaysSample,
 				handler.NewMetrics(nil),
+				testDateTime,
 			)
 			mux.ServeHTTP(spy, post(`{"model":"claude-opus-4-7"}`))
 

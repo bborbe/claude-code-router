@@ -13,10 +13,11 @@ import (
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
+	libtime "github.com/bborbe/time"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	pkgcfg "github.com/bborbe/claude-code-router/pkg"
+	"github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
 
@@ -24,7 +25,7 @@ import (
 // + per-provider proxies, and returns a run.Func that starts the HTTP
 // listener with graceful shutdown on ctx cancel.
 func CreateServer(listen, configPath string) (librun.Func, error) {
-	cfg, err := pkgcfg.Load(configPath)
+	cfg, err := pkg.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -66,7 +67,7 @@ func streamingServerTimeouts(o *libhttp.ServerOptions) {
 // router emits its own structured one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
-func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
+func CreateRouterFromConfig(cfg *pkg.Config) (http.Handler, error) {
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
@@ -109,6 +110,7 @@ func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 		cfg.Aliases,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
+		libtime.NewCurrentDateTime(),
 	)
 
 	mux := http.NewServeMux()

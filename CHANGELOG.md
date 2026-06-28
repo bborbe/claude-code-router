@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.11.0
+
+- **Breaking**: `NewModelRouter` gains 7th `currentDateTime libtime.CurrentDateTimeGetter` param; replaces `time.Now()` with injected clock (factory + tests updated)
+- **Breaking**: `NewLoggingRoundTripper` gains `bodySampler liblog.Sampler` param; adds V(4) `[upstream.req.body]`/`[upstream.resp.body]` lines with 4 KB body sampling and Bearer-token redaction via `RedactBearerTokensInBody`
+- refactor: replace 3× `fmt.Errorf` in `rewriteModelField` with `bberrors.Wrapf(ctx, ...)`, threading `r.Context()` through the call
+- refactor: inline `logReq` back into `NewModelRouter` (prior extraction was a naive gocognit-driven fix — reverted)
+- deps: promote `github.com/bborbe/errors` and `github.com/bborbe/time` to direct deps; bump multiple indirect deps (sentry-go, prometheus, golang.org/x/tools, etc.)
+
 ## v0.10.1
 
 - **feat: V(4) request+response body sample logging via SamplerList.** New `[upstream.req.body]` and `[upstream.resp.body]` glog V(4) lines per upstream RoundTrip, gated by `liblog.SamplerList{NewSampleTime(1s), NewSamplerGlogLevel(5)}` — body dumps fire at most 1/second at V(4), OR unconditionally at V(5) for deep-debug sessions. Body captured up to 4 KB; total length printed alongside (`body_len=N sample=...`) so operators know if truncation happened. `Bearer\s+\S+` substrings are regex-redacted via new `RedactBearerTokensInBody` helper in `pkg/handler/redact.go` — defense-in-depth for the rare case where Anthropic echoes a credential in a `metadata:` SSE field. **Breaking: `handler.NewLoggingRoundTripper` signature gains a `liblog.Sampler` parameter** (factory updated, no external callers).
