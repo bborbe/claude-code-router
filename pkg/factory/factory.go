@@ -60,7 +60,7 @@ func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 		return nil, fmt.Errorf("default_provider %q not in providers", cfg.Router.DefaultProvider)
 	}
 
-	modelRouter := handler.NewModelRouter(routes, defaultHandler)
+	modelRouter := handler.NewModelRouter(routes, defaultHandler, cfg.Aliases)
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())

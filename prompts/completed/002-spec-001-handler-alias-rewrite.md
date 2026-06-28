@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["001"]
+summary: Extended NewModelRouter with aliases map parameter; added rewriteModelField helper; updated two existing call sites to pass nil; added 6 new alias-resolution Ginkgo specs (all 27 specs pass); updated factory wiring to pass cfg.Aliases; updated CHANGELOG.md
+execution_id: claude-code-router-aliases-exec-002-spec-001-handler-alias-rewrite
+dark-factory-version: v0.187.11
 created: "2026-06-28T10:00:00Z"
 queued: "2026-06-28T09:46:54Z"
+started: "2026-06-28T09:49:50Z"
+completed: "2026-06-28T09:52:24Z"
 ---
 
 <summary>
