@@ -10,6 +10,7 @@ import (
 	"net/url"
 
 	libhttp "github.com/bborbe/http"
+	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
 
 	"github.com/bborbe/claude-code-router/pkg/config"
@@ -72,6 +73,7 @@ func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 		cfg.Router.DefaultProvider,
 		defaultHandler,
 		cfg.Aliases,
+		liblog.DefaultSamplerFactory.Sampler(),
 	)
 
 	mux := http.NewServeMux()
@@ -81,5 +83,10 @@ func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	mux.Handle("/v1/", modelRouter)
+	// Catch-all 404 logger — registered at "/" matches any path not
+	// covered by a more specific pattern above. Logs at V(1) so unknown-
+	// path probes (`/foo/bar`, typos like `/messages` without /v1) show
+	// up alongside real traffic.
+	mux.Handle("/", handler.NewNotFoundHandler())
 	return mux, nil
 }

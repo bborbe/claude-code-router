@@ -13,6 +13,7 @@ import (
 	"path"
 	"time"
 
+	liblog "github.com/bborbe/log"
 	"github.com/golang/glog"
 )
 
@@ -44,13 +45,22 @@ type ModelRoute struct {
 //
 //	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms
 //
+// Non-200 responses are ALWAYS logged; 200 responses are gated by the
+// sampler. `log.DefaultSamplerFactory` gives the canonical OR-combo:
+// at most once per 10s, OR unconditionally when glog `-v` ≥ 4. This
+// keeps the steady-state log readable while preserving every error
+// event and giving full visibility once the operator bumps verbosity
+// via `/setloglevel/4`.
+//
 // At V(2), alias resolution and route match get their own `[alias]` /
-// `[route]` detail lines.
+// `[route]` detail lines (independent of the sampler — V(2) detail is
+// already operator-opt-in, additional gating buys nothing).
 func NewModelRouter(
 	routes []ModelRoute,
 	defaultProviderName string,
 	defaultHandler http.Handler,
 	aliases map[string]string,
+	sampler liblog.Sampler,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -110,18 +120,35 @@ func NewModelRouter(
 		// only segment.
 		latency := time.Since(start).Round(time.Millisecond)
 
-		if aliasResolved != "" {
-			glog.V(1).Infof(
-				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s",
-				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency,
-			)
-		} else {
-			glog.V(1).Infof(
-				"[req] %s %s model=%s provider=%s status=%d latency=%s",
-				r.Method, r.URL.Path, origModel, providerName, status, latency,
-			)
-		}
+		logReq(r, status, latency, origModel, aliasResolved, providerName, sampler)
 	})
+}
+
+// logReq emits the structured `[req]` line. Always logs non-200 (errors
+// are signal); samples 200s to keep the steady-state log readable.
+// sampler.IsSample() is non-pure (time-based sampler advances its window)
+// — only consulted on the success path so the 10s window is paced by 200s.
+func logReq(
+	r *http.Request,
+	status int,
+	latency time.Duration,
+	origModel, aliasResolved, providerName string,
+	sampler liblog.Sampler,
+) {
+	if status == http.StatusOK && !sampler.IsSample() {
+		return
+	}
+	if aliasResolved != "" {
+		glog.V(1).Infof(
+			"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s",
+			r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency,
+		)
+		return
+	}
+	glog.V(1).Infof(
+		"[req] %s %s model=%s provider=%s status=%d latency=%s",
+		r.Method, r.URL.Path, origModel, providerName, status, latency,
+	)
 }
 
 // rewriteModelField parses body as a JSON object, sets the top-level

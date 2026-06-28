@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **feat: sample 200 `[req]` log lines.** `NewModelRouter` gains a `log.Sampler` parameter (factory passes `liblog.DefaultSamplerFactory.Sampler()` — `SamplerList{NewSampleTime(10s), NewSamplerGlogLevel(4)}`). Non-200 responses are always logged (errors are signal); 200s are logged at most once per 10s, OR unconditionally when `-v` ≥ 4 — so `curl /setloglevel/4` brings back per-request visibility for deep debug. Steady-state log becomes operator-readable under concurrent /model traffic.
+- **feat: log unknown-path 404s.** New `NewNotFoundHandler` registered at `/` in the factory's mux. Catches anything not matched by `/v1/`, `/healthz`, `/readiness`, `/metrics`, `/setloglevel/`, or `/gc`. Logs at V(1) as `[404] METHOD path` so probes / typos (`/messages` without `/v1`) surface in the operator log instead of vanishing into stdlib's bare 404 default.
+- **breaking: `handler.NewModelRouter` signature gains a `liblog.Sampler` parameter** (last positional). Same shape as PR #6's `defaultProviderName` add — `factory.CreateRouterFromConfig` already threads it; no YAML config-format change.
+
 ## v0.6.0
 
 - **feat: structured per-request log line.** Replace the two-line `[route]` + `[req]` pair with a single structured line at glog V(1): `[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms`. Fields cover incoming model, alias resolution (if any), provider name from the YAML config, HTTP status, and total wall-time latency rounded to ms. Alias-resolution + route-match detail demoted to V(2). Outer `NewLoggingHandler` middleware removed — admin endpoints (`/healthz`, `/readiness`, etc.) no longer log per request.
