@@ -26,17 +26,24 @@ type snippet struct {
 
 // readSnippet reads up to max bytes from req.Body and restores req.Body so
 // the inner RoundTripper still sees the complete payload.  It does this by
-// MultiReader-ing the captured bytes back in front of the original
-// ReadCloser.  Returns a zero snippet when req.Body is nil.
+// buffering the full body in memory and restoring it as a bytes.Reader.
+// The returned snippet.head is truncated to max bytes, but
+// snippet.totalLen reflects the actual full body length.
+// Returns a zero snippet when req.Body is nil.
 func readSnippet(req *http.Request, max int) snippet {
 	if req.Body == nil {
 		return snippet{}
 	}
-	limited := io.LimitReader(req.Body, int64(max))
-	head, _ := io.ReadAll(limited)
-	// Restore: replay the captured prefix then continue with the original body.
-	req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), req.Body))
-	return snippet{head: head, totalLen: len(head)}
+	// Read full body to measure its actual length.
+	fullBody, _ := io.ReadAll(req.Body)
+	// Truncate to max for the sample.
+	head := fullBody
+	if len(head) > max {
+		head = head[:max]
+	}
+	// Restore full body for the inner RoundTripper.
+	req.Body = io.NopCloser(bytes.NewReader(fullBody))
+	return snippet{head: head, totalLen: len(fullBody)}
 }
 
 // teeBody wraps an io.ReadCloser and captures up to max bytes while passing
