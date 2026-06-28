@@ -13,7 +13,7 @@ import (
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
 
-	"github.com/bborbe/claude-code-router/pkg/config"
+	pkgcfg "github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
 
@@ -21,7 +21,7 @@ import (
 // + per-provider proxies, and returns a run.Func that starts the HTTP
 // listener with graceful shutdown on ctx cancel.
 func CreateServer(listen, configPath string) (librun.Func, error) {
-	cfg, err := config.Load(configPath)
+	cfg, err := pkgcfg.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -39,7 +39,7 @@ func CreateServer(listen, configPath string) (librun.Func, error) {
 // router emits its own structured one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
-func CreateRouterFromConfig(cfg *config.Config) (http.Handler, error) {
+func CreateRouterFromConfig(cfg *pkgcfg.Config) (http.Handler, error) {
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
 

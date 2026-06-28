@@ -7,7 +7,7 @@
 // server factory. The factory itself lives in pkg/factory; this package
 // is import-free of factory to keep the dependency direction (main ->
 // factory -> ...) intact.
-package cli
+package pkg
 
 import (
 	"context"

@@ -10,10 +10,10 @@ import (
 
 	"github.com/bborbe/service"
 
-	"github.com/bborbe/claude-code-router/pkg/cli"
+	"github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/factory"
 )
 
 func main() {
-	os.Exit(service.MainCmd(context.Background(), cli.NewApp(factory.CreateServer)))
+	os.Exit(service.MainCmd(context.Background(), pkg.NewApp(factory.CreateServer)))
 }

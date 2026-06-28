@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package config_test
+package pkg_test
 
 import (
 	"flag"
@@ -14,7 +14,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/bborbe/claude-code-router/pkg/config"
+	pkgcfg "github.com/bborbe/claude-code-router/pkg"
 )
 
 var _ = Describe("Config", func() {
@@ -50,7 +50,7 @@ providers:
     token: "minimax-token"
     models: ["MiniMax-*"]
 `)
-			cfg, err := config.Load(p)
+			cfg, err := pkgcfg.Load(p)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Router.DefaultProvider).To(Equal("anthropic-subscription"))
 			Expect(cfg.Providers).To(HaveLen(2))
@@ -67,7 +67,7 @@ providers:
     upstream: https://api.anthropic.com
     models: ["claude-*"]
 `)
-			_, err := config.Load(p)
+			_, err := pkgcfg.Load(p)
 			Expect(err).To(MatchError(ContainSubstring(`default_provider "nope" not found`)))
 		})
 
@@ -77,7 +77,7 @@ router:
   default_provider: anthropic
 providers: {}
 `)
-			_, err := config.Load(p)
+			_, err := pkgcfg.Load(p)
 			Expect(err).To(MatchError(ContainSubstring("no providers defined")))
 		})
 
@@ -89,7 +89,7 @@ providers:
   x:
     models: ["foo-*"]
 `)
-			_, err := config.Load(p)
+			_, err := pkgcfg.Load(p)
 			Expect(err).To(MatchError(ContainSubstring("upstream is required")))
 		})
 
@@ -102,12 +102,12 @@ providers:
     upstream: https://example.com
     models: ["[invalid"]
 `)
-			_, err := config.Load(p)
+			_, err := pkgcfg.Load(p)
 			Expect(err).To(MatchError(ContainSubstring("invalid model glob")))
 		})
 
 		It("errors when file does not exist", func() {
-			_, err := config.Load("/nonexistent/path.yaml")
+			_, err := pkgcfg.Load("/nonexistent/path.yaml")
 			Expect(err).To(MatchError(ContainSubstring("read config")))
 		})
 	})
@@ -129,7 +129,7 @@ aliases:
   qwen: qwen3.6:35b-a3b-coding-nvfp4
   opus: claude-opus-4-7
 `)
-			cfg, err := config.Load(p)
+			cfg, err := pkgcfg.Load(p)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Aliases["qwen"]).To(Equal("qwen3.6:35b-a3b-coding-nvfp4"))
 			Expect(cfg.Aliases["opus"]).To(Equal("claude-opus-4-7"))
@@ -144,7 +144,7 @@ providers:
     upstream: https://api.anthropic.com
     models: ["claude-opus-*"]
 `)
-			cfg, err := config.Load(p)
+			cfg, err := pkgcfg.Load(p)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Aliases).To(BeEmpty())
 		})
@@ -160,7 +160,7 @@ providers:
 aliases:
   minimax: MiniMax-M3-highspeed
 `)
-			_, err := config.Load(p)
+			_, err := pkgcfg.Load(p)
 			Expect(
 				err,
 			).To(MatchError(ContainSubstring(`alias key "minimax" collides with provider name`)))
@@ -186,7 +186,7 @@ providers:
 aliases:
   foo: bar-1
 `)
-			_, loadErr := config.Load(p)
+			_, loadErr := pkgcfg.Load(p)
 			glog.Flush()
 
 			// Restore stderr + drain the pipe.
