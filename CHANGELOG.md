@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.5.0
 
 - feat: Add `aliases:` YAML block to router config for mapping short model names to full model strings, with collision validation and orphan-target warning
 - feat: ModelRouter consults `aliases` map and rewrites the request body's `.model` field on a hit before glob-routing; upstream sees the resolved full model name; emits `[alias] <short> -> <resolved>` at glog V(1). Nil/empty aliases map is a no-op (backward compatible). Body rewrite preserves all other top-level fields. Returns 500 if JSON re-marshal fails mid-flight.
