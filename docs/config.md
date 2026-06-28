@@ -96,15 +96,9 @@ providers:
 
   minimax:
     upstream: https://api.minimax.io/anthropic
-    token: "<paste from teamvault MOPmQL>"
+    token: "<your MiniMax API key>"
     models:
       - "MiniMax-*"
-
-  seibert-vllm:
-    upstream: https://vllm.seibert.tools
-    token: "<paste from teamvault-sm 0DaxOm>"
-    models:
-      - "deepseek-*"
 
   ollama-local:
     upstream: http://localhost:11434

@@ -82,7 +82,7 @@ env:
   # ANTHROPIC_AUTH_TOKEN: <REDACTED>                        # keep commented — router holds the token now
 ```
 
-The two commented-out lines are deliberate: a 30-second swap-back if the router is unreachable, without re-typing the token from teamvault.
+The two commented-out lines are deliberate: a 30-second swap-back if the router is unreachable, without re-typing the provider token.
 
 ### 5. Router config has the provider entries for whatever models dark-factory will request
 

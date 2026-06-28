@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["001"]
+spec: [001-add-model-aliases]
 summary: Wire cfg.Aliases into NewModelRouter and ship operator docs (config.md, config.example.yaml, CHANGELOG.md)
 execution_id: claude-code-router-aliases-exec-003-spec-001-factory-and-docs
 dark-factory-version: v0.187.11
