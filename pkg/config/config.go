@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/golang/glog"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -26,6 +27,12 @@ import (
 type Config struct {
 	Router    Router              `yaml:"router"`
 	Providers map[string]Provider `yaml:"providers"`
+	// Aliases maps a short operator-typed model name to the full
+	// model string the upstream expects. Resolved single-hop before
+	// glob-routing: a request body `{"model":"qwen"}` becomes
+	// `{"model":"qwen3.6:35b-a3b-coding-nvfp4"}` before the router
+	// walks providers' models globs. Nil / empty map = no-op.
+	Aliases map[string]string `yaml:"aliases,omitempty"`
 }
 
 // Router holds router-wide settings.
@@ -96,6 +103,37 @@ func (c *Config) Validate() error {
 					name, pattern, err,
 				)
 			}
+		}
+	}
+	return c.validateAliases()
+}
+
+func (c *Config) validateAliases() error {
+	for aliasKey := range c.Aliases {
+		if _, collides := c.Providers[aliasKey]; collides {
+			return fmt.Errorf(
+				"alias key %q collides with provider name", aliasKey,
+			)
+		}
+	}
+	for aliasKey, target := range c.Aliases {
+		matched := false
+		for _, prov := range c.Providers {
+			for _, pattern := range prov.Models {
+				if ok, _ := path.Match(pattern, target); ok {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			glog.Warningf(
+				`alias target %q (from alias key %q) matches no provider glob`,
+				target, aliasKey,
+			)
 		}
 	}
 	return nil

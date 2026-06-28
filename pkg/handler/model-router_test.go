@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ var _ = Describe("ModelRouter", func() {
 			{Pattern: "MiniMax-*", Handler: minimax},
 			{Pattern: "qwen*", Handler: ollama},
 		}
-		mux = handler.NewModelRouter(routes, fallback)
+		mux = handler.NewModelRouter(routes, fallback, nil)
 		rec = httptest.NewRecorder()
 	})
 
@@ -100,9 +101,121 @@ var _ = Describe("ModelRouter", func() {
 		mux = handler.NewModelRouter(
 			[]handler.ModelRoute{{Pattern: "claude-*", Handler: capturing}},
 			fallback,
+			nil,
 		)
 		body := `{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}]}`
 		mux.ServeHTTP(rec, post(body))
 		Expect(seen).To(Equal(body))
+	})
+
+	Context("alias resolution", func() {
+		It("rewrites the request body's .model field when an alias matches", func() {
+			var capturedBody []byte
+			var capturedContentLength int64
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+				capturedContentLength = r.ContentLength
+			})
+			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
+			mux = handler.NewModelRouter(
+				[]handler.ModelRoute{{Pattern: "qwen*", Handler: capturing}},
+				fallback,
+				aliases,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
+
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("qwen3.6:35b-a3b-coding-nvfp4"))
+			Expect(capturedContentLength).To(Equal(int64(len(capturedBody))))
+		})
+
+		It("routes the rewritten body to the matching glob", func() {
+			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
+			mux = handler.NewModelRouter(
+				[]handler.ModelRoute{{Pattern: "qwen*", Handler: labelHandler("ollama")}},
+				fallback,
+				aliases,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"qwen"}`))
+			Expect(rec.Body.String()).To(Equal("ollama"))
+		})
+
+		It("preserves other top-level body fields across the rewrite", func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
+			mux = handler.NewModelRouter(
+				[]handler.ModelRoute{{Pattern: "qwen*", Handler: capturing}},
+				fallback,
+				aliases,
+			)
+			body := `{"model":"qwen","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
+			mux.ServeHTTP(rec, post(body))
+
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("qwen3.6:35b-a3b-coding-nvfp4"))
+			Expect(seen["max_tokens"]).To(Equal(float64(100)))
+			messages, ok := seen["messages"].([]any)
+			Expect(ok).To(BeTrue())
+			Expect(len(messages)).To(BeNumerically(">", 0))
+			firstMsg, ok := messages[0].(map[string]any)
+			Expect(ok).To(BeTrue())
+			Expect(firstMsg["role"]).To(Equal("user"))
+		})
+
+		It("does not rewrite on alias miss", func() {
+			var capturedBody []byte
+			var capturedContentLength int64
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+				capturedContentLength = r.ContentLength
+			})
+			aliases := map[string]string{"qwen": "qwen3.6:35b-a3b-coding-nvfp4"}
+			mux = handler.NewModelRouter(
+				[]handler.ModelRoute{{Pattern: "claude-opus*", Handler: capturing}},
+				fallback,
+				aliases,
+			)
+			originalBody := `{"model":"claude-opus-4-7"}`
+			mux.ServeHTTP(rec, post(originalBody))
+			Expect(string(capturedBody)).To(Equal(originalBody))
+			Expect(capturedContentLength).To(Equal(int64(len(originalBody))))
+		})
+
+		It("does not rewrite when aliases map is nil", func() {
+			var capturedBody []byte
+			var capturedContentLength int64
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+				capturedContentLength = r.ContentLength
+			})
+			mux = handler.NewModelRouter(
+				[]handler.ModelRoute{{Pattern: "claude-opus*", Handler: capturing}},
+				fallback,
+				nil,
+			)
+			originalBody := `{"model":"claude-opus-4-7"}`
+			mux.ServeHTTP(rec, post(originalBody))
+			Expect(string(capturedBody)).To(Equal(originalBody))
+			Expect(capturedContentLength).To(Equal(int64(len(originalBody))))
+		})
+
+		It("does not rewrite when body has no model field", func() {
+			var capturedBody []byte
+			var capturedContentLength int64
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+				capturedContentLength = r.ContentLength
+			})
+			mux = handler.NewModelRouter(nil, capturing, map[string]string{"": "should-not-fire"})
+			originalBody := `{"other":"thing"}`
+			mux.ServeHTTP(rec, post(originalBody))
+			Expect(string(capturedBody)).To(Equal(originalBody))
+			Expect(capturedContentLength).To(Equal(int64(len(originalBody))))
+		})
 	})
 })
