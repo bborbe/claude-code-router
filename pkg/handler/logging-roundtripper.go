@@ -55,6 +55,14 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		redacted := RedactHeadersForLog(req.Header)
 		var buf bytes.Buffer
 		enc := json.NewEncoder(&buf)
+		// SetEscapeHTML(false) is deliberate — without it, the
+		// `<redacted len=N>` placeholder serializes as `<redacted len=N>`
+		// and the operator can't grep for it. Threat model: the upstream URLs
+		// (api.anthropic.com, minimax.io, localhost ollama) are operator-trusted
+		// providers, NOT attacker-controlled. If a future deployment adds an
+		// upstream where header values could be attacker-supplied, switch back
+		// to default escaping or sanitize values via html.EscapeString first —
+		// for the personal-router use case the trade-off favors readability.
 		enc.SetEscapeHTML(false)
 		_ = enc.Encode(redacted)
 		glog.V(3).

@@ -64,4 +64,34 @@ var _ = Describe("RedactHeadersForLog", func() {
 		result := handler.RedactHeadersForLog(h)
 		Expect(result["Authorization"]).To(Equal(fmt.Sprintf("<redacted len=%d>", len(joined))))
 	})
+
+	It("returns an empty map for a nil http.Header (no panic)", func() {
+		Expect(handler.RedactHeadersForLog(nil)).To(BeEmpty())
+	})
+
+	It("matches case-insensitively on all-caps header names", func() {
+		h := http.Header{"AUTHORIZATION": []string{"Bearer t"}, "X-AUTH-TOKEN": []string{"abc"}}
+		result := handler.RedactHeadersForLog(h)
+		// http.Header normalises canonical form on read, but a raw map can have
+		// non-canonical keys. The redactor must redact regardless of casing.
+		for _, v := range result {
+			Expect(v).To(MatchRegexp(`^<redacted len=\d+>$`), "unexpected non-redacted: %s", v)
+		}
+	})
+
+	It("redacts an empty-string value with len=0 placeholder", func() {
+		h := http.Header{"Authorization": []string{""}}
+		Expect(handler.RedactHeadersForLog(h)["Authorization"]).To(Equal("<redacted len=0>"))
+	})
+
+	It("does NOT inspect values for credential substrings — only header NAMES are matched", func() {
+		// Document the design: a non-credential header carrying a JSON-encoded
+		// secret value passes through value-unchanged. Operators who want
+		// body-level redaction need the V(4) body-sample task's regex pass.
+		h := http.Header{"X-Trace-Context": []string{`{"token":"sk-leak-canary-value"}`}}
+		result := handler.RedactHeadersForLog(h)
+		b, _ := json.Marshal(result)
+		Expect(string(b)).To(ContainSubstring("sk-leak-canary-value"),
+			"intentional: header-name-only redaction; document the boundary")
+	})
 })
