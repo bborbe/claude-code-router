@@ -11,6 +11,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - README refreshed for v0.4.0 reality: drop "v1 skeleton state" language, correct config path `~/.dark-factory/...` → `~/.claude-code-router/...`, add Install step 2 (create config from example), add "Switching providers mid-session" section showing `/model` usage. Replaced lone "WICHTIG" with "IMPORTANT" (English consistency).
 - launchd + systemd service docs now include the `-config-path` flag in `ProgramArguments` / `ExecStart` — without it the binary loads the default path (`~/.claude-code-router/config.yaml`), which is fine, but explicit-in-the-doc avoids the "where do I plug the config?" question.
 - Service docs note the config file must exist before `launchctl bootstrap` / `systemctl --user enable --now` — agent crash-loops if config is missing.
+- **Model aliases.** New optional `aliases:` block in `~/.claude-code-router/config.yaml` maps short names to full model identifiers (e.g. `qwen: qwen3.6:35b-a3b-coding-nvfp4`). Operator types `/model qwen`; the router rewrites the request body's `.model` field to the full name single-hop, before provider routing — the upstream always sees the full name. Validation: hard error on alias-key colliding with a provider name; glog warning when an alias target matches no provider glob. Configs without `aliases:` continue to load unchanged. See [docs/config.md#aliases](docs/config.md#aliases).
 
 ## v0.4.0
 

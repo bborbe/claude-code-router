@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["001"]
+summary: Wire cfg.Aliases into NewModelRouter and ship operator docs (config.md, config.example.yaml, CHANGELOG.md)
+execution_id: claude-code-router-aliases-exec-003-spec-001-factory-and-docs
+dark-factory-version: v0.187.11
 created: "2026-06-28T10:00:00Z"
 queued: "2026-06-28T09:46:54Z"
+started: "2026-06-28T09:52:25Z"
+completed: "2026-06-28T09:54:07Z"
 ---
 
 <summary>
