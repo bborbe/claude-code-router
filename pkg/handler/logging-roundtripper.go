@@ -58,8 +58,15 @@ type loggingRoundTripper struct {
 }
 
 func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	glog.V(4).
-		Infof("[upstream.start] %s %s%s", req.Method, req.URL.Host, req.URL.Path)
+	// Net/http guarantees req.URL is non-nil for any request reaching a
+	// RoundTripper (transports panic without it), but be defensive — a
+	// future caller invoking us directly with a hand-crafted *http.Request
+	// shouldn't crash the proxy.
+	host, path := "", ""
+	if req.URL != nil {
+		host, path = req.URL.Host, req.URL.Path
+	}
+	glog.V(4).Infof("[upstream.start] %s %s%s", req.Method, host, path)
 	if glog.V(3) {
 		redacted := RedactHeadersForLog(req.Header)
 		var buf bytes.Buffer
@@ -75,13 +82,13 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		enc.SetEscapeHTML(false)
 		_ = enc.Encode(redacted)
 		glog.V(3).
-			Infof("[upstream.headers] %s %s%s headers=%s", req.Method, req.URL.Host, req.URL.Path, strings.TrimSpace(buf.String()))
+			Infof("[upstream.headers] %s %s%s headers=%s", req.Method, host, path, strings.TrimSpace(buf.String()))
 	}
 	if glog.V(4) {
 		if l.bodySampler.IsSample() && req.Body != nil {
 			s := readSnippet(req, BodySampleMaxBytes)
 			glog.V(4).Infof("[upstream.req.body] %s%s body_len=%d sample=%s",
-				req.URL.Host, req.URL.Path, s.totalLen,
+				host, path, s.totalLen,
 				RedactBearerTokensInBody(s.head))
 		}
 	}
@@ -90,17 +97,16 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	ttfb := time.Since(start).Round(time.Millisecond)
 	if err != nil {
 		glog.V(4).
-			Infof("[upstream.end] %s %s%s ttfb=%s err=%v", req.Method, req.URL.Host, req.URL.Path, ttfb, err)
+			Infof("[upstream.end] %s %s%s ttfb=%s err=%v", req.Method, host, path, ttfb, err)
 		// Return nil resp on error per net/http contract — callers
 		// must not inspect resp when err != nil; some inner transports
 		// return a non-nil resp alongside err which is a footgun.
 		return nil, err
 	}
 	glog.V(4).
-		Infof("[upstream.end] %s %s%s ttfb=%s status=%d", req.Method, req.URL.Host, req.URL.Path, ttfb, resp.StatusCode)
+		Infof("[upstream.end] %s %s%s ttfb=%s status=%d", req.Method, host, path, ttfb, resp.StatusCode)
 	if glog.V(4) {
 		if l.bodySampler.IsSample() && resp.Body != nil {
-			host, path := req.URL.Host, req.URL.Path
 			resp.Body = newTeeBody(resp.Body, BodySampleMaxBytes, func(data []byte, total int) {
 				glog.V(4).Infof("[upstream.resp.body] %s%s body_len=%d sample=%s",
 					host, path, total,

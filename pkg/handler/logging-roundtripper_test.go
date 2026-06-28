@@ -5,11 +5,14 @@
 package handler_test
 
 import (
+	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 
 	liblog "github.com/bborbe/log"
@@ -268,6 +271,46 @@ var _ = Describe("LoggingRoundTripper", func() {
 			})
 			Expect(out).NotTo(ContainSubstring("[upstream.req.body]"))
 			Expect(out).NotTo(ContainSubstring("[upstream.resp.body]"))
+		})
+
+		It("truncates the body sample at BodySampleMaxBytes and reports the full body_len", func() {
+			_ = flag.Set("v", "4")
+			// Build a request body twice the cap to exercise the truncation
+			// path; the snippet must be <= BodySampleMaxBytes but body_len
+			// must reflect the full length the upstream actually sees.
+			fullLen := handler.BodySampleMaxBytes * 2
+			big := bytes.Repeat([]byte("a"), fullLen)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"https://api.example.com/v1/messages",
+				bytes.NewReader(big),
+			)
+			rt := handler.NewLoggingRoundTripper(
+				roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+					// Drain the body the proxy would forward — must equal fullLen.
+					forwarded, _ := io.ReadAll(r.Body)
+					Expect(len(forwarded)).To(Equal(fullLen),
+						"snippet capture must not consume bytes from the forwarded body")
+					return &http.Response{
+						StatusCode: 200,
+						Body:       io.NopCloser(strings.NewReader("")),
+					}, nil
+				}),
+				liblog.NewSamplerTrue(),
+			)
+			out := captureStderr(func() {
+				resp, err := rt.RoundTrip(req)
+				Expect(err).NotTo(HaveOccurred())
+				_ = resp.Body.Close()
+			})
+			// body_len=<fullLen> reported, regardless of truncation
+			Expect(out).To(ContainSubstring(fmt.Sprintf("body_len=%d", fullLen)))
+			// sample= field must not exceed BodySampleMaxBytes worth of `a`s
+			sampleRe := regexp.MustCompile(`sample=(a+)`)
+			match := sampleRe.FindStringSubmatch(out)
+			Expect(match).To(HaveLen(2), "sample= field missing from log line: %s", out)
+			Expect(len(match[1])).To(BeNumerically("<=", handler.BodySampleMaxBytes),
+				"sample exceeded cap: got %d bytes", len(match[1]))
 		})
 	})
 })
