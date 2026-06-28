@@ -65,6 +65,7 @@ func NewModelRouter(
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		glog.V(4).Infof("[inbound.start] %s %s", r.Method, r.URL.Path)
 		rec := &statusRecorder{ResponseWriter: w}
 
 		body, err := io.ReadAll(r.Body)
@@ -123,6 +124,8 @@ func NewModelRouter(
 		latency := time.Since(start).Round(time.Millisecond)
 
 		metrics.ObserveRequest(providerName, origModel, status, latency.Seconds())
+		glog.V(4).
+			Infof("[inbound.end] %s %s status=%d latency=%s", r.Method, r.URL.Path, status, latency)
 		logReq(r, status, latency, origModel, aliasResolved, providerName, sampler)
 	})
 }
