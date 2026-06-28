@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **feat: structured per-request log line.** Replace the two-line `[route]` + `[req]` pair with a single structured line at glog V(1): `[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms`. Fields cover incoming model, alias resolution (if any), provider name from the YAML config, HTTP status, and total wall-time latency rounded to ms. Alias-resolution + route-match detail demoted to V(2). Outer `NewLoggingHandler` middleware removed — admin endpoints (`/healthz`, `/readiness`, etc.) no longer log per request.
+- **feat: runtime log-level toggle via `/setloglevel/<level>`.** Replace the noop stub with a real handler backed by `bborbe/log.LogLevelSetter`. `curl http://127.0.0.1:8788/setloglevel/3` bumps verbosity without restarting the launchd agent; auto-reverts to V(1) after 5 minutes so a forgotten bump can't leave the router in verbose mode indefinitely. Returns 400 on a non-integer level.
+- **breaking: `handler.NewModelRouter` signature change.** New `defaultProviderName string` parameter (positional, after `routes`) so the fallback path appears in the structured log. `handler.ModelRoute` gains a `ProviderName` field. `factory.CreateRouterFromConfig` already threads these through — no YAML config-format change required.
+
 ## v0.5.1
 
 - docs: add `docs/dark-factory-integration.md` — end-to-end recipe for routing dark-factory's YOLO containers through the local router. Covers the 4 required changes (router `0.0.0.0` bind, claude-yolo tinyproxy allowlist, `--add-host=host.docker.internal:host-gateway` for Linux portability, `~/.dark-factory/config.yaml` redirect), the platform matrix (Docker Desktop / OrbStack / Rancher Desktop auto-resolve `host.docker.internal`; raw Linux `dockerd` doesn't), verification curl/launchd procedure, and failure-mode table.
