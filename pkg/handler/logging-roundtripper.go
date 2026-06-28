@@ -12,6 +12,7 @@ import (
 	"time"
 
 	liblog "github.com/bborbe/log"
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 )
 
@@ -45,16 +46,25 @@ import (
 // pattern in NewAnthropicProxyHandler).
 //
 // Silent at default V(1)-V(2).
-func NewLoggingRoundTripper(inner http.RoundTripper, bodySampler liblog.Sampler) http.RoundTripper {
+func NewLoggingRoundTripper(
+	inner http.RoundTripper,
+	bodySampler liblog.Sampler,
+	currentDateTime libtime.CurrentDateTimeGetter,
+) http.RoundTripper {
 	if inner == nil {
 		inner = http.DefaultTransport
 	}
-	return &loggingRoundTripper{inner: inner, bodySampler: bodySampler}
+	return &loggingRoundTripper{
+		inner:           inner,
+		bodySampler:     bodySampler,
+		currentDateTime: currentDateTime,
+	}
 }
 
 type loggingRoundTripper struct {
-	inner       http.RoundTripper
-	bodySampler liblog.Sampler
+	inner           http.RoundTripper
+	bodySampler     liblog.Sampler
+	currentDateTime libtime.CurrentDateTimeGetter
 }
 
 func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -92,9 +102,9 @@ func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 				RedactBearerTokensInBody(s.head))
 		}
 	}
-	start := time.Now()
+	start := l.currentDateTime.Now().Time()
 	resp, err := l.inner.RoundTrip(req)
-	ttfb := time.Since(start).Round(time.Millisecond)
+	ttfb := l.currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
 	if err != nil {
 		glog.V(4).
 			Infof("[upstream.end] %s %s%s ttfb=%s err=%v", req.Method, host, path, ttfb, err)

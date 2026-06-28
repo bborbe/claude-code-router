@@ -31,7 +31,7 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 var _ = Describe("LoggingRoundTripper", func() {
 	It("falls back to http.DefaultTransport when inner is nil (no panic on RoundTrip)", func() {
-		rt := handler.NewLoggingRoundTripper(nil, liblog.NewSamplerTrue())
+		rt := handler.NewLoggingRoundTripper(nil, liblog.NewSamplerTrue(), testDateTime)
 		Expect(rt).NotTo(BeNil())
 		// We don't actually invoke RoundTrip — http.DefaultTransport
 		// would attempt a real network call. The constructor not
@@ -45,7 +45,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 		inner := roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: 500}, boomErr
 		})
-		rt := handler.NewLoggingRoundTripper(inner, liblog.NewSamplerTrue())
+		rt := handler.NewLoggingRoundTripper(inner, liblog.NewSamplerTrue(), testDateTime)
 		req := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", nil)
 		resp, err := rt.RoundTrip(req)
 		Expect(err).To(MatchError(boomErr))
@@ -57,7 +57,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 		inner := roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
 			return want, nil
 		})
-		rt := handler.NewLoggingRoundTripper(inner, liblog.NewSamplerTrue())
+		rt := handler.NewLoggingRoundTripper(inner, liblog.NewSamplerTrue(), testDateTime)
 		req := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", nil)
 		resp, err := rt.RoundTrip(req)
 		Expect(err).NotTo(HaveOccurred())
@@ -80,6 +80,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 					return &http.Response{StatusCode: 200}, nil
 				}),
 				liblog.NewSamplerTrue(),
+				testDateTime,
 			)
 		}
 
@@ -153,6 +154,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 					}, nil
 				}),
 				liblog.NewSamplerTrue(),
+				testDateTime,
 			)
 		}
 
@@ -253,6 +255,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 					}, nil
 				}),
 				falseSampler,
+				testDateTime,
 			)
 			out := captureStderr(func() {
 				for i := 0; i < 5; i++ {
@@ -297,6 +300,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 					}, nil
 				}),
 				liblog.NewSamplerTrue(),
+				testDateTime,
 			)
 			out := captureStderr(func() {
 				resp, err := rt.RoundTrip(req)

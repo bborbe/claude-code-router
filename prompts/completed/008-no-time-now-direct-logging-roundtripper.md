@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: 'Replaced direct time.Now() call in LoggingRoundTripper.RoundTrip with injected libtime.CurrentDateTimeGetter, following the PR #20 pattern established for NewModelRouter'
+execution_id: claude-code-router-exec-008-no-time-now-direct-logging-roundtripper
+dark-factory-version: v0.188.1
 created: "2026-06-28T20:13:06Z"
 queued: "2026-06-28T20:13:06Z"
+started: "2026-06-28T20:18:16Z"
+completed: "2026-06-28T20:20:32Z"
 ---
 <summary>
 - `/coding:code-review` whole-codebase audit found 1 remaining `no-time-now-direct` violation: `pkg/handler/logging-roundtripper.go:94`

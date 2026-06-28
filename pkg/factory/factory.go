@@ -87,6 +87,7 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 		transport := handler.NewLoggingRoundTripper(
 			handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token),
 			liblog.SamplerList{liblog.NewSampleTime(time.Second), liblog.NewSamplerGlogLevel(5)},
+			libtime.NewCurrentDateTime(),
 		)
 		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
 		providerHandlers[name] = proxy

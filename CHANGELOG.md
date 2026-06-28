@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.11.2
+
+- **Breaking**: `NewLoggingRoundTripper` gains 3rd `currentDateTime libtime.CurrentDateTimeGetter` param; replaces `time.Now()` with injected clock in TTFB measurement (factory + tests updated — closes the no-time-now-direct rule violation; bot-deferred follow-up from PR #12/PR #18).
+
 ## v0.11.1
 
 - **Breaking**: `Load`, `Validate`, `CreateServer`, `CreateRouterFromConfig` signatures gain `ctx context.Context` as first positional parameter. Internal API — no external callers.
