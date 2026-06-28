@@ -6,7 +6,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-- **refactor: move alias counter pre-initialization from factory to `NewMetrics` constructor.** `CreateRouterFromConfig` now contains zero `if`/`for`/`switch` — conditional setup moved to `NewMetrics(aliases map[string]string)`, which pre-initializes `ccrouter_alias_resolutions_total{alias,resolved}` counter series to zero for each declared alias. A `nil` aliases map is safe (no panic, zero iterations). Operator-side observability guarantee preserved: alerts for unhit aliases still evaluate to `0` instead of no-data.
+- **refactor: move alias counter pre-initialization from factory into `NewMetrics` constructor.** `NewMetrics` now takes `aliases map[string]string` and seeds `ccrouter_alias_resolutions_total{alias,resolved}` series to zero for each declared alias, so the wiring sits next to the counter it primes instead of one call layer up in `CreateRouterFromConfig`. A `nil` aliases map is safe (no panic, zero iterations). Operator-side observability guarantee preserved: alerts for unhit aliases still evaluate to `0` instead of no-data.
 
 ## v0.9.1
 
