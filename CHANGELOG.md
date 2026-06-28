@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **feat: Prometheus `/metrics` endpoint.** Replace the `# metrics not enabled in v1 skeleton` stub with `promhttp.Handler()` against the default Prometheus registry (matches go-skeleton convention — also exposes `go_gc_*`, `go_memstats_*`, `process_*` runtime series for spotting GC pressure / memory growth on the long-running router daemon). Three `ccrouter_*` application series: `ccrouter_requests_total{provider,model,status_class}` counter, `ccrouter_request_duration_seconds_bucket{provider,model}` histogram (LLM-shaped buckets 100ms…60s), `ccrouter_alias_resolutions_total{alias,resolved}` counter. Cardinality ~1k application series total at 5 providers × 15 models. Metrics emit unconditionally per request (NOT sampled — log sampling stays at the V(1) `[req]` line). Operator scrape config + Grafana queries in `docs/metrics.md`. Closes the open backlog item under [[Multi-Provider Claude Code Proxy]].
+- **breaking: `handler.NewModelRouter` signature gains a `*handler.Metrics` parameter** (last positional). Same pattern as PR #6 `defaultProviderName` and PR #8 `sampler` adds. `factory.CreateRouterFromConfig` already threads it; no YAML config-format change.
+
 ## v0.8.0
 
 - **refactor: flatten `pkg/cli` + `pkg/config` into `pkg/`.** Aligns with [[Go Package Layout Guide]] — default is a single flat `pkg/` package with two conventional exceptions (`pkg/factory/` + `pkg/handler/`); none of the 5 split triggers (cycle break, >30 files, etc.) apply to `cli` or `config`. Removes `pkg/cli/cli.go` (1 file) and `pkg/config/config*.go` (3 files) — files moved to `pkg/cli.go`, `pkg/config.go`, `pkg/config_test.go` with `package pkg`. Duplicate `pkg/config/config_suite_test.go` dropped (`pkg/pkg_suite_test.go` already covers the `pkg_test` suite). Import-only impact: `cli.NewApp` → `pkg.NewApp`, `config.Load` / `config.Config` → `pkg.Load` / `pkg.Config`. No external callers; factory + main updated.
