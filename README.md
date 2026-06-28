@@ -1,8 +1,11 @@
 # claude-code-router
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/bborbe/claude-code-router.svg)](https://pkg.go.dev/github.com/bborbe/claude-code-router)
 [![CI](https://github.com/bborbe/claude-code-router/actions/workflows/ci.yml/badge.svg)](https://github.com/bborbe/claude-code-router/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bborbe/claude-code-router)](https://goreportcard.com/report/github.com/bborbe/claude-code-router)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bborbe/claude-code-router)
 
-Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several LLM providers (Anthropic subscription, MiniMax, local Ollama, company vLLM/DeepSeek, …) based on the request's `model` field, using a declarative YAML config. Switch backends mid-session with `/model <name>` — no router or session restart.
+Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several LLM providers (Anthropic subscription, MiniMax, local Ollama, …) based on the request's `model` field, using a declarative YAML config. Switch backends mid-session with `/model <name>` — no router or session restart.
 
 ## Install
 
@@ -23,7 +26,46 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
    # then edit the file, paste real provider tokens
    ```
 
-   Schema reference: [docs/config.md](docs/config.md).
+   The example config in full:
+
+   ```yaml
+   router:
+     default_provider: anthropic-subscription
+
+   providers:
+     anthropic-subscription:
+       upstream: https://api.anthropic.com
+       # no token: → router forwards client's Authorization header
+       #   (Claude Code's subscription OAuth bearer passes through untouched)
+       models:
+         - "claude-opus-*"
+         - "claude-sonnet-*"
+         - "claude-haiku-*"
+         - "opus"
+         - "sonnet"
+         - "haiku"
+
+     minimax:
+       upstream: https://api.minimax.io/anthropic
+       token: "<YOUR_MINIMAX_API_KEY>"
+       models:
+         - "MiniMax-*"
+
+     ollama-local:
+       upstream: http://localhost:11434
+       token: "ollama"
+       models:
+         - "qwen*"
+
+   # Short names that resolve to full model identifiers before routing.
+   # Upstream always sees the resolved full name. Single-hop, case-sensitive.
+   aliases:
+     qwen: qwen3.6:35b-a3b-coding-nvfp4
+     minimax: MiniMax-M3-highspeed
+     opus: claude-opus-4-7
+   ```
+
+   Full schema reference: [docs/config.md](docs/config.md). Add more providers (or remove the ones you don't use) by following the same block shape.
 
 3. Run it continuously in the background — pick your platform:
 
@@ -63,7 +105,6 @@ The router decides per-request. Inside any `clauder` Claude Code session:
 ```
 > /model claude-opus-4-8        # next request → anthropic-subscription
 > /model MiniMax-M3-highspeed   # next request → minimax
-> /model deepseek-v4-flash      # next request → seibert-vllm
 > /model qwen3.6:35b            # next request → ollama-local
 ```
 
