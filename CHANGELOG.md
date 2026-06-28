@@ -6,6 +6,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- **feat: V(4) request+response body sample logging via SamplerList.** New `[upstream.req.body]` and `[upstream.resp.body]` glog V(4) lines per upstream RoundTrip, gated by `liblog.SamplerList{NewSampleTime(1s), NewSamplerGlogLevel(5)}` — body dumps fire at most 1/second at V(4), OR unconditionally at V(5) for deep-debug sessions. Body captured up to 4 KB; total length printed alongside (`body_len=N sample=...`) so operators know if truncation happened. `Bearer\s+\S+` substrings are regex-redacted via new `RedactBearerTokensInBody` helper in `pkg/handler/redact.go` — defense-in-depth for the rare case where Anthropic echoes a credential in a `metadata:` SSE field. **Breaking: `handler.NewLoggingRoundTripper` signature gains a `liblog.Sampler` parameter** (factory updated, no external callers).
 - **feat: V(3) outbound header logging with credential redaction.** New `[upstream.headers]` glog V(3) line per upstream RoundTrip — dumps the request headers (after the auth-swap transport applied its `Authorization`) so operators can see exactly what went on the wire. `Authorization`, `Cookie`, `Set-Cookie`, and any header name matching `api-key`/`auth-token`/`secret`/`password`/`bearer` get value-redacted as `<redacted len=N>`. Helper `RedactHeadersForLog` lives in `pkg/handler/redact.go` for reuse by upcoming V(4) body-sample work. Silent at default V(1)/V(2); enable via `curl http://127.0.0.1:8788/setloglevel/3`.
 
 ## v0.9.1

@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -93,5 +94,29 @@ var _ = Describe("RedactHeadersForLog", func() {
 		b, _ := json.Marshal(result)
 		Expect(string(b)).To(ContainSubstring("sk-leak-canary-value"),
 			"intentional: header-name-only redaction; document the boundary")
+	})
+})
+
+var _ = Describe("RedactBearerTokensInBody", func() {
+	It("redacts a Bearer token and does not expose the canary in the output", func() {
+		input := []byte("Authorization: Bearer sk-leak-canary-body")
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(string(out)).To(ContainSubstring("Bearer <redacted>"))
+		Expect(string(out)).NotTo(ContainSubstring("sk-leak-canary-body"))
+	})
+
+	It("returns the input unchanged (same bytes) when no Bearer token is present", func() {
+		input := []byte("plain text with no token here")
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(out).To(Equal(input))
+	})
+
+	It("redacts multiple Bearer tokens in the same body", func() {
+		input := []byte(`{"auth1":"Bearer token-one","auth2":"Bearer token-two"}`)
+		out := handler.RedactBearerTokensInBody(input)
+		Expect(string(out)).NotTo(ContainSubstring("token-one"))
+		Expect(string(out)).NotTo(ContainSubstring("token-two"))
+		// Both occurrences replaced
+		Expect(bytes.Count(out, []byte("Bearer <redacted>"))).To(Equal(2))
 	})
 })

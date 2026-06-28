@@ -7,8 +7,28 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 )
+
+// bearerRE matches Bearer tokens in body content for redaction.
+// Compiled once at package init — case-insensitive, covers both
+// "Bearer sk-..." and "bearer sk-..." as they can appear in SSE/JSON bodies.
+// bearerRE stops at whitespace or common JSON/HTTP delimiters (", , ; ')
+// so that adjacent Bearer tokens in a JSON body are each redacted individually
+// rather than the greedy \S+ swallowing everything up to the next space.
+var bearerRE = regexp.MustCompile(`(?i)Bearer\s+[^\s,;"']+`)
+
+// RedactBearerTokensInBody returns a copy of b with every
+// "Bearer <token>" substring replaced by "Bearer <redacted>".
+// The replacement is case-insensitive on the "Bearer" keyword.
+// Returns b unchanged (same slice, no allocation) when no Bearer token is found.
+func RedactBearerTokensInBody(b []byte) []byte {
+	if !bearerRE.Match(b) {
+		return b
+	}
+	return bearerRE.ReplaceAll(b, []byte("Bearer <redacted>"))
+}
 
 // isCredentialHeader reports whether name identifies a header whose value
 // must be redacted before logging. Matching is case-insensitive and covers:
