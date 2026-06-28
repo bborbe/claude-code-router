@@ -24,10 +24,9 @@ import (
 //     confirming exactly what token / headers reached the provider. Enable via
 //     `curl http://127.0.0.1:8788/setloglevel/3`.
 //
-//   - V(4) [upstream.start] / [upstream.end]: method + path on start; method
-//
-//   - path + TTFB (time-to-first-byte from when inner.RoundTrip was invoked
-//     until it returned with response headers) + status code (or error) on end.
+//   - V(4) [upstream.start] / [upstream.end]: method+path on start; on end,
+//     adds TTFB (time-to-first-byte from when inner.RoundTrip was invoked
+//     until it returned with response headers) + status code (or error).
 //     Useful for debugging slow upstream behavior — distinguishes "Anthropic
 //     took 90s to send first byte" (high TTFB) from "body streaming was slow"
 //     (low TTFB, high total latency in the surrounding [req] line). Enable via
