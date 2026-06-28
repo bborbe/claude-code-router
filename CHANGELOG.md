@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.11.1
+
+- **Breaking**: `Load`, `Validate`, `CreateServer`, `CreateRouterFromConfig` signatures gain `ctx context.Context` as first positional parameter. Internal API — no external callers.
+- refactor: replace 15× `fmt.Errorf` in `pkg/config.go` and `pkg/factory/factory.go` with `bberrors.Wrapf(ctx, ...)` and `bborbe/errors.New`. Threads `context.Context` through `Load`, `Validate`, `CreateServer`, `CreateRouterFromConfig`.
+
 ## v0.11.0
 
 - **Breaking**: `NewModelRouter` gains 7th `currentDateTime libtime.CurrentDateTimeGetter` param; replaces `time.Now()` with injected clock (factory + tests updated)

@@ -5,11 +5,13 @@
 package factory
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
 	"time"
 
+	"github.com/bborbe/errors"
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
@@ -24,14 +26,14 @@ import (
 // CreateServer loads the config at configPath, wires the model router
 // + per-provider proxies, and returns a run.Func that starts the HTTP
 // listener with graceful shutdown on ctx cancel.
-func CreateServer(listen, configPath string) (librun.Func, error) {
-	cfg, err := pkg.Load(configPath)
+func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, error) {
+	cfg, err := pkg.Load(ctx, configPath)
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, errors.Wrapf(ctx, err, "load config")
 	}
-	router, err := CreateRouterFromConfig(cfg)
+	router, err := CreateRouterFromConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build router: %w", err)
+		return nil, errors.Wrapf(ctx, err, "build router")
 	}
 	return libhttp.NewServer(listen, router, streamingServerTimeouts), nil
 }
@@ -67,14 +69,20 @@ func streamingServerTimeouts(o *libhttp.ServerOptions) {
 // router emits its own structured one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
-func CreateRouterFromConfig(cfg *pkg.Config) (http.Handler, error) {
+func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
 	for name, prov := range cfg.Providers {
 		upstream, err := url.Parse(prov.Upstream)
 		if err != nil {
-			return nil, fmt.Errorf("provider %q: parse upstream %q: %w", name, prov.Upstream, err)
+			return nil, errors.Wrapf(
+				ctx,
+				err,
+				"provider %q: parse upstream %q",
+				name,
+				prov.Upstream,
+			)
 		}
 		transport := handler.NewLoggingRoundTripper(
 			handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token),
@@ -96,12 +104,15 @@ func CreateRouterFromConfig(cfg *pkg.Config) (http.Handler, error) {
 		// Defensive: Config.Validate already caught this, but keep the
 		// safety net so future callers of CreateRouterFromConfig can't
 		// bypass it.
-		return nil, fmt.Errorf("default_provider %q not in providers", cfg.Router.DefaultProvider)
+		return nil, errors.New(
+			ctx,
+			fmt.Sprintf("default_provider %q not in providers", cfg.Router.DefaultProvider),
+		)
 	}
 
 	metrics := handler.NewMetrics(cfg.Aliases)
 	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
-		return nil, fmt.Errorf("register metrics: %w", err)
+		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
 	modelRouter := handler.NewModelRouter(
 		routes,

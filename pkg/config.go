@@ -13,12 +13,14 @@
 package pkg
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/bborbe/errors"
 	"github.com/golang/glog"
 	yaml "gopkg.in/yaml.v3"
 )
@@ -58,62 +60,62 @@ type Provider struct {
 
 // Load reads, parses, and validates the config at path. Tilde-prefix
 // (~/) is expanded to the user's home directory.
-func Load(rawPath string) (*Config, error) {
+func Load(ctx context.Context, rawPath string) (*Config, error) {
 	expanded, err := expandTilde(rawPath)
 	if err != nil {
-		return nil, fmt.Errorf("expand path %q: %w", rawPath, err)
+		return nil, errors.Wrapf(ctx, err, "expand path %q", rawPath)
 	}
 	data, err := os.ReadFile(expanded) //nolint:gosec // operator-provided path
 	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", expanded, err)
+		return nil, errors.Wrapf(ctx, err, "read config %q", expanded)
 	}
 	c := &Config{}
 	if err := yaml.Unmarshal(data, c); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w", expanded, err)
+		return nil, errors.Wrapf(ctx, err, "parse config %q", expanded)
 	}
-	if err := c.Validate(); err != nil {
-		return nil, fmt.Errorf("validate config %q: %w", expanded, err)
+	if err := c.Validate(ctx); err != nil {
+		return nil, errors.Wrapf(ctx, err, "validate config %q", expanded)
 	}
 	return c, nil
 }
 
 // Validate checks that the parsed config is internally consistent.
-func (c *Config) Validate() error {
+func (c *Config) Validate(ctx context.Context) error {
 	if len(c.Providers) == 0 {
-		return fmt.Errorf("no providers defined")
+		return errors.New(ctx, "no providers defined")
 	}
 	if c.Router.DefaultProvider == "" {
-		return fmt.Errorf("router.default_provider is required")
+		return errors.New(ctx, "router.default_provider is required")
 	}
 	if _, ok := c.Providers[c.Router.DefaultProvider]; !ok {
-		return fmt.Errorf(
+		return errors.New(ctx, fmt.Sprintf(
 			"router.default_provider %q not found in providers",
 			c.Router.DefaultProvider,
-		)
+		))
 	}
 	for name, prov := range c.Providers {
 		if prov.Upstream == "" {
-			return fmt.Errorf("provider %q: upstream is required", name)
+			return errors.New(ctx, fmt.Sprintf("provider %q: upstream is required", name))
 		}
 		for _, pattern := range prov.Models {
 			// path.Match validates pattern syntax against a dummy string.
 			if _, err := path.Match(pattern, ""); err != nil {
-				return fmt.Errorf(
-					"provider %q: invalid model glob %q: %w",
-					name, pattern, err,
+				return errors.Wrapf(ctx, err,
+					"provider %q: invalid model glob %q",
+					name, pattern,
 				)
 			}
 		}
 	}
-	return c.validateAliases()
+	return c.validateAliases(ctx)
 }
 
-func (c *Config) validateAliases() error {
+func (c *Config) validateAliases(ctx context.Context) error {
 	for aliasKey := range c.Aliases {
 		if _, collides := c.Providers[aliasKey]; collides {
-			return fmt.Errorf(
+			return errors.New(ctx, fmt.Sprintf(
 				"alias key %q collides with provider name", aliasKey,
-			)
+			))
 		}
 	}
 	for aliasKey, target := range c.Aliases {

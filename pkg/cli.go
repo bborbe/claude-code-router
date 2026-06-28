@@ -23,7 +23,7 @@ var version = "dev"
 // ServerFactory is the dep cli requires to start the HTTP listener.
 // Satisfied by factory.CreateServer. Returns the run.Func + any
 // startup error (config load, validation, etc.).
-type ServerFactory func(listen, configPath string) (librun.Func, error)
+type ServerFactory func(ctx context.Context, listen, configPath string) (librun.Func, error)
 
 // App is the application wired by main and parsed by service.MainCmd's
 // argument tagger. Exported fields with tags are CLI args; unexported
@@ -46,7 +46,7 @@ func (a *App) Run(ctx context.Context) error {
 		"starting claude-code-router version=%s listen=%s config=%s",
 		version, a.Listen, a.ConfigPath,
 	)
-	runner, err := a.serverFactory(a.Listen, a.ConfigPath)
+	runner, err := a.serverFactory(ctx, a.Listen, a.ConfigPath)
 	if err != nil {
 		return err
 	}

@@ -1,3 +1,13 @@
+---
+status: completed
+summary: Replaced 15x fmt.Errorf with bberrors.Wrapf/New in pkg/config.go and pkg/factory/factory.go, threaded context.Context through Load, Validate, CreateServer, CreateRouterFromConfig.
+execution_id: claude-code-router-exec-007-no-fmt-errorf-config-and-factory
+dark-factory-version: v0.188.1
+created: "2026-06-28T20:13:06Z"
+queued: "2026-06-28T20:13:06Z"
+started: "2026-06-28T20:13:07Z"
+completed: "2026-06-28T20:18:12Z"
+---
 <summary>
 - `/coding:code-review` whole-codebase audit found 15 `no-fmt-errorf` violations across `pkg/config.go` (10) and `pkg/factory/factory.go` (5)
 - PR #20 cleaned up the same rule in `pkg/handler/model-router.go`'s `rewriteModelField` — use that as the canonical template

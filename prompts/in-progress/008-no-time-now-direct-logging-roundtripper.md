@@ -1,3 +1,8 @@
+---
+status: approved
+created: "2026-06-28T20:13:06Z"
+queued: "2026-06-28T20:13:06Z"
+---
 <summary>
 - `/coding:code-review` whole-codebase audit found 1 remaining `no-time-now-direct` violation: `pkg/handler/logging-roundtripper.go:94`
 - This is the deferred follow-up the bot raised on PR #12 and PR #18 — same pattern PR #20 fixed for `NewModelRouter`
