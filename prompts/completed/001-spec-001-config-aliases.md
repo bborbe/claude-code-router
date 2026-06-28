@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["001"]
+spec: [001-add-model-aliases]
 summary: 'Added aliases: YAML block to pkg/config with collision validation and orphan-target warning, plus 4 Ginkgo specs'
 execution_id: claude-code-router-aliases-exec-001-spec-001-config-aliases
 dark-factory-version: v0.187.11
