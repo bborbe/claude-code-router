@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -62,5 +63,31 @@ var _ = Describe("SetLoglevelHandler", func() {
 		h.ServeHTTP(rec, req)
 		Expect(rec.Code).To(Equal(http.StatusOK))
 		Expect(strings.TrimSpace(rec.Body.String())).To(Equal("set loglevel to 2 completed"))
+	})
+
+	It("returns 400 on a negative level", func() {
+		req := httptest.NewRequest(http.MethodGet, "/setloglevel/-1", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusBadRequest))
+		Expect(rec.Body.String()).To(ContainSubstring("loglevel must be >= 0"))
+	})
+
+	It("auto-reverts the loglevel after the configured window", func() {
+		// 100ms revert window so the spec finishes fast. Production
+		// path uses SetLoglevelAutoRevert = 5 min.
+		short := handler.NewSetLoglevelHandlerWithRevert(100 * time.Millisecond)
+
+		req := httptest.NewRequest(http.MethodGet, "/setloglevel/4", nil)
+		rec := httptest.NewRecorder()
+		short.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusOK))
+		Expect(flag.Lookup("v").Value.String()).To(Equal("4"))
+
+		// Wait past the revert deadline; the setter's goroutine flips
+		// `-v` back to SetLoglevelDefault (1).
+		Eventually(func() string {
+			return flag.Lookup("v").Value.String()
+		}, 2*time.Second, 50*time.Millisecond).Should(Equal("1"))
 	})
 })
