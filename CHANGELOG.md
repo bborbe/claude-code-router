@@ -4,10 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.11.0
 
-- **refactor: replace 3× `fmt.Errorf` in `rewriteModelField` with `bberrors.Wrapf(ctx, ...)` from `github.com/bborbe/errors`.** Threads `r.Context()` into `rewriteModelField` so wraps carry the request-scoped context per the `no-fmt-errorf` rule. **Breaking: `rewriteModelField` signature now takes `(ctx context.Context, body []byte, resolved string)`** — unexported, no external callers.
-- **refactor: inject `libtime.CurrentDateTimeGetter` into `NewModelRouter` to replace the direct `time.Now()` at request start.** Closes the `no-time-now-direct` rule violation the bot raised on PR #12 and was deferred. Factory wires `libtime.NewCurrentDateTime()`; tests share a package-level `testDateTime`. **Breaking: `NewModelRouter` signature gains a 7th positional `currentDateTime libtime.CurrentDateTimeGetter` parameter** (factory + tests updated).
+- **Breaking**: `NewModelRouter` gains 7th `currentDateTime libtime.CurrentDateTimeGetter` param; replaces `time.Now()` with injected clock (factory + tests updated)
+- **Breaking**: `NewLoggingRoundTripper` gains `bodySampler liblog.Sampler` param; adds V(4) `[upstream.req.body]`/`[upstream.resp.body]` lines with 4 KB body sampling and Bearer-token redaction via `RedactBearerTokensInBody`
+- refactor: replace 3× `fmt.Errorf` in `rewriteModelField` with `bberrors.Wrapf(ctx, ...)`, threading `r.Context()` through the call
+- refactor: inline `logReq` back into `NewModelRouter` (prior extraction was a naive gocognit-driven fix — reverted)
+- deps: promote `github.com/bborbe/errors` and `github.com/bborbe/time` to direct deps; bump multiple indirect deps (sentry-go, prometheus, golang.org/x/tools, etc.)
 
 ## v0.10.1
 
