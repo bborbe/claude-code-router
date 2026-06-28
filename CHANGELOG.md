@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **refactor: move alias counter pre-initialization from factory into `NewMetrics` constructor.** `NewMetrics` now takes `aliases map[string]string` and seeds `ccrouter_alias_resolutions_total{alias,resolved}` series to zero for each declared alias, so the wiring sits next to the counter it primes instead of one call layer up in `CreateRouterFromConfig`. A `nil` aliases map is safe (no panic, zero iterations). Operator-side observability guarantee preserved: alerts for unhit aliases still evaluate to `0` instead of no-data.
+
 ## v0.10.0
 
 - **fix: cap inbound `/v1/*` request body at 1 MB via `http.MaxBytesReader`.** Closes a pre-existing concern raised by the bot reviewer on PR #6: `io.ReadAll(r.Body)` in `NewModelRouter` had no size bound, so an adversarial / accidental multi-GB upload could exhaust router memory. 1 MB cap is ~10x typical Anthropic-shaped payloads (<100 KB system+context+user+attachments). Over-limit requests return HTTP 413 + generic "request body too large" body — no internal state leaked. Threat model is low (personal-tool, local-only listener behind macOS firewall), so the change is defensive rather than urgent.
