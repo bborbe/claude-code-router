@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.7.0
 
 - **feat: sample 200 `[req]` log lines.** `NewModelRouter` gains a `log.Sampler` parameter (factory passes `liblog.DefaultSamplerFactory.Sampler()` — `SamplerList{NewSampleTime(10s), NewSamplerGlogLevel(4)}`). Non-200 responses are always logged (errors are signal); 200s are logged at most once per 10s, OR unconditionally when `-v` ≥ 4 — so `curl /setloglevel/4` brings back per-request visibility for deep debug. Steady-state log becomes operator-readable under concurrent /model traffic.
 - **feat: log unknown-path 404s.** New `NewNotFoundHandler` registered at `/` in the factory's mux. Catches anything not matched by `/v1/`, `/healthz`, `/readiness`, `/metrics`, `/setloglevel/`, or `/gc`. Logs at V(1) as `[404] METHOD path` so probes / typos (`/messages` without `/v1`) surface in the operator log instead of vanishing into stdlib's bare 404 default.
