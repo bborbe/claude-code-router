@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.13.0
 
 - feat: `HEAD /` returns 200 OK instead of falling through to the catch-all 404 logger. Claude Code's HTTP client probes the base URL for liveness before its first `/v1/messages` on a fresh connection, which previously emitted a `[404] HEAD /` line ahead of every real request.
 
