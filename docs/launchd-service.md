@@ -131,6 +131,38 @@ make install
 launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router
 ```
 
+## 6. Local hotfix flow (unpushed change → running router)
+
+Use when you have a fix in a feature worktree that you want **running on this Mac right now**, before the PR-merge-release cycle completes. Same `make install` + `kickstart` as upgrade, but from the feature worktree, not master.
+
+```bash
+# 1. Build + install from the FEATURE worktree
+cd ~/Documents/workspaces/claude-code-router-<feature>
+make install
+
+# 2. Confirm the binary actually updated (mtime should be seconds-fresh)
+/usr/bin/stat -f "binary mtime: %Sm" "$(go env GOPATH)/bin/claude-code-router"
+
+# 3. Restart launchd → new binary takes over
+launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router
+
+# 4. Verify the new process is listening
+sleep 2 && lsof -nP -iTCP:8788 -sTCP:LISTEN
+```
+
+**Step 2 is not optional** — `make install` is silent on success; if `go install` fails (compile error, stale module cache) you've kickstarted the *old* binary back into place. The mtime check catches that.
+
+The hotfix supersedes itself on the next upgrade (`git pull && make install` from master rebuilds whatever was merged), so there's nothing to "undo" — but in-flight requests at the moment of `kickstart -k` are killed without graceful drain. Avoid hotfixing during an active Claude Code session if you can wait.
+
+**Rollback to a released tag:**
+
+```bash
+git -C ~/Documents/workspaces/claude-code-router checkout v0.12.0
+make -C ~/Documents/workspaces/claude-code-router install
+launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router
+git -C ~/Documents/workspaces/claude-code-router checkout master   # return master to HEAD
+```
+
 ## Troubleshooting
 
 ### Service keeps restarting (non-zero exit in `launchctl print`)
@@ -161,6 +193,16 @@ Either stop the other process, or change the port in the plist (`<string>127.0.0
 ### `clauder: command not found`
 
 The shell function isn't loaded. Either open a new terminal or `source ~/.zshrc` (or `~/.bashrc`). Confirm it's installed: `grep clauder ~/.zshrc ~/.bashrc 2>/dev/null`.
+
+### Claude Code reports `Request too large (max 32MB)` mid-session
+
+Claude Code surfaces *any* upstream 413 with this client-side wording referencing the Anthropic ceiling — but the cap that fired might be the router's, not Anthropic's. Check the router log for the actual limit:
+
+```bash
+grep "request body too large" /tmp/claude-code-router.log | tail -5
+```
+
+A line like `limit=33554432 bytes` (32 MB) means you genuinely hit the Anthropic ceiling — split the session. Any smaller `limit=` value means the router's `MaxRequestBodyBytes` constant is tighter than the API; either bump it in `pkg/handler/model-router.go` and ship a release, or hotfix locally per §6.
 
 ### Claude Code gets 401/403 when running `clauder`
 
