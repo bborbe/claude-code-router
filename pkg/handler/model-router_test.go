@@ -482,27 +482,27 @@ var _ = Describe("ModelRouter", func() {
 			bodyOverhead = len(bodyPrefix) + len(bodySuffix) // 36
 		)
 
-		It("allows a body just under 1 MB", func() {
-			padding := strings.Repeat("x", (1<<20)-bodyOverhead-1) // body = (1<<20)-1 bytes
+		It("allows a body just under 32 MB", func() {
+			padding := strings.Repeat("x", (32<<20)-bodyOverhead-1) // body = (32<<20)-1 bytes
 			mux.ServeHTTP(rec, post(bodyPrefix+padding+bodySuffix))
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(Equal("anthropic"))
 		})
 
-		It("allows a body exactly at 1 MB (boundary inclusive)", func() {
-			padding := strings.Repeat("x", (1<<20)-bodyOverhead) // body = 1<<20 bytes
+		It("allows a body exactly at 32 MB (boundary inclusive)", func() {
+			padding := strings.Repeat("x", (32<<20)-bodyOverhead) // body = 32<<20 bytes
 			mux.ServeHTTP(rec, post(bodyPrefix+padding+bodySuffix))
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(Equal("anthropic"))
 		})
 
-		It("rejects a body just over 1 MB with 413 without leaking the limit", func() {
-			padding := strings.Repeat("x", (1<<20)-bodyOverhead+1) // body = (1<<20)+1 bytes
+		It("rejects a body just over 32 MB with 413 without leaking the limit", func() {
+			padding := strings.Repeat("x", (32<<20)-bodyOverhead+1) // body = (32<<20)+1 bytes
 			mux.ServeHTTP(rec, post(bodyPrefix+padding+bodySuffix))
 			Expect(rec.Code).To(Equal(http.StatusRequestEntityTooLarge))
 			Expect(rec.Body.String()).To(ContainSubstring("request body too large"))
 			// must not echo the numeric limit back to the caller
-			Expect(rec.Body.String()).NotTo(ContainSubstring("1048576"))
+			Expect(rec.Body.String()).NotTo(ContainSubstring("33554432"))
 		})
 	})
 
