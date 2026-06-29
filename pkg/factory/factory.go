@@ -137,6 +137,12 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	mux.Handle("/v1/", modelRouter)
+	// HEAD / -> 200: Claude Code probes the base URL for liveness before
+	// dispatching its first /v1/messages on a fresh connection. Without
+	// this the probe hits the catch-all and logs `[404] HEAD /` ahead of
+	// every real request. The method-qualified pattern wins over "/" in
+	// the Go 1.22+ ServeMux for HEAD requests to the root.
+	mux.Handle("HEAD /{$}", handler.NewRootLivenessHandler())
 	// Catch-all 404 logger — registered at "/" matches any path not
 	// covered by a more specific pattern above. Logs at V(1) so unknown-
 	// path probes (`/foo/bar`, typos like `/messages` without /v1) show
