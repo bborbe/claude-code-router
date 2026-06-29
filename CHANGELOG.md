@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.12.0
 
 - raise `MaxRequestBodyBytes` from 1 MB to 32 MB to match the Anthropic API ceiling — long Claude Code sessions (full conversation history + tool definitions + sub-agent results) routinely exceed 1 MB and were rejected with a confusing 413 that surfaced as `Request too large (max 32MB)` from the client.
 
