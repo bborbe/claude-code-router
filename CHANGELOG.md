@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: `HEAD /` returns 200 OK instead of falling through to the catch-all 404 logger. Claude Code's HTTP client probes the base URL for liveness before its first `/v1/messages` on a fresh connection, which previously emitted a `[404] HEAD /` line ahead of every real request.
+
 ## v0.12.0
 
 - raise `MaxRequestBodyBytes` from 1 MB to 32 MB to match the Anthropic API ceiling — long Claude Code sessions (full conversation history + tool definitions + sub-agent results) routinely exceed 1 MB and were rejected with a confusing 413 that surfaced as `Request too large (max 32MB)` from the client.
