@@ -20,15 +20,15 @@ import (
 	"github.com/golang/glog"
 )
 
-// MaxRequestBodyBytes caps inbound /v1/* request bodies at 1 MB. Real
-// Anthropic-shaped payloads are <100 KB (system prompt + context +
-// user message + small attachments); 1 MB gives ~10x headroom while
-// preventing an adversarial / accidental multi-GB upload from
-// exhausting router memory via io.ReadAll. On overflow, the wrapped
-// body returns *http.MaxBytesError; the router responds with
-// HTTP 413 Request Entity Too Large + a generic body (no internal
-// state leaked).
-const MaxRequestBodyBytes = 1 << 20 // 1 MB
+// MaxRequestBodyBytes caps inbound /v1/* request bodies at 32 MB to
+// match the Anthropic API ceiling. Long Claude Code sessions (full
+// conversation history + tool definitions + sub-agent results) routinely
+// exceed 1 MB, so a tighter cap surfaces as confusing 413s that read as
+// upstream errors. 32 MB still bounds memory exhaustion from an
+// accidental multi-GB upload via io.ReadAll. On overflow, the wrapped
+// body returns *http.MaxBytesError; the router responds with HTTP 413
+// Request Entity Too Large + a generic body (no internal state leaked).
+const MaxRequestBodyBytes = 32 << 20 // 32 MB
 
 // ModelRoute pairs a glob pattern (filepath.Match syntax) with the
 // provider name + handler to invoke when an incoming request's `model`
