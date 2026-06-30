@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.16.0
 
 - **feat: EnableTrace/DisableTrace endpoints with 5-min TTL.** Two new operator-local HTTP endpoints (`POST /enabletrace`, `POST /disabletrace`) toggle per-request trace logging without a router restart. `enabletrace` turns tracing on for a bounded 5-minute window that auto-disables on expiry (repeated calls reset the window); `disabletrace` turns it off immediately and cancels the pending timer. The trace middleware is now mounted unconditionally on `/v1/` and consults a process-internal atomic flag per request (flag-OR-config: the legacy `trace:` config flag still works as an always-on opt-in, now deprecated). No persistence across restarts; the toggle does not depend on config reload or SIGHUP. `Authorization` and `x-api-key` redaction to `***` is unchanged. See [docs/config.md#trace](docs/config.md).
 
