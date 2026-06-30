@@ -52,7 +52,7 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 	})
 
 	AfterEach(func() {
-		os.RemoveAll(tmpDir)
+		Expect(os.RemoveAll(tmpDir)).To(Succeed())
 	})
 
 	makeConfig := func(trace bool) *pkg.Config {
@@ -62,20 +62,30 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 				"test": {Upstream: "http://localhost:9999", Models: []string{"*"}},
 			},
 			Trace: trace,
-			// Use an isolated registry so metrics registration doesn't
-			// conflict with the global DefaultRegisterer used by other tests.
-			PrometheusRegisterer: prometheus.NewRegistry(),
 		}
+	}
+
+	// isolatedRegistry returns a fresh Prometheus registry so the
+	// factory's metrics.Register call doesn't race on the process-global
+	// DefaultRegisterer used by other test suites in the same binary.
+	isolatedRegistry := func() factory.RouterOption {
+		return factory.WithMetricsRegisterer(prometheus.NewRegistry())
 	}
 
 	Context("AC #7 + AC #8: trace off → no file, no middleware", func() {
 		It("no trace file written when Trace=false", func() {
 			oldHome := os.Getenv("HOME")
-			os.Setenv("HOME", tmpDir)
-			defer os.Setenv("HOME", oldHome)
+			Expect(os.Setenv("HOME", tmpDir)).To(Succeed())
+			defer func() {
+				Expect(os.Setenv("HOME", oldHome)).To(Succeed())
+			}()
 
 			cfg := makeConfig(false)
-			handler, err := factory.CreateRouterFromConfig(context.Background(), cfg)
+			handler, err := factory.CreateRouterFromConfig(
+				context.Background(),
+				cfg,
+				isolatedRegistry(),
+			)
 			Expect(err).NotTo(HaveOccurred())
 
 			req := httptest.NewRequest(
@@ -98,11 +108,17 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 	Context("AC #2 at factory level: trace on → file written", func() {
 		It("writes exactly one JSON file to the trace dir", func() {
 			oldHome := os.Getenv("HOME")
-			os.Setenv("HOME", tmpDir)
-			defer os.Setenv("HOME", oldHome)
+			Expect(os.Setenv("HOME", tmpDir)).To(Succeed())
+			defer func() {
+				Expect(os.Setenv("HOME", oldHome)).To(Succeed())
+			}()
 
 			cfg := makeConfig(true)
-			handler, err := factory.CreateRouterFromConfig(context.Background(), cfg)
+			handler, err := factory.CreateRouterFromConfig(
+				context.Background(),
+				cfg,
+				isolatedRegistry(),
+			)
 			Expect(err).NotTo(HaveOccurred())
 
 			req := httptest.NewRequest(
@@ -129,21 +145,27 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 			oldV := flag.Lookup("v").Value.String()
 			oldLogToStderr := flag.Lookup("logtostderr").Value.String()
 			defer func() {
-				flag.Set("v", oldV)
-				flag.Set("logtostderr", oldLogToStderr)
+				Expect(flag.Set("v", oldV)).To(Succeed())
+				Expect(flag.Set("logtostderr", oldLogToStderr)).To(Succeed())
 			}()
 
 			// Set v=2 so the V(2) log line is emitted.
-			flag.Set("v", "2")
-			flag.Set("logtostderr", "true")
+			Expect(flag.Set("v", "2")).To(Succeed())
+			Expect(flag.Set("logtostderr", "true")).To(Succeed())
 
 			oldHome := os.Getenv("HOME")
-			os.Setenv("HOME", tmpDir)
-			defer os.Setenv("HOME", oldHome)
+			Expect(os.Setenv("HOME", tmpDir)).To(Succeed())
+			defer func() {
+				Expect(os.Setenv("HOME", oldHome)).To(Succeed())
+			}()
 
 			cfg := makeConfig(true)
 			stderr := captureStderr(func() {
-				_, err := factory.CreateRouterFromConfig(context.Background(), cfg)
+				_, err := factory.CreateRouterFromConfig(
+					context.Background(),
+					cfg,
+					isolatedRegistry(),
+				)
 				Expect(err).NotTo(HaveOccurred())
 			})
 
@@ -155,20 +177,26 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 			oldV := flag.Lookup("v").Value.String()
 			oldLogToStderr := flag.Lookup("logtostderr").Value.String()
 			defer func() {
-				flag.Set("v", oldV)
-				flag.Set("logtostderr", oldLogToStderr)
+				Expect(flag.Set("v", oldV)).To(Succeed())
+				Expect(flag.Set("logtostderr", oldLogToStderr)).To(Succeed())
 			}()
 
-			flag.Set("v", "2")
-			flag.Set("logtostderr", "true")
+			Expect(flag.Set("v", "2")).To(Succeed())
+			Expect(flag.Set("logtostderr", "true")).To(Succeed())
 
 			oldHome := os.Getenv("HOME")
-			os.Setenv("HOME", tmpDir)
-			defer os.Setenv("HOME", oldHome)
+			Expect(os.Setenv("HOME", tmpDir)).To(Succeed())
+			defer func() {
+				Expect(os.Setenv("HOME", oldHome)).To(Succeed())
+			}()
 
 			cfg := makeConfig(false)
 			stderr := captureStderr(func() {
-				_, err := factory.CreateRouterFromConfig(context.Background(), cfg)
+				_, err := factory.CreateRouterFromConfig(
+					context.Background(),
+					cfg,
+					isolatedRegistry(),
+				)
 				Expect(err).NotTo(HaveOccurred())
 			})
 

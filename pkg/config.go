@@ -22,7 +22,6 @@ import (
 
 	"github.com/bborbe/errors"
 	"github.com/golang/glog"
-	"github.com/prometheus/client_golang/prometheus"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -43,11 +42,6 @@ type Config struct {
 	// is allocated on the request hot path. Read once at Load; a
 	// restart applies it.
 	Trace bool `yaml:"trace,omitempty"`
-	// PrometheusRegisterer is the metrics registerer used when
-	// CreateRouterFromConfig registers ccrouter_* metrics. Defaults to
-	// prometheus.DefaultRegisterer if nil. Exists to allow isolated
-	// registries in tests without changing the public API surface.
-	PrometheusRegisterer prometheus.Registerer `yaml:"-"`
 }
 
 // Router holds router-wide settings.

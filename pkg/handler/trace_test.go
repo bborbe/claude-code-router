@@ -41,7 +41,7 @@ var _ = Describe("TraceMiddleware", func() {
 
 	AfterEach(func() {
 		if traceDir != "" {
-			os.RemoveAll(traceDir)
+			Expect(os.RemoveAll(traceDir)).To(Succeed())
 		}
 	})
 
@@ -210,7 +210,9 @@ var _ = Describe("TraceMiddleware", func() {
 			// Use a path where MkdirAll will fail: a file exists where a dir is needed.
 			parent, err := os.MkdirTemp("", "trace-fail-test")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.RemoveAll(parent)
+			defer func() {
+				Expect(os.RemoveAll(parent)).To(Succeed())
+			}()
 
 			failDir := filepath.Join(parent, "afile") // not a dir
 			Expect(os.WriteFile(failDir, []byte("x"), 0o600)).To(Succeed())
