@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [003-enabletrace-endpoint]
+summary: 'Shipped operator docs for /enabletrace + /disabletrace endpoints and trace: flag deprecation in docs/config.md, plus v0.15.0 CHANGELOG entry'
+execution_id: claude-code-router-enabletrace-exec-013-spec-003-enabletrace-docs
+dark-factory-version: dev
 created: "2026-06-30T11:57:22Z"
 queued: "2026-06-30T12:09:00Z"
+started: "2026-06-30T12:18:36Z"
+completed: "2026-06-30T12:20:27Z"
 ---
 
 <summary>

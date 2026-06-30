@@ -14,7 +14,7 @@ Override with `--config-path` or `CONFIG_PATH` env var.
 router:
   default_provider: <provider-key>     # required; must match a key under providers:
 
-trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/
+trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
 providers:
   <provider-key>:
@@ -89,6 +89,28 @@ The flag is read once at config load; changing it requires a router restart (see
 
 No retention, rotation, or cleanup is provided — the operator runs `rm` manually.
 
+### Runtime toggle via `/enabletrace` and `/disabletrace`
+
+Two operator-local HTTP endpoints toggle trace logging at runtime without a router restart:
+
+- `POST /enabletrace` — turns tracing on for a bounded 5-minute window that auto-disables on expiry. Repeated calls reset the window (each cancels the prior timer and starts a fresh 5-minute window).
+- `POST /disabletrace` — turns tracing off immediately and cancels the pending TTL timer.
+
+Both endpoints are registered on the operator-local listener (`127.0.0.1:8788`) with no authentication — the same trust model as `/setloglevel`. Example:
+
+```bash
+curl -X POST http://127.0.0.1:8788/enabletrace   # trace enabled
+curl -X POST http://127.0.0.1:8788/disabletrace  # trace disabled
+```
+
+The 5-minute window auto-disables on expiry — if the operator forgets `/disabletrace`, tracing stops on its own. The 5-minute TTL is a hardcoded constant (not configurable via config file, query param, or request body).
+
+The toggle is process-internal state only — it does not persist across router restarts, and it does not depend on config reload or SIGHUP.
+
+### Deprecation of `trace:` config flag
+
+The legacy `trace: true` config flag still works as an always-on opt-in (trace middleware is mounted when `IsEnabled() || cfg.Trace` is true — flag-OR-config). However, leaving `trace: true` on indefinitely is a disk and privacy hazard (full request/response bodies written to disk for every request). Use the bounded `/enabletrace` toggle instead for capturing a single problematic exchange.
+
 ## Example — all four providers
 
 ```yaml
@@ -143,7 +165,7 @@ No router restart, no Claude Code restart. The session stays alive across switch
 
 ## Reload
 
-Config changes require a router restart (no hot-reload in v1):
+Config changes require a router restart (no hot-reload in v1), except for the `/enabletrace` and `/disabletrace` runtime toggle which is process-internal state and does not participate in config reload:
 
 ```bash
 # macOS launchd
