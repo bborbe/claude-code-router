@@ -21,6 +21,7 @@ import (
 
 	"github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/handler"
+	"github.com/bborbe/claude-code-router/pkg/reloader"
 )
 
 // CreateServer loads the config at configPath, wires the model router
@@ -35,7 +36,10 @@ func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, 
 	if err != nil {
 		return nil, errors.Wrapf(ctx, err, "build router")
 	}
-	return libhttp.NewServer(listen, router, streamingServerTimeouts), nil
+	reloader := reloader.NewReloader(configPath, router, CreateRouterFromConfig)
+	reloader.SeedConfig(cfg)
+	go reloader.RunSighupLoop(ctx)
+	return libhttp.NewServer(listen, reloader, streamingServerTimeouts), nil
 }
 
 // streamingServerTimeouts raises libhttp.NewServer's default 30s

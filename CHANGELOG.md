@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: SIGHUP-driven hot config reload. The router now picks up config file edits without a process restart: sending SIGHUP rebuilds the entire request-dispatch handler tree from the freshly loaded YAML and atomically swaps it in via `atomic.Value`. In-flight requests finish against the old tree undisturbed. Malformed config (missing file, invalid YAML, validation failure) is rejected and the old config stays active. A panic during mux rebuild is recovered and logged. Token values are never logged — only provider counts.
+
 ## v0.13.0
 
 - feat: `HEAD /` returns 200 OK instead of falling through to the catch-all 404 logger. Claude Code's HTTP client probes the base URL for liveness before its first `/v1/messages` on a fresh connection, which previously emitted a `[404] HEAD /` line ahead of every real request.
