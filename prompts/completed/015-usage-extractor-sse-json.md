@@ -1,7 +1,13 @@
 ---
-spec: ["004-log-input-output-tokens"]
-status: draft
+status: completed
+spec: [004-log-input-output-tokens]
+summary: Built pure TokenUsage extractor (SSE message_delta scan + non-stream JSON parse) with full Ginkgo coverage, deferred recover guard, and CHANGELOG entry
+execution_id: claude-code-router-log-tokens-exec-015-usage-extractor-sse-json
+dark-factory-version: dev
 created: "2026-06-30T20:01:00Z"
+queued: "2026-06-30T20:06:31Z"
+started: "2026-06-30T22:37:41Z"
+completed: "2026-06-30T22:42:42Z"
 ---
 
 <summary>

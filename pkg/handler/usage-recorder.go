@@ -4,7 +4,13 @@
 
 package handler
 
-import "net/http"
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+)
 
 // TailBufferBytes caps the number of response-body bytes retained for
 // post-request usage extraction. The terminal Anthropic SSE
@@ -146,4 +152,178 @@ func (t *tailBuffer) Tail() []byte {
 	out := make([]byte, len(t.buf))
 	copy(out, t.buf)
 	return out
+}
+
+// TokenUsage holds the input/output token counts extracted from an
+// upstream response body. When extraction fails or no usage is
+// present, Input and Output are the empty string and the caller logs
+// the sentinel "-" for each (see logLineValue below). The empty
+// string is the "no data" signal — a real zero-token count from the
+// upstream is reported as "0" (the extractor reports what it parsed).
+type TokenUsage struct {
+	Input  string
+	Output string
+}
+
+// noUsage is the sentinel returned when no parseable usage was found.
+// Its fields render as "-" in the [req] log line (in=/out=).
+//
+//nolint:gochecknoglobals // frozen sentinel value, not a config knob
+var noUsage = TokenUsage{Input: "-", Output: "-"}
+
+// logLineValue renders a token count for the [req] line: the parsed
+// value, or "-" when extraction yielded nothing.
+//
+// (This helper exists so prompt 3 has a single call site; it is
+// defined here next to the type it renders.)
+// logLineValue is defined here for prompt 3's call site.
+//
+//nolint:unused // intended for cross-prompt use
+func (u TokenUsage) logLineValue() (in, out string) {
+	if u.Input == "" {
+		in = "-"
+	} else {
+		in = u.Input
+	}
+	if u.Output == "" {
+		out = "-"
+	} else {
+		out = u.Output
+	}
+	return in, out
+}
+
+// extractUsage pulls input/output token counts out of a response-body
+// tail buffer. SSE responses (Content-Type: text/event-stream) are
+// scanned for the terminal `message_delta` event whose `usage` field
+// carries input_tokens/output_tokens; the terminal event is always the
+// last chunk of an Anthropic stream, so it lives in the tail. JSON
+// responses are parsed for a top-level `usage` object.
+//
+// Detection is by Content-Type: strings.Contains(contentType, "text/event-stream")
+// is the primary signal because (a) the upstream sets that Content-Type on
+// every Anthropic SSE response reliably, and (b) content-scanning for `event:`
+// requires partial-line state and is fragile when the tail buffer is truncated
+// mid-event. JSON parsing is the fallback for any other content type.
+//
+// Extraction is best-effort: truncated tails, malformed JSON/SSE, missing usage,
+// or zero-token usage all yield the noUsage sentinel ("-" / "-") and never an
+// error — the caller's [req] log line must never be aborted by a parse failure.
+//
+// Presence detection: the extractor first unmarshals the `usage` JSON object
+// into json.RawMessage; if that RawMessage is nil or "null", the field is
+// treated as absent and noUsage is returned. Otherwise the inner
+// input_tokens/output_tokens integers are parsed. This means a present
+// `{"input_tokens":0,"output_tokens":0}` is correctly reported as "0"/"0",
+// and a missing usage block returns the sentinel.
+// ExtractUsage is the exported alias for the package-internal extractUsage.
+// It exists so handler_test can call it directly as a pure function.
+//
+//nolint:revive // intentionally exported for test package access
+func ExtractUsage(tail []byte, contentType string) (usage TokenUsage) {
+	defer func() {
+		if r := recover(); r != nil {
+			usage = noUsage
+		}
+	}()
+
+	// Empty tail: nothing to parse.
+	if len(tail) == 0 {
+		return noUsage
+	}
+
+	if strings.Contains(contentType, "text/event-stream") {
+		return extractUsageSSE(tail)
+	}
+	return extractUsageJSON(tail)
+}
+
+// extractUsageSSE scans tail for the LAST occurrence of "event: message_delta"
+// then parses the following data line's JSON for the usage block.
+func extractUsageSSE(tail []byte) TokenUsage {
+	// Find the LAST "event: message_delta" in the buffer.
+	eventMarker := []byte("event: message_delta")
+	idx := bytes.LastIndex(tail, eventMarker)
+	if idx < 0 {
+		return noUsage
+	}
+
+	// From that position, scan forward for the next "data: " line.
+	rest := tail[idx:]
+	dataIdx := bytes.Index(rest, []byte("\ndata: "))
+	if dataIdx < 0 {
+		// Also try \r\n variant used by some SSE emitters.
+		dataIdx = bytes.Index(rest, []byte("\r\ndata: "))
+		if dataIdx < 0 {
+			return noUsage
+		}
+		// Adjust to point past the \r\n prefix so the offset is correct.
+		dataIdx += 2 // skip \r\n
+	}
+	// dataIdx is relative to rest; advance past the "\ndata: " prefix (2 bytes for \n + 6 for "data: ").
+	dataStart := idx + dataIdx + len("\ndata: ")
+	if dataStart >= len(tail) {
+		return noUsage
+	}
+
+	// Find the end of the data line: double newline (event block terminator).
+	lineEnd := bytes.Index(tail[dataStart:], []byte("\n\n"))
+	if lineEnd < 0 {
+		// No double newline yet; the event may be truncated.
+		return noUsage
+	}
+	dataBytes := tail[dataStart : dataStart+lineEnd]
+
+	// Parse the SSE data payload: first check if "usage" is present and non-null.
+	var usageCheck struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(dataBytes, &usageCheck); err != nil {
+		return noUsage
+	}
+	if usageCheck.Usage == nil || bytes.Equal(usageCheck.Usage, []byte("null")) {
+		return noUsage
+	}
+
+	// Parse the usage integers.
+	var usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	}
+	if err := json.Unmarshal(usageCheck.Usage, &usage); err != nil {
+		return noUsage
+	}
+
+	return TokenUsage{
+		Input:  strconv.Itoa(usage.InputTokens),
+		Output: strconv.Itoa(usage.OutputTokens),
+	}
+}
+
+// extractUsageJSON parses tail as a JSON object with a top-level `usage` field.
+func extractUsageJSON(tail []byte) TokenUsage {
+	// First pass: check for a top-level "usage" key and that it's non-null.
+	var usageCheck struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(tail, &usageCheck); err != nil {
+		return noUsage
+	}
+	if usageCheck.Usage == nil || bytes.Equal(usageCheck.Usage, []byte("null")) {
+		return noUsage
+	}
+
+	// Second pass: parse the inner input_tokens/output_tokens.
+	var usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	}
+	if err := json.Unmarshal(usageCheck.Usage, &usage); err != nil {
+		return noUsage
+	}
+
+	return TokenUsage{
+		Input:  strconv.Itoa(usage.InputTokens),
+		Output: strconv.Itoa(usage.OutputTokens),
+	}
 }

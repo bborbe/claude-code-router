@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -216,3 +217,149 @@ func (h *hijackTrackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 var _ io.Writer = (*errorAfterKWriter)(nil)
+
+// Anti-fake: upstream token numbers are varied across all cases —
+// a hardcoded constant extractor must fail these specs (spec 004 AC 2/3).
+var _ = Describe("extractUsage", func() {
+	Describe("SSE responses (text/event-stream)", func() {
+		It("extracts usage from a single-event message_delta", func() {
+			tail := []byte(
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
+			)
+			usage := handler.ExtractUsage(tail, "text/event-stream")
+			Expect(usage.Input).To(Equal("42"))
+			Expect(usage.Output).To(Equal("17"))
+		})
+
+		It("extracts usage from the terminal message_delta among multiple events", func() {
+			// Use distinct numbers: input=300, output=99 (different from single-event case).
+			tail := []byte(
+				"event: message_start\ndata: {\"type\":\"message_start\"}\n\n" +
+					"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n\n" +
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":300,\"output_tokens\":99}}\n\n",
+			)
+			usage := handler.ExtractUsage(tail, "text/event-stream")
+			Expect(usage.Input).To(Equal("300"))
+			Expect(usage.Output).To(Equal("99"))
+		})
+
+		It("extracts usage when terminal event fits in tail buffer with filler", func() {
+			// Build a tail that is exactly TailBufferBytes: filler + terminal event.
+			// Use distinct numbers: input=7, output=3.
+			terminalEvent := []byte(
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}\n\n",
+			)
+			fillerLen := handler.TailBufferBytes - len(terminalEvent)
+			filler := make([]byte, 0, fillerLen+len(terminalEvent))
+			for i := 0; i < fillerLen; i++ {
+				filler = append(filler, byte('A'+(i%26)))
+			}
+			tail := append(filler, terminalEvent...)
+
+			usage := handler.ExtractUsage(tail, "text/event-stream")
+			Expect(usage.Input).To(Equal("7"))
+			Expect(usage.Output).To(Equal("3"))
+		})
+
+		It("returns noUsage when terminal event was evicted (all filler)", func() {
+			// Tail is exactly TailBufferBytes of filler — no message_delta anywhere.
+			filler := make([]byte, handler.TailBufferBytes)
+			for i := range filler {
+				filler[i] = byte('B' + (i % 26))
+			}
+			tail := filler
+
+			usage := handler.ExtractUsage(tail, "text/event-stream")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+
+		It("returns noUsage for empty tail", func() {
+			usage := handler.ExtractUsage(nil, "text/event-stream")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+
+		It("returns noUsage when data line is truncated mid-JSON", func() {
+			// Truncated: "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42" — incomplete JSON.
+			tail := []byte(
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42",
+			)
+			usage := handler.ExtractUsage(tail, "text/event-stream")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+	})
+
+	Describe("non-streaming JSON responses", func() {
+		It("extracts usage from JSON with usage block", func() {
+			// Use distinct numbers: input=100, output=5.
+			tail := []byte(`{"id":"msg_01","usage":{"input_tokens":100,"output_tokens":5}}`)
+			usage := handler.ExtractUsage(tail, "application/json")
+			Expect(usage.Input).To(Equal("100"))
+			Expect(usage.Output).To(Equal("5"))
+		})
+
+		It("returns noUsage when usage block is absent", func() {
+			tail := []byte(`{"ok":true}`)
+			usage := handler.ExtractUsage(tail, "application/json")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+
+		It("reports zero tokens as 0 when usage is present with zeros", func() {
+			// Upstream literally sent zeros — extractor reports what it parsed.
+			tail := []byte(`{"usage":{"input_tokens":0,"output_tokens":0}}`)
+			usage := handler.ExtractUsage(tail, "application/json")
+			Expect(usage.Input).To(Equal("0"))
+			Expect(usage.Output).To(Equal("0"))
+		})
+
+		It("returns noUsage for malformed JSON", func() {
+			tail := []byte(`{not json`)
+			usage := handler.ExtractUsage(tail, "application/json")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+	})
+
+	Describe("content-type routing", func() {
+		It("returns noUsage when SSE body has JSON content-type", func() {
+			// Valid SSE tail but wrong content-type → JSON path runs, fails.
+			tail := []byte(
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
+			)
+			usage := handler.ExtractUsage(tail, "application/json")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+	})
+
+	Describe("panic safety", func() {
+		It("returns noUsage without panicking on pathological input", func() {
+			// A deeply nested JSON that could exhaust the parser stack.
+			deepJSON := `{"usage":{"input_tokens":` + strings.Repeat(
+				"[",
+				1000,
+			) + `1` + strings.Repeat(
+				"]",
+				1000,
+			) + `,"output_tokens":1}}`
+
+			var panicked bool
+			fn := func() (in, out string) {
+				defer func() {
+					if r := recover(); r != nil {
+						panicked = true
+					}
+				}()
+				u := handler.ExtractUsage([]byte(deepJSON), "application/json")
+				return u.Input, u.Output
+			}
+			in, out := fn()
+			Expect(panicked).To(BeFalse(), "extractUsage panicked on pathological input")
+			Expect(in).To(Equal("-"))
+			Expect(out).To(Equal("-"))
+		})
+	})
+})
