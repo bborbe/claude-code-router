@@ -67,6 +67,15 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
 
    Full schema reference: [docs/config.md](docs/config.md). Add more providers (or remove the ones you don't use) by following the same block shape.
 
+   **Config edits are hot-reloadable** — after editing `config.yaml`, send SIGHUP to the running router to pick up the change without a process restart (in-flight requests are preserved):
+
+   ```bash
+   kill -HUP $(pgrep claude-code-router)
+   # log shows: config reloaded old_providers=N new_providers=M
+   ```
+
+   A malformed config is rejected and the old config stays active. See [docs/config.md](docs/config.md#reload) for the full reload + failure behavior. A full restart (`launchctl kickstart -k` / `systemctl --user restart`) is only needed for binary upgrades or `--listen` address changes.
+
 3. Run it continuously in the background — pick your platform:
 
    - macOS: [docs/launchd-service.md](docs/launchd-service.md)
