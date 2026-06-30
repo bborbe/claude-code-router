@@ -12,11 +12,19 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/bborbe/errors"
 	"github.com/golang/glog"
 
 	"github.com/bborbe/claude-code-router/pkg"
 )
+
+// snapshot pairs the active handler and config so they swap together in a
+// single atomic Store. This prevents a partial-swap inconsistency where a
+// panic between two separate Stores would leave ConfigSnapshot() reporting
+// the new config while ServeHTTP dispatches through the old handler.
+type snapshot struct {
+	handler http.Handler
+	cfg     *pkg.Config
+}
 
 // Reloader holds the atomic request-dispatch handler that the HTTP
 // server serves through, plus the SIGHUP-driven reload loop. On each
@@ -25,13 +33,12 @@ import (
 // handler tree finish against it. A failed reload leaves the old
 // handler pointer intact.
 type Reloader struct {
-	handler atomic.Value // stores http.Handler
+	snap    atomic.Value // stores snapshot
 	cfgPath string
-	current atomic.Value // stores *pkg.Config
 	build   func(ctx context.Context, cfg *pkg.Config) (http.Handler, error)
 }
 
-// NewReloader constructs the Reloader and stores initial via handler.Store.
+// NewReloader constructs the Reloader and stores initial via a snapshot.
 func NewReloader(
 	cfgPath string,
 	initial http.Handler,
@@ -41,39 +48,37 @@ func NewReloader(
 		cfgPath: cfgPath,
 		build:   build,
 	}
-	r.handler.Store(initial)
+	r.snap.Store(snapshot{handler: initial})
 	return r
 }
 
 // SeedConfig seeds the initial config for ConfigSnapshot before the first
-// successful reload.
+// successful reload. Overwrites the handler's snapshot with one carrying cfg.
 func (r *Reloader) SeedConfig(cfg *pkg.Config) {
-	r.current.Store(cfg)
+	prev, _ := r.snap.Load().(snapshot)
+	r.snap.Store(snapshot{handler: prev.handler, cfg: cfg})
 }
 
 // ServeHTTP loads the current handler and calls its ServeHTTP.
 // This is the http.Handler that libhttp.NewServer dispatches through.
 func (r *Reloader) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	h, ok := r.handler.Load().(http.Handler)
-	if !ok {
+	s, _ := r.snap.Load().(snapshot)
+	if s.handler == nil {
 		return
 	}
-	h.ServeHTTP(w, req)
+	s.handler.ServeHTTP(w, req)
 }
 
 // ConfigSnapshot returns the currently-active config. Used by prompt 2's
 // tests to inspect the active config without racing the reload loop.
 func (r *Reloader) ConfigSnapshot() *pkg.Config {
-	cfg, ok := r.current.Load().(*pkg.Config)
-	if !ok {
-		return nil
-	}
-	return cfg
+	s, _ := r.snap.Load().(snapshot)
+	return s.cfg
 }
 
 // Reload performs ONE reload attempt: loads the config, builds a new handler
-// via r.build, and atomically swaps it. Returns the error from Load or build;
-// on error the old handler stays active (no Store call).
+// via r.build, and atomically swaps them together. Returns the error from
+// Load or build; on error the old snapshot stays active (no Store call).
 func (r *Reloader) Reload(ctx context.Context) error {
 	cfg, err := pkg.Load(ctx, r.cfgPath)
 	if err != nil {
@@ -85,15 +90,15 @@ func (r *Reloader) Reload(ctx context.Context) error {
 		glog.Warningf("config reload failed: %v", err)
 		return err
 	}
-	oldCfgVal := r.current.Load()
-	oldCfg, ok := oldCfgVal.(*pkg.Config)
-	if !ok {
-		return errors.New(ctx, "current config is not a *pkg.Config")
+	prev, _ := r.snap.Load().(snapshot)
+	oldCount := 0
+	if prev.cfg != nil {
+		oldCount = len(prev.cfg.Providers)
 	}
-	oldCount := len(oldCfg.Providers)
 	newCount := len(cfg.Providers)
-	r.current.Store(cfg)
-	r.handler.Store(newHandler)
+	// Single atomic Store — handler and cfg swap together, so a panic before
+	// this line leaves the old snapshot fully intact (no partial desync).
+	r.snap.Store(snapshot{handler: newHandler, cfg: cfg})
 	glog.V(1).Infof("config reloaded old_providers=%d new_providers=%d", oldCount, newCount)
 	return nil
 }
