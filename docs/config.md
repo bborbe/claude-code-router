@@ -143,18 +143,17 @@ No router restart, no Claude Code restart. The session stays alive across switch
 
 ## Reload
 
-Config changes require a router restart (no hot-reload in v1):
+Edit the config file and send SIGHUP to the running router to pick up the change without restarting the process or dropping in-flight requests:
 
 ```bash
-# macOS launchd
-launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router
-
-# Linux systemd-user
-systemctl --user restart claude-code-router.service
-
-# Local foreground (development)
-# Ctrl-C, then `make run` again
+kill -HUP $(pgrep claude-code-router)
 ```
+
+On success the router logs one line at `config reloaded old_providers=N new_providers=M` and serves new requests from the updated config. Requests already in flight finish against the config they started under. An invalid config (missing file, invalid YAML, validation failure) is rejected: the old config stays active and the router logs `config reload failed: ...` at WARNING.
+
+A full process restart is still needed to change the `--listen` address or TLS material — those are not hot-reloadable.
+
+`launchctl kickstart -k` / `systemctl --user restart` still work for a hard restart (binary upgrade, listener-address change), but are no longer required for config edits.
 
 ## Related
 
