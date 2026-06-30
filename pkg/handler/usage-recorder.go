@@ -172,13 +172,8 @@ type TokenUsage struct {
 var noUsage = TokenUsage{Input: "-", Output: "-"}
 
 // logLineValue renders a token count for the [req] line: the parsed
-// value, or "-" when extraction yielded nothing.
-//
-// (This helper exists so prompt 3 has a single call site; it is
-// defined here next to the type it renders.)
-// logLineValue is defined here for prompt 3's call site.
-//
-//nolint:unused // intended for cross-prompt use
+// value, or "-" when extraction yielded nothing. Defined next to the
+// type it renders for prompt 3's call site (model-router.go).
 func (u TokenUsage) logLineValue() (in, out string) {
 	if u.Input == "" {
 		in = "-"
