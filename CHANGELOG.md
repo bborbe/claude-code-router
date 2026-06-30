@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.17.0
 
 - feat: wire token-usage extraction into `NewModelRouter` (prompt 3). The bounded tail buffer (`usageRecorder` from prompt 1) is inserted between the response writer and the upstream handler so every response byte is teed; `ExtractUsage` (prompt 2) runs after the handler returns to pull `input_tokens`/`output_tokens` from the tail. The `[req]` log line at `V(1)` now appends `in=<N> out=<N>` for 200 responses (SSE `message_delta` usage or non-streaming JSON `usage` block) and `in=- out=-` for non-200 or missing-usage paths. The sampler gate, `V(1)` gating, field order, and the `Unwrap()` chain are all unchanged. See [specs/in-progress/004-log-input-output-tokens.md](specs/in-progress/004-log-input-output-tokens.md).
 
