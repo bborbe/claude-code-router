@@ -9,6 +9,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - feat: SIGHUP-driven hot config reload. The router now picks up config file edits without a process restart: sending SIGHUP rebuilds the entire request-dispatch handler tree from the freshly loaded YAML and atomically swaps it in via `atomic.Value`. In-flight requests finish against the old tree undisturbed. Malformed config (missing file, invalid YAML, validation failure) is rejected and the old config stays active. A panic during mux rebuild is recovered and logged. Token values are never logged — only provider counts.
 - fix: prevent `signal: hangup` process termination after reloader test suite exits. The package-level SIGHUP interceptor now stays registered for the entire test process lifetime (instead of being repeatedly reset by per-test `signal.Reset` calls that created a race window). An `AfterSuite` hook drains and stops the interceptor before Go's exit sequence. Additionally, each spec gets a fresh `prometheus.DefaultRegisterer` via `BeforeEach` to silence duplicate-collector warnings.
 
+## v0.14.0
+
+- **feat: per-request trace logging.** New optional top-level `trace:` boolean in `~/.claude-code-router/config.yaml`. When `true`, every `/v1/*` request writes one JSON file to `~/.claude-code-router/trace/<timestamp>-<request-id>.json` capturing the full request (method, path, headers, body) and response (status, headers, body). `Authorization` and `x-api-key` headers are redacted to `***`; all other headers and bodies are logged verbatim. When `false` (or absent), no trace files are written and no trace middleware is allocated. Read once at config load; restart to apply. See [docs/config.md#trace](docs/config.md).
+
 ## v0.13.0
 
 - feat: `HEAD /` returns 200 OK instead of falling through to the catch-all 404 logger. Claude Code's HTTP client probes the base URL for liveness before its first `/v1/messages` on a fresh connection, which previously emitted a `[404] HEAD /` line ahead of every real request.

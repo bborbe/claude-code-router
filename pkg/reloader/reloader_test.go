@@ -145,7 +145,17 @@ var _ = Describe("Reloader", func() {
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			// Assert starting state
@@ -186,7 +196,17 @@ var _ = Describe("Reloader", func() {
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			Expect(len(rel.ConfigSnapshot().Providers)).To(Equal(1))
@@ -223,7 +243,17 @@ var _ = Describe("Reloader", func() {
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			// 2-provider config with a token to test token-leak guard
@@ -267,7 +297,17 @@ var _ = Describe("Reloader", func() {
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			// Write valid config first
@@ -314,7 +354,17 @@ var _ = Describe("Reloader", func() {
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			// Write valid config first
@@ -367,7 +417,17 @@ providers:
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			// Write valid config
@@ -502,7 +562,17 @@ providers:
 			Expect(err).NotTo(HaveOccurred())
 
 			tmpFile := filepath.Join(tmpDir, "config.yaml")
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			registerSighup()
@@ -536,7 +606,17 @@ providers:
 			Expect(err).NotTo(HaveOccurred())
 
 			tmpFile := filepath.Join(tmpDir, "config.yaml")
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			go rel.RunSighupLoop(ctx)
@@ -566,7 +646,17 @@ providers:
 			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
 			Expect(err).NotTo(HaveOccurred())
 
-			rel := reloader.NewReloader(tmpFile, initialHandler, factory.CreateRouterFromConfig)
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
 			rel.SeedConfig(initialCfg)
 
 			runCtx, cancel := context.WithCancel(context.Background())

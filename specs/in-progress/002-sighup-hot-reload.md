@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-06-30T09:10:32Z"
 generating: "2026-06-30T09:24:25Z"
 prompted: "2026-06-30T09:24:25Z"
+verifying: "2026-06-30T11:02:43Z"
 branch: dark-factory/sighup-hot-reload
 ---
 
