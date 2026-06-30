@@ -534,8 +534,12 @@ providers:
 			// Unblock slowHandler
 			close(slowUnblock)
 
-			// First request should have completed (hit the slow handler which returned "OK" via mux default)
-			Eventually(resultCh).WithTimeout(5 * time.Second).ShouldNot(Equal(""))
+			// First request should have completed against the OLD handler (slowHandler writes "old").
+			// Asserting the exact marker — not just "something came back" — catches a regression that
+			// reroutes in-flight requests to the post-reload handler (the bug class this test exists for).
+			var firstBody string
+			Eventually(resultCh).WithTimeout(5 * time.Second).Should(Receive(&firstBody))
+			Expect(firstBody).To(Equal("old"))
 
 			// Second request should hit fastHandler (returns "new")
 			resp2, err := http.Get(server.URL + "/healthz")

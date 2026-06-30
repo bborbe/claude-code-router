@@ -99,16 +99,17 @@ func (r *Reloader) Reload(ctx context.Context) error {
 }
 
 // reloadWithRecover wraps Reload in a recover sheet so panics during mux
-// rebuild never crash the process. Logs recovered panics at ERROR.
+// rebuild never crash the process. Logs recovered panics at ERROR. Reload
+// owns its own WARNING log on failure (so direct callers see the line too);
+// this wrapper does NOT re-log the error to avoid double-logging the same
+// failure on the SIGHUP-driven path.
 func (r *Reloader) reloadWithRecover(ctx context.Context) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			glog.Errorf("config reload panic: %v", rec)
 		}
 	}()
-	if err := r.Reload(ctx); err != nil {
-		glog.Warningf("config reload failed: %v", err)
-	}
+	_ = r.Reload(ctx)
 }
 
 // RunSighupLoop blocks until ctx is cancelled, handling SIGHUP. On each
