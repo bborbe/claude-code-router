@@ -1,7 +1,13 @@
 ---
-spec: ["004-log-input-output-tokens"]
-status: draft
+status: completed
+spec: [004-log-input-output-tokens]
+summary: Wired usageRecorder tee writer and ExtractUsage into NewModelRouter, appending in=/out= to both [req] log variants, with format-preservation Ginkgo specs and CHANGELOG entry
+execution_id: claude-code-router-log-tokens-exec-016-wire-usage-into-req-log-line
+dark-factory-version: dev
 created: "2026-06-30T20:02:00Z"
+queued: "2026-06-30T22:43:57Z"
+started: "2026-06-30T22:43:58Z"
+completed: "2026-06-30T22:46:53Z"
 ---
 
 <summary>

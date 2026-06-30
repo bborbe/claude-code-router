@@ -90,6 +90,7 @@ func NewModelRouter(
 		start := currentDateTime.Now().Time()
 		glog.V(4).Infof("[inbound.start] %s %s", r.Method, r.URL.Path)
 		rec := &statusRecorder{ResponseWriter: w}
+		ur := newUsageRecorder(rec)
 
 		r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
 		body, err := io.ReadAll(r.Body)
@@ -144,7 +145,7 @@ func NewModelRouter(
 			}
 		}
 
-		target.ServeHTTP(rec, r)
+		target.ServeHTTP(ur, r)
 
 		status := rec.status
 		if status == 0 {
@@ -167,16 +168,21 @@ func NewModelRouter(
 		if status == http.StatusOK && !sampler.IsSample() {
 			return
 		}
+		usage := noUsage
+		if status == http.StatusOK {
+			usage = ExtractUsage(ur.Tail(), rec.Header().Get("Content-Type"))
+		}
+		in, out := usage.logLineValue()
 		if aliasResolved != "" {
 			glog.V(1).Infof(
-				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s",
-				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency,
+				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s in=%s out=%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency, in, out,
 			)
 			return
 		}
 		glog.V(1).Infof(
-			"[req] %s %s model=%s provider=%s status=%d latency=%s",
-			r.Method, r.URL.Path, origModel, providerName, status, latency,
+			"[req] %s %s model=%s provider=%s status=%d latency=%s in=%s out=%s",
+			r.Method, r.URL.Path, origModel, providerName, status, latency, in, out,
 		)
 	})
 }

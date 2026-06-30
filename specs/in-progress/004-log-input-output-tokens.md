@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-06-30T19:52:41Z"
 generating: "2026-06-30T19:59:18Z"
 prompted: "2026-06-30T19:59:18Z"
+verifying: "2026-06-30T22:42:42Z"
 branch: dark-factory/log-input-output-tokens
 ---
 
