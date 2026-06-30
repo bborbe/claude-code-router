@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-06-30T11:56:43Z"
 generating: "2026-06-30T12:02:30Z"
 prompted: "2026-06-30T12:02:30Z"
 verifying: "2026-06-30T12:22:27Z"
+completed: "2026-06-30T13:47:00Z"
 branch: dark-factory/enabletrace-endpoint
 ---
 
@@ -133,3 +134,24 @@ Rationale: prompt 1 establishes the state primitive and timer semantics in isola
 ## Do-Nothing Option
 
 If we do nothing, tracing stays config-only: editing `trace:` and restarting the router is the only way to toggle it. Operators either leave it off and cannot capture a problematic exchange without a restart that drops the session, or leave it on and accumulate trace files (full bodies) on disk indefinitely. The bounded-window capture use case remains unsupported. The current approach is workable but forces a restart-vs-disk-hazard tradeoff every time an operator wants to diagnose a single request — which is the common case for a personal-tool router.
+
+## Verification Result
+
+**Verified:** 2026-06-30T13:46:16Z (HEAD 4dee04e)
+**Binary:** installed `dark-factory` (dev) for spec lifecycle; live router pid 46673 at `/Users/bborbe/Documents/workspaces/go/bin/claude-code-router` (binary mtime 15:31 local, fresh vs v0.16.0 tag 13:29Z)
+**Scenario:** live runtime replay against launchd-managed router on 127.0.0.1:8788 (config has no `trace:` line → default-off); enabletrace/disabletrace HTTP toggles; trace file inspection; fresh `make precommit` + Ginkgo `pkg/handler` suite on origin/master (v0.16.0).
+**Evidence:**
+- `make precommit` → EXIT_CODE=0 (golangci-lint 0 issues, go vet clean, trivy 0, osv 0, addlicense ok)
+- default-off: `rm -f ~/.claude-code-router/trace/*.json` then `POST /v1/messages` → 0 trace files
+- `curl -X POST 127.0.0.1:8788/enabletrace` → 200 `trace enabled`; subsequent `POST /v1/messages` → 1 trace file written
+- trace JSON has all 7 keys: request.{method,path,headers,body} + response.{status,headers,body}; method=POST, path=/v1/messages, status=200
+- `request.headers.Authorization` = `***`, `request.headers["X-Api-Key"]` = `***` (case-insensitive redaction); `Content-Type` = `application/json` (verbatim)
+- `grep -REin 'Bearer |sk-' ~/.claude-code-router/trace/` → 0 matches (clean-body run; raw secret nowhere in file)
+- `curl -X POST 127.0.0.1:8788/disabletrace` → 200 `trace disabled`; subsequent `POST /v1/messages` (unique body marker) → 0 new files, marker absent from dir
+- TTL auto-disable (AC #4), disable-cancels-timer (AC #5), repeated-enable-resets-window (AC #6): `pkg/handler/trace_state_test.go` asserts via `NewTraceStateWithTTL` + `Eventually`/`Consistently`; full Ginkgo suite PASS (exit 0)
+- default-at-boot (AC #8): unit test asserts `IsEnabled()==false` after `NewTraceState()`/`NewTraceStateWithTTL`; source `trace_state.go` sets `timer=nil` until `Enable()` (no TTL goroutine at boot)
+- flag-OR-config (AC #7): `trace.go` line 103 `if !traceState.IsEnabled() && !configAlwaysOn` short-circuits; unit test `configAlwaysOn=true overrides flag` PASS
+- docs: `grep -n enabletrace docs/config.md` → 5 hits; `grep -n disabletrace docs/config.md` → 4 hits; `grep -ni deprecat docs/config.md` → 2 hits
+- changelog: `grep -ni 'enabletrace\|disabletrace' CHANGELOG.md` line 9 (under `## v0.16.0` at line 7, above `## v0.14.0` at line 16)
+- source on master: `pkg/handler/{enabletrace,disabletrace,trace_state,trace}.go`, `pkg/factory/factory.go` lines 211-212 (mux registration) + 218-223 (unconditional middleware mount with `DefaultTraceState()` + `trace` configAlwaysOn)
+**Verdict:** PASS
