@@ -16,3 +16,6 @@
 gha-creds-*.json
 /specs/log
 /.crush
+
+# Go test binaries
+*.test
