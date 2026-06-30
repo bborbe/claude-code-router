@@ -128,3 +128,18 @@ Rationale: prompt 1 is the load-bearing mechanism — the SIGHUP handler, the at
 ## Do-Nothing Option
 
 Do nothing: operators continue to run `launchctl kickstart -k` (or `systemctl --user restart`) after every config edit. Every in-flight Claude Code request is severed; claude-code's SDK retries from scratch, losing streaming progress on long `/compact` and code-generation turns. The cost is proportional operator frustration and lost work per edit, not a correctness bug — the router still works, just expensively to reconfigure. Acceptable only if config edits are truly rare; the existing runbook already documents this path. The SIGHUP work is justified because the router is a long-running local proxy whose entire purpose is uninterrupted routing, and a full process restart for a one-line YAML edit violates that purpose.
+
+## Verification Result
+
+**Verified:** 2026-06-30T12:14:00Z (HEAD 0eab6a6)
+**Binary:** /tmp/claude-code-router-verify (built from HEAD) + installed dark-factory (dev)
+**Scenario:** live runtime replay — built binary, started router with 2-provider config on 127.0.0.1:18788, edited config to 3 providers, sent `kill -HUP`, observed reload log; wrote invalid YAML, re-sent SIGHUP, observed failure log and retained config; ran reloader Ginkgo suite fresh.
+**Evidence:**
+- `make precommit` → EXIT_CODE=0 (full suite incl. pkg/reloader 85.4% cov)
+- Live INFO glog: `I0630 12:07:24 reloader.go:97] config reloaded old_providers=2 new_providers=3`; token-leak grep over reload line = 0
+- Live WARNING glog: `W0630 12:08:09 reloader.go:80] config reload failed: parse config "...": yaml: mapping values are not allowed in this context` (invalid YAML); INFO success count unchanged (2); process kept serving healthz=200 on old config
+- Ginkgo "increments provider count from N to M on Reload" PASS (ConfigSnapshot 1→2)
+- Ginkgo "in-flight request finishes on the old handler after reload" PASS (live httptest, real SIGHUP swap, body marker = "old")
+- Ginkgo "SIGHUP does not cancel ctx" PASS (Consistently ctx.Err()==nil over 500ms); source reloader.go:123 dedicated `signal.Notify(sighup, syscall.SIGHUP)`, run pkg ContextWithSig registers SIGINT/SIGTERM only
+- docs/launchd-service.md:139 `kill -HUP $(pgrep claude-code-router)`; docs/config.md:149 kill -HUP, grep -c 'no hot-reload in v1' = 0; CHANGELOG.md:7 `## Unreleased`, lines 9-10 SIGHUP entry
+**Verdict:** PASS
