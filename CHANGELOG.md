@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- **feat: per-request trace logging.** New optional top-level `trace:` boolean in `~/.claude-code-router/config.yaml`. When `true`, every `/v1/*` request writes one JSON file to `~/.claude-code-router/trace/<timestamp>-<request-id>.json` capturing the full request (method, path, headers, body) and response (status, headers, body). `Authorization` and `x-api-key` headers are redacted to `***`; all other headers and bodies are logged verbatim. When `false` (or absent), no trace files are written and no trace middleware is allocated. Read once at config load; restart to apply. See [docs/config.md#trace](docs/config.md).
+
 ## v0.13.0
 
 - feat: `HEAD /` returns 200 OK instead of falling through to the catch-all 404 logger. Claude Code's HTTP client probes the base URL for liveness before its first `/v1/messages` on a fresh connection, which previously emitted a `[404] HEAD /` line ahead of every real request.

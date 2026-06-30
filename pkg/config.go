@@ -35,6 +35,13 @@ type Config struct {
 	// `{"model":"qwen3.6:35b-a3b-coding-nvfp4"}` before the router
 	// walks providers' models globs. Nil / empty map = no-op.
 	Aliases map[string]string `yaml:"aliases,omitempty"`
+	// Trace, when true, enables per-request trace logging for /v1/*
+	// requests: every request writes one JSON file capturing the full
+	// request and response to ~/.claude-code-router/trace/. When false
+	// (or absent), no trace files are written and no trace middleware
+	// is allocated on the request hot path. Read once at Load; a
+	// restart applies it.
+	Trace bool `yaml:"trace,omitempty"`
 }
 
 // Router holds router-wide settings.
