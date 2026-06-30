@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -16,12 +18,31 @@ import (
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
 	libtime "github.com/bborbe/time"
+	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
+
+// RouterOption configures CreateRouterFromConfig beyond the parsed Config.
+// Options are test seams (e.g. an isolated Prometheus registry) that do
+// not belong on the YAML-deserialized Config struct.
+type RouterOption func(*routerOptions)
+
+type routerOptions struct {
+	metricsRegisterer prometheus.Registerer
+}
+
+// WithMetricsRegisterer overrides the Prometheus registerer used for
+// ccrouter_* metrics. Defaults to prometheus.DefaultRegisterer. Tests pass
+// an isolated registry to avoid racing on the process-global default.
+func WithMetricsRegisterer(reg prometheus.Registerer) RouterOption {
+	return func(o *routerOptions) {
+		o.metricsRegisterer = reg
+	}
+}
 
 // CreateServer loads the config at configPath, wires the model router
 // + per-provider proxies, and returns a run.Func that starts the HTTP
@@ -36,6 +57,21 @@ func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, 
 		return nil, errors.Wrapf(ctx, err, "build router")
 	}
 	return libhttp.NewServer(listen, router, streamingServerTimeouts), nil
+}
+
+// traceDir returns the fixed trace directory path.
+// Expand ~ via os.UserHomeDir to handle the tilde in ~/.claude-code-router/trace/.
+func traceDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Fallback: trace writes go to /tmp instead of ~. Warn so the
+		// operator knows where files actually landed (their
+		// `rm ~/.claude-code-router/trace/*.json` cleanup would miss them).
+		fallback := filepath.Join(os.TempDir(), ".claude-code-router", "trace")
+		glog.Warningf("home dir lookup failed, trace files will land in %s: %v", fallback, err)
+		return fallback
+	}
+	return filepath.Join(home, ".claude-code-router", "trace")
 }
 
 // streamingServerTimeouts raises libhttp.NewServer's default 30s
@@ -69,7 +105,15 @@ func streamingServerTimeouts(o *libhttp.ServerOptions) {
 // router emits its own structured one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
-func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+func CreateRouterFromConfig(
+	ctx context.Context,
+	cfg *pkg.Config,
+	opts ...RouterOption,
+) (http.Handler, error) {
+	o := &routerOptions{metricsRegisterer: prometheus.DefaultRegisterer}
+	for _, opt := range opts {
+		opt(o)
+	}
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
@@ -112,7 +156,7 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 	}
 
 	metrics := handler.NewMetrics(cfg.Aliases)
-	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
+	if err := metrics.Register(o.metricsRegisterer); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
 	modelRouter := handler.NewModelRouter(
@@ -136,7 +180,12 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
-	mux.Handle("/v1/", modelRouter)
+	v1Handler := http.Handler(modelRouter)
+	if cfg.Trace {
+		glog.V(2).Infof("trace enabled")
+		v1Handler = handler.NewTraceMiddleware(v1Handler, traceDir())
+	}
+	mux.Handle("/v1/", v1Handler)
 	// HEAD / -> 200: Claude Code probes the base URL for liveness before
 	// dispatching its first /v1/messages on a fresh connection. Without
 	// this the probe hits the catch-all and logs `[404] HEAD /` ahead of

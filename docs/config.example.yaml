@@ -5,6 +5,12 @@
 router:
   default_provider: anthropic-subscription
 
+# Per-request trace logging for /v1/* traffic.
+# When true, writes one JSON file per request to ~/.claude-code-router/trace/
+# (Authorization + x-api-key headers redacted to ***; bodies verbatim).
+# Default false — omit or set false for no trace files.
+trace: false
+
 providers:
 
   anthropic-subscription:

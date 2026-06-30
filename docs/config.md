@@ -14,6 +14,8 @@ Override with `--config-path` or `CONFIG_PATH` env var.
 router:
   default_provider: <provider-key>     # required; must match a key under providers:
 
+trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/
+
 providers:
   <provider-key>:
     upstream: <URL>                    # required; e.g. https://api.anthropic.com
@@ -73,7 +75,19 @@ Then in any Claude Code session:
 | absent / empty | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
 | set | Replace the outbound `Authorization` with `Bearer <token>` — used for fixed-token providers (MiniMax, Ollama, vLLM) |
 
-The router never stores or logs token values.
+The router never stores or logs token values; trace files inherit the same invariant — see ## Trace.
+
+## Trace
+
+The `trace:` flag is a top-level boolean. When `true`, every `/v1/*` request produces exactly one JSON file at `~/.claude-code-router/trace/<timestamp>-<request-id>.json` containing the complete request (method, path, headers, body) and complete response (status, headers, body).
+
+When `false` (or absent), no trace files are written and no trace middleware is on the request hot path.
+
+The `Authorization` and `x-api-key` request headers are redacted to `***` in every trace file, regardless of header case. All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk.
+
+The flag is read once at config load; changing it requires a router restart (see ## Reload).
+
+No retention, rotation, or cleanup is provided — the operator runs `rm` manually.
 
 ## Example — all four providers
 
