@@ -77,10 +77,12 @@ func (r *Reloader) ConfigSnapshot() *pkg.Config {
 func (r *Reloader) Reload(ctx context.Context) error {
 	cfg, err := pkg.Load(ctx, r.cfgPath)
 	if err != nil {
+		glog.Warningf("config reload failed: %v", err)
 		return err
 	}
 	newHandler, err := r.build(ctx, cfg)
 	if err != nil {
+		glog.Warningf("config reload failed: %v", err)
 		return err
 	}
 	oldCfgVal := r.current.Load()

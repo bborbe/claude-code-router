@@ -16,6 +16,7 @@ import (
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
 	libtime "github.com/bborbe/time"
+	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -116,8 +117,11 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 	}
 
 	metrics := handler.NewMetrics(cfg.Aliases)
+	// Register metrics. Non-fatal: the handler is fully constructed and valid
+	// even if metrics registration fails (e.g. duplicate collector in tests).
+	// Log the error as a warning so operators notice registration issues.
 	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
-		return nil, errors.Wrapf(ctx, err, "register metrics")
+		glog.Warningf("register metrics: %v", err)
 	}
 	modelRouter := handler.NewModelRouter(
 		routes,

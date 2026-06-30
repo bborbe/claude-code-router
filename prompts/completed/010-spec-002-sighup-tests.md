@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["002"]
+summary: 'Implemented reloader tests for SIGHUP config reload: AC-2 (provider count increment), AC-3 (invalid YAML rejection), AC-4 (log line shape + token-leak guard), AC-5 (in-flight isolation), AC-9 (SIGHUP does not cancel ctx), plus error-path coverage for deleted file, validation failure, rapid reloads, panic recovery, and ctx-cancelled no-op. Also fixed factory.go to make metrics registration non-fatal and added Warningf logging in Reload for error-path capture.'
+execution_id: claude-code-router-sighup-reload-exec-010-spec-002-sighup-tests
+dark-factory-version: dev
 created: "2026-06-30T10:15:00Z"
 queued: "2026-06-30T09:24:34Z"
+started: "2026-06-30T09:28:53Z"
+completed: "2026-06-30T10:35:40Z"
 ---
 
 <summary>
