@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add trace-state primitive (`pkg/handler/trace_state.go`) with process-global atomic boolean and 5-minute TTL timer for bounded per-request trace logging. `Enable()` starts/resets the window; `Disable()` cancels it immediately; `IsEnabled()` returns the current flag. Repeated `Enable()` calls are idempotent on the flag but always reset the window. Mirrors `SetLoglevelAutoRevert` + `NewSetLoglevelHandlerWithRevert` pattern. `TRACE_TTL` env var is test-only.
+
 ## v0.14.0
 
 - **feat: per-request trace logging.** New optional top-level `trace:` boolean in `~/.claude-code-router/config.yaml`. When `true`, every `/v1/*` request writes one JSON file to `~/.claude-code-router/trace/<timestamp>-<request-id>.json` capturing the full request (method, path, headers, body) and response (status, headers, body). `Authorization` and `x-api-key` headers are redacted to `***`; all other headers and bodies are logged verbatim. When `false` (or absent), no trace files are written and no trace middleware is allocated. Read once at config load; restart to apply. See [docs/config.md#trace](docs/config.md).
