@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.15.0
 
 - feat: SIGHUP-driven hot config reload. The router now picks up config file edits without a process restart: sending SIGHUP rebuilds the entire request-dispatch handler tree from the freshly loaded YAML and atomically swaps it in via `atomic.Value`. In-flight requests finish against the old tree undisturbed. Malformed config (missing file, invalid YAML, validation failure) is rejected and the old config stays active. A panic during mux rebuild is recovered and logged. Token values are never logged — only provider counts.
 - fix: prevent `signal: hangup` process termination after reloader test suite exits. The package-level SIGHUP interceptor now stays registered for the entire test process lifetime (instead of being repeatedly reset by per-test `signal.Reset` calls that created a race window). An `AfterSuite` hook drains and stops the interceptor before Go's exit sequence. Additionally, each spec gets a fresh `prometheus.DefaultRegisterer` via `BeforeEach` to silence duplicate-collector warnings.
