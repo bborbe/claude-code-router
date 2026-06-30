@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [003-enabletrace-endpoint]
+summary: Wired /enabletrace and /disabletrace HTTP handlers, updated NewTraceMiddleware with per-request IsEnabled() gate and injected *TraceState, registered handlers in CreateRouterFromConfig mux, updated all tests including new Ginkgo specs for toggle/flag-or-config behavior.
+execution_id: claude-code-router-enabletrace-exec-012-spec-003-enabletrace-handlers
+dark-factory-version: dev
 created: "2026-06-30T11:57:22Z"
 queued: "2026-06-30T12:09:00Z"
+started: "2026-06-30T12:13:36Z"
+completed: "2026-06-30T12:18:35Z"
 ---
 
 <summary>

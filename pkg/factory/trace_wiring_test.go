@@ -72,38 +72,41 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 		return factory.WithMetricsRegisterer(prometheus.NewRegistry())
 	}
 
-	Context("AC #7 + AC #8: trace off → no file, no middleware", func() {
-		It("no trace file written when Trace=false", func() {
-			oldHome := os.Getenv("HOME")
-			Expect(os.Setenv("HOME", tmpDir)).To(Succeed())
-			defer func() {
-				Expect(os.Setenv("HOME", oldHome)).To(Succeed())
-			}()
+	Context(
+		"AC #7 + AC #8: trace off → no file (middleware always mounted, gate prevents write)",
+		func() {
+			It("no trace file written when Trace=false", func() {
+				oldHome := os.Getenv("HOME")
+				Expect(os.Setenv("HOME", tmpDir)).To(Succeed())
+				defer func() {
+					Expect(os.Setenv("HOME", oldHome)).To(Succeed())
+				}()
 
-			cfg := makeConfig(false)
-			handler, err := factory.CreateRouterFromConfig(
-				context.Background(),
-				cfg,
-				isolatedRegistry(),
-			)
-			Expect(err).NotTo(HaveOccurred())
+				cfg := makeConfig(false)
+				handler, err := factory.CreateRouterFromConfig(
+					context.Background(),
+					cfg,
+					isolatedRegistry(),
+				)
+				Expect(err).NotTo(HaveOccurred())
 
-			req := httptest.NewRequest(
-				http.MethodPost,
-				"/v1/messages",
-				strings.NewReader(`{"model":"test"}`),
-			)
-			req.Header.Set("Content-Type", "application/json")
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
+				req := httptest.NewRequest(
+					http.MethodPost,
+					"/v1/messages",
+					strings.NewReader(`{"model":"test"}`),
+				)
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
 
-			tracePath := filepath.Join(tmpDir, ".claude-code-router", "trace")
-			_, err = os.Stat(tracePath)
-			Expect(
-				os.IsNotExist(err),
-			).To(BeTrue(), "trace directory should not exist when Trace=false")
-		})
-	})
+				tracePath := filepath.Join(tmpDir, ".claude-code-router", "trace")
+				_, err = os.Stat(tracePath)
+				Expect(
+					os.IsNotExist(err),
+				).To(BeTrue(), "trace directory should not exist when Trace=false")
+			})
+		},
+	)
 
 	Context("AC #2 at factory level: trace on → file written", func() {
 		It("writes exactly one JSON file to the trace dir", func() {
@@ -140,7 +143,7 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 	})
 
 	Context("glog startup line (AC #10 + Desired Behavior item 5)", func() {
-		It("emits 'trace enabled' at V(2) when Trace=true", func() {
+		It("emits 'trace enabled via config' at V(2) when Trace=true", func() {
 			// Save and restore glog flags since they are process-global.
 			oldV := flag.Lookup("v").Value.String()
 			oldLogToStderr := flag.Lookup("logtostderr").Value.String()
@@ -169,7 +172,7 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 
-			Expect(stderr).To(ContainSubstring("trace enabled"))
+			Expect(stderr).To(ContainSubstring("trace enabled via config"))
 		})
 
 		It("does NOT emit 'trace enabled' when Trace=false", func() {
@@ -200,7 +203,7 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 
-			Expect(stderr).NotTo(ContainSubstring("trace enabled"))
+			Expect(stderr).NotTo(ContainSubstring("trace enabled via config"))
 		})
 	})
 })

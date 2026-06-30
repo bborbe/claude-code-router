@@ -7,6 +7,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 - feat: add trace-state primitive (`pkg/handler/trace_state.go`) with process-global atomic boolean and 5-minute TTL timer for bounded per-request trace logging. `Enable()` starts/resets the window; `Disable()` cancels it immediately; `IsEnabled()` returns the current flag. Repeated `Enable()` calls are idempotent on the flag but always reset the window. Mirrors `SetLoglevelAutoRevert` + `NewSetLoglevelHandlerWithRevert` pattern. `TRACE_TTL` env var is test-only.
+- feat: add `POST /enabletrace` and `POST /disabletrace` operator-local HTTP endpoints to toggle per-request trace logging without a router restart. `POST /enabletrace` turns tracing on for a bounded 5-minute window (auto-disables on expiry); `POST /disabletrace` turns it off immediately and cancels the pending timer. The trace middleware is now mounted unconditionally on `/v1/`, consulting `IsEnabled() || cfg.Trace` per request. With legacy `trace: true` config, every `/v1/*` request still writes a trace file (no regression from v0.14.0).
 
 ## v0.14.0
 
