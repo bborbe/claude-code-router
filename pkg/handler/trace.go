@@ -81,14 +81,30 @@ func nextRequestID() string {
 // NewTraceMiddleware wraps next in a handler that, for each request,
 // captures the full request (method, path, headers, body) and full
 // response (status, headers, body) and writes one JSON file to
-// traceDir. Authorization and x-api-key request headers are redacted
-// to "***" (case-insensitive header lookup); all other headers and
-// the entire request/response bodies are logged verbatim. Trace file
-// writes are best-effort: a write failure is logged at glog.Warningf
-// and the request still succeeds. The trace directory is created on
-// demand on the first write (MkdirAll, 0o700).
-func NewTraceMiddleware(next http.Handler, traceDir string) http.Handler {
+// traceDir — BUT only when trace is enabled. Trace is enabled when
+// either the injected traceState flag is true (toggled via
+// /enabletrace, bounded by a 5-min TTL) OR configAlwaysOn is true
+// (the legacy trace: config flag, deprecated). Authorization and
+// x-api-key request headers are redacted to "***" (case-insensitive);
+// all other headers and bodies are logged verbatim. Trace file
+// writes are best-effort: a write failure logs glog.Warningf and the
+// request still succeeds. The trace directory is created on demand
+// (MkdirAll, 0o700).
+func NewTraceMiddleware(
+	next http.Handler,
+	traceDir string,
+	traceState *TraceState,
+	configAlwaysOn bool,
+) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Per-request gate: trace is enabled when either the atomic flag
+		// is set (endpoint-toggle path) OR the legacy config flag is true.
+		// When both are false, short-circuit with zero body/read overhead.
+		if !traceState.IsEnabled() && !configAlwaysOn {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Capture request headers (with redaction) and body.
 		// Flat map[string]string: http.Header iteration returns canonical keys
 		// (Content-Type not content-type) — store verbatim so jq literal-key

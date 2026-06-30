@@ -188,6 +188,16 @@ func CreateRouterFromConfig(
 		libtime.NewCurrentDateTime(),
 	)
 
+	mux := buildMux(modelRouter, cfg.Trace)
+	return mux, nil
+}
+
+// buildMux wires the operator-local admin handlers and the model router
+// into a ServeMux. Admin endpoints are: /healthz, /readiness, /metrics,
+// /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, and the
+// catch-all 404 logger. The model router is wrapped in the trace
+// middleware when cfg.Trace is true.
+func buildMux(modelRouter http.Handler, trace bool) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
@@ -198,12 +208,19 @@ func CreateRouterFromConfig(
 	// long-running router daemon.
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
+	mux.Handle("/enabletrace", handler.NewEnableTraceHandler())
+	mux.Handle("/disabletrace", handler.NewDisableTraceHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	v1Handler := http.Handler(modelRouter)
-	if cfg.Trace {
-		glog.V(2).Infof("trace enabled")
-		v1Handler = handler.NewTraceMiddleware(v1Handler, traceDir())
+	if trace {
+		glog.V(2).Infof("trace enabled via config")
 	}
+	v1Handler = handler.NewTraceMiddleware(
+		v1Handler,
+		traceDir(),
+		handler.DefaultTraceState(),
+		trace,
+	)
 	mux.Handle("/v1/", v1Handler)
 	// HEAD / -> 200: Claude Code probes the base URL for liveness before
 	// dispatching its first /v1/messages on a fresh connection. Without
@@ -216,5 +233,5 @@ func CreateRouterFromConfig(
 	// path probes (`/foo/bar`, typos like `/messages` without /v1) show
 	// up alongside real traffic.
 	mux.Handle("/", handler.NewNotFoundHandler())
-	return mux, nil
+	return mux
 }
