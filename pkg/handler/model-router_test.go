@@ -421,6 +421,228 @@ var _ = Describe("ModelRouter", func() {
 		})
 	})
 
+	// Anti-fake: upstream token numbers are varied across all cases —
+	// a hardcoded constant extractor must fail these specs (spec 004 AC 8).
+	Context("token usage in [req] line", func() {
+		BeforeEach(func() {
+			_ = flag.Set("logtostderr", "true")
+			_ = flag.Set("v", "2")
+		})
+
+		It("appends in=<N> out=<N> for an SSE 200 response matching upstream usage", func() {
+			// Distinct numbers: input=42, output=17 (different from JSON case below).
+			streaming := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(
+					[]byte(
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
+					),
+				)
+			})
+			streamRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
+			}
+			mux = handler.NewModelRouter(
+				streamRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+			})
+			// Parse in=/out= from the line so a hardcoded append fails.
+			re := regexp.MustCompile(`in=(\d+) out=(\d+)`)
+			matches := re.FindStringSubmatch(out)
+			Expect(matches).To(HaveLen(3), "expected in=<N> out=<N> in: %s", out)
+			Expect(matches[1]).To(Equal("42"))
+			Expect(matches[2]).To(Equal("17"))
+		})
+
+		It("appends in=<N> out=<N> for a non-streaming JSON 200 response", func() {
+			// Distinct numbers: input=100, output=5 (different from SSE case above).
+			jsonHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(
+					[]byte(`{"id":"msg_01","usage":{"input_tokens":100,"output_tokens":5}}`),
+				)
+			})
+			jsonRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: jsonHandler},
+			}
+			mux = handler.NewModelRouter(
+				jsonRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+			})
+			re := regexp.MustCompile(`in=(\d+) out=(\d+)`)
+			matches := re.FindStringSubmatch(out)
+			Expect(matches).To(HaveLen(3), "expected in=<N> out=<N> in: %s", out)
+			Expect(matches[1]).To(Equal("100"))
+			Expect(matches[2]).To(Equal("5"))
+		})
+
+		It("appends in=- out=- for a 200 response with no parseable usage", func() {
+			jsonHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			})
+			jsonRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: jsonHandler},
+			}
+			mux = handler.NewModelRouter(
+				jsonRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+			})
+			Expect(out).To(ContainSubstring("in=- out=-"))
+		})
+
+		It("appends in=- out=- for a non-200 (502) response", func() {
+			erroring := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte("upstream unavailable"))
+			})
+			erroringRoute := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: erroring},
+			}
+			mux = handler.NewModelRouter(
+				erroringRoute,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+			})
+			Expect(out).To(ContainSubstring("status=502"))
+			Expect(out).To(ContainSubstring("in=- out=-"))
+		})
+
+		It("appends in=/out= for an alias-hit 200 SSE response", func() {
+			// Distinct numbers: input=7, output=3.
+			streaming := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(
+					[]byte(
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}\n\n",
+					),
+				)
+			})
+			streamRoutes := []handler.ModelRoute{
+				{Pattern: "MiniMax-*", ProviderName: "minimax", Handler: streaming},
+			}
+			aliases := map[string]string{"m3": "MiniMax-M3-highspeed"}
+			mux = handler.NewModelRouter(
+				streamRoutes,
+				"default-fallback",
+				fallback,
+				aliases,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"m3"}`))
+			})
+			Expect(
+				out,
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=\d+m?s`))
+			re := regexp.MustCompile(`in=(\d+) out=(\d+)`)
+			matches := re.FindStringSubmatch(out)
+			Expect(matches).To(HaveLen(3), "expected in=<N> out=<N> in: %s", out)
+			Expect(matches[1]).To(Equal("7"))
+			Expect(matches[2]).To(Equal("3"))
+		})
+
+		It("preserves the existing [req] field order with in=/out= appended at the end", func() {
+			streaming := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(
+					[]byte(
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":9,\"output_tokens\":2}}\n\n",
+					),
+				)
+			})
+			streamRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
+			}
+			mux = handler.NewModelRouter(
+				streamRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+			})
+			// Non-alias variant: model= before provider=, in=/out= after latency=.
+			Expect(out).To(MatchRegexp(
+				`\[req\] POST /v1/messages model=\S+ provider=\S+ status=200 latency=\d+m?s in=\d+ out=\d+`,
+			))
+		})
+
+		It("does not extract usage on a suppressed 200 (sampler returns false)", func() {
+			never := liblog.SamplerFunc(func() bool { return false })
+			streaming := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(
+					[]byte(
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":999,\"output_tokens\":888}}\n\n",
+					),
+				)
+			})
+			streamRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
+			}
+			mux = handler.NewModelRouter(
+				streamRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				never,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"claude-opus-4-7"}`))
+			})
+			// No [req] line at all when sampler suppresses.
+			Expect(out).NotTo(ContainSubstring("[req]"))
+			// Request still served.
+			Expect(rec.Code).To(Equal(http.StatusOK))
+		})
+	})
+
 	Context("metrics", func() {
 		var m *handler.Metrics
 
