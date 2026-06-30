@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -16,6 +18,7 @@ import (
 	liblog "github.com/bborbe/log"
 	librun "github.com/bborbe/run"
 	libtime "github.com/bborbe/time"
+	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -36,6 +39,17 @@ func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, 
 		return nil, errors.Wrapf(ctx, err, "build router")
 	}
 	return libhttp.NewServer(listen, router, streamingServerTimeouts), nil
+}
+
+// traceDir returns the fixed trace directory path.
+// Expand ~ via os.UserHomeDir to handle the tilde in ~/.claude-code-router/trace/.
+func traceDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Fallback: trace writes will fail gracefully at first write.
+		return filepath.Join(os.TempDir(), ".claude-code-router", "trace")
+	}
+	return filepath.Join(home, ".claude-code-router", "trace")
 }
 
 // streamingServerTimeouts raises libhttp.NewServer's default 30s
@@ -112,7 +126,11 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 	}
 
 	metrics := handler.NewMetrics(cfg.Aliases)
-	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
+	reg := cfg.PrometheusRegisterer
+	if reg == nil {
+		reg = prometheus.DefaultRegisterer
+	}
+	if err := metrics.Register(reg); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
 	modelRouter := handler.NewModelRouter(
@@ -136,7 +154,12 @@ func CreateRouterFromConfig(ctx context.Context, cfg *pkg.Config) (http.Handler,
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
-	mux.Handle("/v1/", modelRouter)
+	v1Handler := http.Handler(modelRouter)
+	if cfg.Trace {
+		glog.V(2).Infof("trace enabled")
+		v1Handler = handler.NewTraceMiddleware(v1Handler, traceDir())
+	}
+	mux.Handle("/v1/", v1Handler)
 	// HEAD / -> 200: Claude Code probes the base URL for liveness before
 	// dispatching its first /v1/messages on a fresh connection. Without
 	// this the probe hits the catch-all and logs `[404] HEAD /` ahead of
