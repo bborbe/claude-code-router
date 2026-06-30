@@ -1,8 +1,16 @@
 ---
-status: approved
+status: rejected
+originalStatus: failed
 spec: ["002"]
+execution_id: claude-code-router-sighup-reload-exec-011-spec-002-sighup-docs
+dark-factory-version: dev
 created: "2026-06-30T10:15:00Z"
 queued: "2026-06-30T09:24:34Z"
+started: "2026-06-30T10:35:42Z"
+completed: "2026-06-30T10:37:12Z"
+lastFailReason: 'validate completion report: completion report status: partial'
+rejected: "2026-06-30T10:58:26Z"
+rejectedReason: blocked on test-teardown fix in 012; regenerating docs prompt after 012 lands green
 ---
 
 <summary>

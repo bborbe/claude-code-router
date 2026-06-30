@@ -21,6 +21,7 @@ import (
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/factory"
@@ -36,19 +37,16 @@ func init() {
 	signal.Notify(sighupInterceptor, syscall.SIGHUP)
 }
 
-// registerSighup stops the package-level interceptor so RunSighupLoop's
-// signal.Notify can receive SIGHUP.
-func registerSighup() {
-	signal.Reset(syscall.SIGHUP)
-}
+// registerSighup is a no-op. The package-level sighupInterceptor is
+// registered once in init() and stays registered for the entire test
+// process. RunSighupLoop's own signal.Notify is additive — both
+// subscribers receive SIGHUP, which is fine.
+func registerSighup() {}
 
-// restoreSighup stops whatever channel RunSighupLoop registered and restores
-// the package-level interceptor.
-func restoreSighup() {
-	signal.Reset(syscall.SIGHUP)
-	// Re-register the package-level interceptor.
-	signal.Notify(sighupInterceptor, syscall.SIGHUP)
-}
+// restoreSighup is a no-op. RunSighupLoop already defers signal.Stop on
+// its own channel, so the package-level sighupInterceptor remains the only
+// subscriber after each test. No reset is needed.
+func restoreSighup() {}
 
 // captureStderr runs fn with os.Stderr piped into a buffer and returns
 // what was written. glog logs to stderr by default once -logtostderr is
@@ -112,6 +110,10 @@ var _ = Describe("Reloader", func() {
 		_ = flag.Set("logtostderr", "true")
 		// Enable V(1) so INFO-level logs (config reloaded) are captured.
 		_ = flag.Set("v", "1")
+		// Give each spec a fresh registry so metrics.Register does not
+		// warn about duplicate collectors when CreateRouterFromConfig is
+		// called multiple times across specs.
+		prometheus.DefaultRegisterer = prometheus.NewRegistry()
 	})
 
 	AfterEach(func() {
