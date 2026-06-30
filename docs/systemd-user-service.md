@@ -87,6 +87,14 @@ Restart:
 systemctl --user restart claude-code-router.service
 ```
 
+Reload config without restart (SIGHUP):
+
+```bash
+kill -HUP $(pgrep claude-code-router)
+```
+
+Edits to `~/.claude-code-router/config.yaml` (provider/alias/token changes) are picked up by sending SIGHUP — the router re-reads, validates, and atomically swaps the active config without dropping in-flight requests. The process keeps its PID. On success the log shows `config reloaded old_providers=N new_providers=M`; a malformed config is rejected and the old config stays active. Use `systemctl --user restart` only for binary upgrades or `--listen` address changes (those aren't hot-reloadable).
+
 Disable (prevent start on login):
 
 ```bash
