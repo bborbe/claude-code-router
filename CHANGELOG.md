@@ -4,14 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
-
-- feat: add trace-state primitive (`pkg/handler/trace_state.go`) with process-global atomic boolean and 5-minute TTL timer for bounded per-request trace logging. `Enable()` starts/resets the window; `Disable()` cancels it immediately; `IsEnabled()` returns the current flag. Repeated `Enable()` calls are idempotent on the flag but always reset the window. Mirrors `SetLoglevelAutoRevert` + `NewSetLoglevelHandlerWithRevert` pattern. `TRACE_TTL` env var is test-only.
-- feat: add `POST /enabletrace` and `POST /disabletrace` operator-local HTTP endpoints to toggle per-request trace logging without a router restart. `POST /enabletrace` turns tracing on for a bounded 5-minute window (auto-disables on expiry); `POST /disabletrace` turns it off immediately and cancels the pending timer. The trace middleware is now mounted unconditionally on `/v1/`, consulting `IsEnabled() || cfg.Trace` per request. With legacy `trace: true` config, every `/v1/*` request still writes a trace file (no regression from v0.14.0).
-
 ## v0.15.0
 
 - **feat: runtime trace toggle via /enabletrace and /disabletrace.** Two new operator-local HTTP endpoints (`POST /enabletrace`, `POST /disabletrace`) toggle per-request trace logging without a router restart. `enabletrace` turns tracing on for a bounded 5-minute window that auto-disables on expiry (repeated calls reset the window); `disabletrace` turns it off immediately and cancels the pending timer. The trace middleware is now mounted unconditionally on `/v1/` and consults a process-internal atomic flag per request (flag-OR-config: the legacy `trace:` config flag still works as an always-on opt-in, now deprecated). No persistence across restarts; the toggle does not depend on config reload or SIGHUP. `Authorization` and `x-api-key` redaction to `***` is unchanged. See [docs/config.md#trace](docs/config.md).
+- feat: SIGHUP-driven hot config reload. The router now picks up config file edits without a process restart: sending SIGHUP rebuilds the entire request-dispatch handler tree from the freshly loaded YAML and atomically swaps it in via `atomic.Value`. In-flight requests finish against the old tree undisturbed. Malformed config (missing file, invalid YAML, validation failure) is rejected and the old config stays active. A panic during mux rebuild is recovered and logged. Token values are never logged — only provider counts.
+- fix: prevent `signal: hangup` process termination after reloader test suite exits. The package-level SIGHUP interceptor now stays registered for the entire test process lifetime (instead of being repeatedly reset by per-test `signal.Reset` calls that created a race window). An `AfterSuite` hook drains and stops the interceptor before Go's exit sequence. Additionally, each spec gets a fresh `prometheus.DefaultRegisterer` via `BeforeEach` to silence duplicate-collector warnings.
 
 ## v0.14.0
 

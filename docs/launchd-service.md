@@ -131,6 +131,16 @@ make install
 launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router
 ```
 
+### Reload config without restart
+
+To pick up a config edit without restarting the process (in-flight requests are preserved), send SIGHUP:
+
+```bash
+kill -HUP $(pgrep claude-code-router)
+```
+
+The router logs `config reloaded old_providers=N new_providers=M` on success. A malformed config is rejected and the previous config stays active. Use `launchctl kickstart -k` (above) only for binary upgrades or `--listen` address changes — not for config edits.
+
 ## 6. Local hotfix flow (unpushed change → running router)
 
 Use when you have a fix in a feature worktree that you want **running on this Mac right now**, before the PR-merge-release cycle completes. Same `make install` + `kickstart` as upgrade, but from the feature worktree, not master.

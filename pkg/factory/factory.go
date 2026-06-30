@@ -24,6 +24,7 @@ import (
 
 	"github.com/bborbe/claude-code-router/pkg"
 	"github.com/bborbe/claude-code-router/pkg/handler"
+	"github.com/bborbe/claude-code-router/pkg/reloader"
 )
 
 // RouterOption configures CreateRouterFromConfig beyond the parsed Config.
@@ -56,7 +57,25 @@ func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, 
 	if err != nil {
 		return nil, errors.Wrapf(ctx, err, "build router")
 	}
-	return libhttp.NewServer(listen, router, streamingServerTimeouts), nil
+	reloader := reloader.NewReloader(
+		configPath,
+		router,
+		func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+			// On SIGHUP reload, CreateRouterFromConfig re-runs metrics.Register. At
+			// startup (the direct call above) collectors registered on DefaultRegisterer;
+			// a second Register on the same registerer returns AlreadyRegisteredError,
+			// which master made fatal. Re-registering on a throwaway registry avoids
+			// the duplicate error so the handler tree rebuilds against the new config.
+			// Trade-off: the reload's fresh counters are not scraped by /metrics (which
+			// is wired to DefaultRegisterer), so ccrouter_* metrics go stale after a
+			// reload until a full process restart. Acceptable for a local one-operator
+			// proxy where reloads are rare config edits; routing itself is unaffected.
+			return CreateRouterFromConfig(ctx, cfg, WithMetricsRegisterer(prometheus.NewRegistry()))
+		},
+	)
+	reloader.SeedConfig(cfg)
+	go reloader.RunSighupLoop(ctx)
+	return libhttp.NewServer(listen, reloader, streamingServerTimeouts), nil
 }
 
 // traceDir returns the fixed trace directory path.
