@@ -139,6 +139,11 @@ func NewModelRouter(
 				glog.Errorf("[alias] rewrite failed for %q -> %q: %v", model, resolved, rerr)
 				http.Error(w, "alias rewrite failed", http.StatusInternalServerError)
 				latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+				// origModel is populated here (extractModel already ran), so pass it through
+				// the sentinel chain — operators can see WHICH model triggered the rewrite
+				// failure. The body-too-large / body-read-failed paths above run BEFORE
+				// extractModel and use UnknownModelLabel for both provider and model because
+				// neither is known yet — the asymmetry is deliberate, not a style slip.
 				modelLabel := resolveModelLabel("", origModel)
 				metrics.ObserveRequest(
 					UnknownModelLabel,
