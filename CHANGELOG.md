@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: extract token counts for Anthropic SSE responses. v0.17.0's extractor worked for JSON responses (`minimax`, 452/457 = 99% success) but returned the `noUsage` sentinel for 100% of `anthropic-subscription` 200 responses (0/19) because (a) `Content-Type` sniffing via `rec.Header()` was unreliable for reverse-proxied SSE responses and (b) Anthropic splits `input_tokens` (in the `message_start` event) from `output_tokens` (in the terminal `message_delta` event), while the extractor scanned only the terminal event. Fix: detect SSE via `Content-Type` OR a content scan for the `event: message_` marker, and scan for BOTH `message_start` (for `input_tokens`) and terminal `message_delta` (for `output_tokens`), combining the two into a single `TokenUsage`. Partial-data behavior: `message_start` only → `in=<N> out=-`; `message_delta` only → `in=- out=<M>`; neither → `in=- out=-`. The `Unwrap()` chain, the 64 KB tail buffer, and the `[req]` line format are unchanged; the `minimax` JSON path is unchanged. See [specs/in-progress/005-bug-anthropic-tokens-not-extracted.md](specs/in-progress/005-bug-anthropic-tokens-not-extracted.md).
+
 ## v0.17.0
 
 - feat: wire token-usage extraction into `NewModelRouter` (prompt 3). The bounded tail buffer (`usageRecorder` from prompt 1) is inserted between the response writer and the upstream handler so every response byte is teed; `ExtractUsage` (prompt 2) runs after the handler returns to pull `input_tokens`/`output_tokens` from the tail. The `[req]` log line at `V(1)` now appends `in=<N> out=<N>` for 200 responses (SSE `message_delta` usage or non-streaming JSON `usage` block) and `in=- out=-` for non-200 or missing-usage paths. The sampler gate, `V(1)` gating, field order, and the `Unwrap()` chain are all unchanged. See [specs/in-progress/004-log-input-output-tokens.md](specs/in-progress/004-log-input-output-tokens.md).

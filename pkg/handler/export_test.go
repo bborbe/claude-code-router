@@ -43,3 +43,8 @@ func UsageRecorderStatus(u *usageRecorder) int {
 	}
 	return u.rec.status
 }
+
+// UsageLogLineValue exposes (TokenUsage).logLineValue for handler_test.
+func UsageLogLineValue(u TokenUsage) (in, out string) {
+	return u.logLineValue()
+}

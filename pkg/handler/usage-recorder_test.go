@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -324,14 +326,42 @@ var _ = Describe("extractUsage", func() {
 	})
 
 	Describe("content-type routing", func() {
-		It("returns noUsage when SSE body has JSON content-type", func() {
-			// Valid SSE tail but wrong content-type → JSON path runs, fails.
+		It(
+			"detects SSE via content scan when Content-Type is wrong (e.g. application/json)",
+			func() {
+				// spec 005 root cause (a): reverse-proxied SSE responses may present
+				// an empty or wrong Content-Type on the sniffed rec.Header(). The
+				// fix falls back to a content scan for the "event: message_" marker.
+				// Anti-fake: different numbers (42/17) from all other cases.
+				tail := []byte(
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "application/json")
+				Expect(usage.Input).To(Equal("42"))
+				Expect(usage.Output).To(Equal("17"))
+			},
+		)
+
+		It("detects SSE via content scan when Content-Type is empty", func() {
+			// Different numbers to defeat hardcoded fakes.
 			tail := []byte(
-				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
+				"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1000,\"output_tokens\":1}}}\n\n" +
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":250}}\n\n",
 			)
-			usage := handler.ExtractUsage(tail, "application/json")
-			Expect(usage.Input).To(Equal("-"))
-			Expect(usage.Output).To(Equal("-"))
+			usage := handler.ExtractUsage(tail, "")
+			Expect(usage.Input).To(Equal("1000"))
+			Expect(usage.Output).To(Equal("250"))
+		})
+
+		It("detects SSE via content scan when Content-Type is application/octet-stream", func() {
+			// Different numbers again.
+			tail := []byte(
+				"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":55,\"output_tokens\":1}}}\n\n" +
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":66}}\n\n",
+			)
+			usage := handler.ExtractUsage(tail, "application/octet-stream")
+			Expect(usage.Input).To(Equal("55"))
+			Expect(usage.Output).To(Equal("66"))
 		})
 	})
 
@@ -360,6 +390,111 @@ var _ = Describe("extractUsage", func() {
 			Expect(panicked).To(BeFalse(), "extractUsage panicked on pathological input")
 			Expect(in).To(Equal("-"))
 			Expect(out).To(Equal("-"))
+		})
+	})
+
+	// Anti-fake: upstream token numbers are varied across all cases —
+	// a hardcoded constant extractor must fail these specs (spec 005 AC).
+	Describe("Anthropic split-event SSE (input in message_start, output in message_delta)", func() {
+		It(
+			"combines input_tokens from message_start with output_tokens from message_delta",
+			func() {
+				// Anti-fake: distinct numbers 42/128 (different from single-event case).
+				tail := []byte(
+					"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"usage\":{\"input_tokens\":42,\"output_tokens\":1}}}\n\n" +
+						"event: content_block_start\ndata: {\"type\":\"content_block_start\"}\n\n" +
+						"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n\n" +
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":128}}\n\n" +
+						"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "text/event-stream")
+				Expect(usage.Input).To(Equal("42"))
+				Expect(usage.Output).To(Equal("128"))
+			},
+		)
+
+		It(
+			"logs 'in=<N> out=-' when only message_start survives in the tail (message_delta evicted / truncated)",
+			func() {
+				// Only the message_start block is present; the terminal message_delta was truncated by buffer overflow.
+				// Different numbers: input=999.
+				tail := []byte(
+					"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":999,\"output_tokens\":1}}}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "text/event-stream")
+				Expect(usage.Input).To(Equal("999"))
+				Expect(usage.Output).To(Equal(""))
+				in, out := handler.UsageLogLineValue(usage)
+				Expect(in).To(Equal("999"))
+				Expect(out).To(Equal("-"))
+			},
+		)
+
+		It(
+			"logs 'in=- out=<M>' when only message_delta survives in the tail (message_start evicted)",
+			func() {
+				// Only the terminal message_delta block is present.
+				// Different numbers: output=77.
+				tail := []byte(
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":77}}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "text/event-stream")
+				Expect(usage.Input).To(Equal(""))
+				Expect(usage.Output).To(Equal("77"))
+				in, out := handler.UsageLogLineValue(usage)
+				Expect(in).To(Equal("-"))
+				Expect(out).To(Equal("77"))
+			},
+		)
+
+		It("logs 'in=- out=-' when neither event survives in the tail", func() {
+			// No message_start or message_delta — only a content_block_delta.
+			tail := []byte(
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"filler\"}}\n\n",
+			)
+			usage := handler.ExtractUsage(tail, "text/event-stream")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+	})
+
+	Describe("reverse-proxy tee reception (spec 005 root cause b)", func() {
+		It("receives SSE bytes through a real httputil.ReverseProxy and extracts tokens", func() {
+			// Anti-fake: distinct numbers 11/22.
+			body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":1}}}\n\n" +
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":22}}\n\n"
+
+			upstream := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte(body))
+				}),
+			)
+			defer upstream.Close()
+
+			upstreamURL, err := url.Parse(upstream.URL)
+			Expect(err).NotTo(HaveOccurred())
+
+			proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
+
+			rr := httptest.NewRecorder()
+			ur := handler.NewUsageRecorder(rr)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"http://router.local/v1/messages",
+				strings.NewReader(""),
+			)
+			proxy.ServeHTTP(ur, req)
+
+			tail := handler.UsageRecorderTail(ur)
+			Expect(string(tail)).To(ContainSubstring("event: message_start"))
+			Expect(string(tail)).To(ContainSubstring("event: message_delta"))
+
+			// Content-Type at the outer recorder should be forwarded by the proxy,
+			// but the fix must also work if it was NOT — use whatever the recorder saw.
+			usage := handler.ExtractUsage(tail, rr.Header().Get("Content-Type"))
+			Expect(usage.Input).To(Equal("11"))
+			Expect(usage.Output).To(Equal("22"))
 		})
 	})
 })
