@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-07-01T09:33:40Z"
 generating: "2026-07-01T09:40:53Z"
 prompted: "2026-07-01T09:40:53Z"
+verifying: "2026-07-01T09:44:12Z"
 branch: dark-factory/bug-tokens-gzip-decompress
 ---
 
