@@ -180,3 +180,20 @@ Rationale: prompt 1 lands the collector shape and taxonomy in isolation (pure un
 ## Do-Nothing Option
 
 If we do nothing, the `ExtractUsage` tee stays observable only through the `[req]` log line — operators grep logs for token throughput, cannot chart per-provider or per-model breakdowns in Grafana, cannot alert on cumulative token spend. The `status_class` 4-bucket enum stays coarse — 429 rate-limit alerts have to be built against raw log lines, and the three router-side early-return paths stay invisible in metrics (`4xx`/`5xx` never emitted from those paths, so an operator staring at Grafana sees a healthy service while requests are being rejected at the door). The `model=""` empty-label bug stays — every "top-N models" panel has an empty-string row that is really the sum of all no-model-field probe traffic, misleading the operator. All three problems are workable via log-grep, but the point of the `/metrics` endpoint is that it is the machine-consumable observability contract; leaving it half-populated defeats its purpose.
+
+## Verification Result
+
+**Verified:** 2026-07-01T12:26:12Z (HEAD 68bb6bd, tag v0.18.0)
+**Binary:** ~/Documents/workspaces/go/bin/claude-code-router (installed post-merge, launchd PID 1819)
+**Scenario:** grep-based code+docs evidence on master + live scrape of the reloaded router at http://127.0.0.1:8788/metrics after real /v1/messages round-trips
+**Evidence:**
+- Live: `ccrouter_tokens_total{direction="input",model="claude-opus-4-7",provider="anthropic-subscription"} 235` and `direction="output" ... 10639` (plus claude-sonnet-5 tuples) — AC 2, 3
+- Live: `curl -s /metrics | grep -c 'model=""'` = 0 and `grep -cE 'status_class="(4xx|5xx)"'` = 0 — AC 4, 9
+- Code: `pkg/handler/metrics.go` defines `UnknownModelLabel = "_unknown_"` (L23), `TokensTotal` CounterVec (L52), `ObserveRequest(..., isRouterError bool)` (L124), `ObserveTokens(..., count int)` with zero/negative/unknown-direction drop (L144), `statusClass(status int, isRouterError bool)` 7-value enum (L180) — AC 5-12
+- Code: `pkg/handler/model-router.go` has 3 `ObserveRequest(..., true,)` early-return sites at L107-113 (413 body-too-large), L119-125 (400 body-read-fail), L142-148 (500 alias-rewrite-fail); `resolveModelLabel(resolved, orig)` sentinel chain at L279; `ObserveTokens` wired via `ExtractUsage` on 200-path at L195/L319 — AC 13, 14
+- Tests: `pkg/handler/metrics_test.go` has 16 `ObserveRequest(` calls, plus `It` cases for `statusClass(401/403/429/500/502)` and `ObserveTokens` zero/negative/unknown-direction drops (L102-234) — AC 5-12, 15
+- Tests: `pkg/handler/model-router_test.go` L1130 `resolves model label via sentinel chain: resolved > orig > _unknown_` covers all 3 sub-cases — AC 14
+- Docs: `docs/metrics.md` L23 (tokens_total row), L25 (7-value enum + 525 ceiling + ~450 practical + 150 tokens series), L55 (`sum by (provider, direction)` query), L72 (`AnthropicQuotaNearExhaustion` alert filter on `4xx_rate_limited`) — AC 16-20
+- CHANGELOG: `## v0.18.0` block at L7-12 documents new counter, 7-value taxonomy expansion (with breaking-change note), and empty-label fix — AC 21
+- CI: PR #33 CI job `test` conclusion=SUCCESS at 2026-07-01T12:17:26Z; release v0.18.0 tagged at merge — AC 1
+**Verdict:** PASS
