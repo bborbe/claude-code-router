@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"strconv"
 	"time"
 
 	bberrors "github.com/bborbe/errors"
@@ -102,10 +103,26 @@ func NewModelRouter(
 					maxBytesErr.Limit,
 				)
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+				metrics.ObserveRequest(
+					UnknownModelLabel,
+					UnknownModelLabel,
+					http.StatusRequestEntityTooLarge,
+					latency.Seconds(),
+					true,
+				)
 				return
 			}
 			glog.Errorf("[model-router] read body failed: %v", err)
 			http.Error(w, "read body failed", http.StatusBadRequest)
+			latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+			metrics.ObserveRequest(
+				UnknownModelLabel,
+				UnknownModelLabel,
+				http.StatusBadRequest,
+				latency.Seconds(),
+				true,
+			)
 			return
 		}
 		_ = r.Body.Close()
@@ -121,6 +138,15 @@ func NewModelRouter(
 			if rerr != nil {
 				glog.Errorf("[alias] rewrite failed for %q -> %q: %v", model, resolved, rerr)
 				http.Error(w, "alias rewrite failed", http.StatusInternalServerError)
+				latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+				modelLabel := resolveModelLabel("", origModel)
+				metrics.ObserveRequest(
+					UnknownModelLabel,
+					modelLabel,
+					http.StatusInternalServerError,
+					latency.Seconds(),
+					true,
+				)
 				return
 			}
 			glog.V(2).Infof("[alias] %s -> %s", model, resolved)
@@ -157,17 +183,14 @@ func NewModelRouter(
 		// only segment.
 		latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
 
-		metrics.ObserveRequest(providerName, origModel, status, latency.Seconds(), false)
+		modelLabel := resolveModelLabel(model, origModel)
+		metrics.ObserveRequest(providerName, modelLabel, status, latency.Seconds(), false)
 		glog.V(4).
 			Infof("[inbound.end] %s %s status=%d latency=%s", r.Method, r.URL.Path, status, latency)
 
-		// Always log non-200 (errors are signal); sample 200s to keep the
-		// steady-state log readable. sampler.IsSample() is non-pure (time-
-		// based sampler advances its window) — only consult it on the 200
-		// path so the 10s window is paced by real success density.
-		if status == http.StatusOK && !sampler.IsSample() {
-			return
-		}
+		// Extract usage and record tokens on every 2xx BEFORE the sampler
+		// gate so token metrics are counted even for ~90% suppressed 200s.
+		// The [req] log line remains sampler-gated (see below).
 		usage := noUsage
 		if status == http.StatusOK {
 			usage = ExtractUsage(
@@ -175,6 +198,15 @@ func NewModelRouter(
 				rec.Header().Get("Content-Type"),
 				rec.Header().Get("Content-Encoding"),
 			)
+			recordTokensFromUsage(metrics, providerName, modelLabel, usage)
+		}
+
+		// Always log non-200 (errors are signal); sample 200s to keep the
+		// steady-state log readable. sampler.IsSample() is non-pure (time-
+		// based sampler advances its window) — only consult it on the 200
+		// path so the 10s window is paced by real success density.
+		if status == http.StatusOK && !sampler.IsSample() {
+			return
 		}
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {
@@ -228,4 +260,62 @@ func extractModel(body []byte) string {
 		return ""
 	}
 	return req.Model
+}
+
+// resolveModelLabel picks the label value to emit into the
+// ccrouter_requests_total and ccrouter_tokens_total counters for the
+// model dimension. Resolution order (spec 007 Desired Behavior 5):
+//
+//  1. resolvedModel (post-alias resolved model, or the pre-alias model
+//     when no alias hit fired) — the string the upstream actually saw.
+//  2. origModel (pre-alias, from extractModel) — used when the alias
+//     branch nulled the resolved value or the resolved is otherwise
+//     empty.
+//  3. UnknownModelLabel ("_unknown_") — the sentinel returned when
+//     both are empty (probe traffic, misshapen body, router-side
+//     early-return before body parse).
+//
+// Never returns the empty string — the goal is that no ccrouter_*
+// series ever carries model="" (spec 007 Goal).
+func resolveModelLabel(resolvedModel, origModel string) string {
+	if resolvedModel != "" {
+		return resolvedModel
+	}
+	if origModel != "" {
+		return origModel
+	}
+	return UnknownModelLabel
+}
+
+// recordTokensFromUsage parses the string-shaped input/output token
+// counts produced by ExtractUsage and increments the ccrouter_tokens_total
+// counter twice — once for direction=input, once for direction=output.
+//
+// Drop rules (spec 007 Failure Modes):
+//   - Empty string or "-" sentinel   -> that direction is not counted;
+//     the other direction (if valid)
+//     is counted independently.
+//   - Non-numeric string (schema drift) -> parse fails, that direction
+//     is dropped, glog.V(2) diagnostic.
+//   - Zero or negative count         -> absorbed by ObserveTokens'
+//     zero-drop rule (no series
+//     created).
+//
+// Token counting is best-effort observability: a parse failure never
+// affects the request-serving path.
+func recordTokensFromUsage(metrics *Metrics, provider, model string, usage TokenUsage) {
+	recordTokenDirection(metrics, provider, model, "input", usage.Input)
+	recordTokenDirection(metrics, provider, model, "output", usage.Output)
+}
+
+func recordTokenDirection(metrics *Metrics, provider, model, direction, raw string) {
+	if raw == "" || raw == "-" {
+		return
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		glog.V(2).Infof("[tokens] parse %s=%q failed: %v", direction, raw, err)
+		return
+	}
+	metrics.ObserveTokens(provider, model, direction, n)
 }

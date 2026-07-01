@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["007"]
+summary: 'Wire token counter and router-error taxonomy into NewModelRouter: ExtractUsage moved above sampler gate, three early-return paths call ObserveRequest(isRouterError=true), model label resolved via sentinel chain'
+execution_id: claude-code-router-tokens-exec-020-spec-007-model-router-wiring
+dark-factory-version: dev
 created: "2026-07-01T10:55:00Z"
 queued: "2026-07-01T11:03:34Z"
+started: "2026-07-01T11:07:08Z"
+completed: "2026-07-01T11:11:46Z"
 ---
 
 <summary>
