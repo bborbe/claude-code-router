@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["007"]
+summary: Updated docs/metrics.md (Series table, status_class cardinality, Grafana queries, alert) and CHANGELOG.md (## Unreleased) to reflect ccrouter_tokens_total counter and 7-value status_class taxonomy shipped by prompts 1 and 2
+execution_id: claude-code-router-tokens-exec-021-spec-007-docs-and-changelog
+dark-factory-version: dev
 created: "2026-07-01T10:55:00Z"
 queued: "2026-07-01T11:03:34Z"
+started: "2026-07-01T11:11:47Z"
+completed: "2026-07-01T11:13:19Z"
 ---
 
 <summary>

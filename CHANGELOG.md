@@ -6,15 +6,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-- feat: Add `ccrouter_tokens_total` counter labeled `provider`, `model`, `direction` for LLM token throughput observability, with `ObserveTokens` drop rules (zero/negative/unknown-direction silently no-op)
-- feat: Expand `status_class` enum from 4 buckets (`2xx`/`3xx`/`4xx`/`5xx`) to 7 values (`2xx`, `3xx`, `4xx_auth`, `4xx_rate_limited`, `4xx_bad_request`, `5xx_upstream`, `5xx_router`); `ObserveRequest` gains trailing `isRouterError bool` argument
-- feat: Add `UnknownModelLabel = "_unknown_"` exported sentinel constant for empty-model traffic
-- refactor: `Metrics` struct gains `TokensTotal *prometheus.CounterVec` field; `NewMetrics` and `Register` updated accordingly
-
-- feat: Wire `ccrouter_tokens_total` into `NewModelRouter` via `recordTokensFromUsage` — `ExtractUsage` runs above the sampler gate on every 2xx so token metrics are counted even for ~90% suppressed 200s; `[req]` log line remains sampler-gated
-- feat: Route three router-side early-return paths through `ObserveRequest(..., isRouterError=true)`: body-too-large 413 → `4xx_bad_request`, body-read-failed 400 → `4xx_bad_request`, alias-rewrite-failed 500 → `5xx_router`; previously invisible in metrics
-- feat: Resolve model label for both counters via sentinel chain: post-alias resolved model → pre-alias `origModel` → `UnknownModelLabel`; no `model=""` empty label reaches Prometheus
-- refactor: Add `resolveModelLabel`, `recordTokensFromUsage`, and `recordTokenDirection` helpers in `model-router.go`; add Ginkgo integration coverage for token counter, router-error taxonomy, and sentinel-chain resolution
+- feat: add `ccrouter_tokens_total{provider,model,direction}` counter fed from the already-landed `ExtractUsage` tee. Operators can chart `sum by (provider, direction) (rate(ccrouter_tokens_total[5m]))` to see LLM token throughput per provider and per model. Direction is bounded to `input`/`output`; zero, negative, non-numeric, and unknown-direction inputs are dropped at the `ObserveTokens` seam so bad upstream data never inflates Prometheus. Non-2xx responses do not increment the counter — token counting is a strict success-path observation.
+- feat: expand `ccrouter_requests_total{status_class}` from 4 buckets (`2xx`/`3xx`/`4xx`/`5xx`) to a 7-value taxonomy (`2xx`, `3xx`, `4xx_auth` for 401/403, `4xx_rate_limited` for 429, `4xx_bad_request` for other 4xx, `5xx_upstream` for upstream 5xx, `5xx_router` for router-side 5xx). Operators can now alert on `status_class="4xx_rate_limited"` specifically instead of any 4xx, distinguish auth failures from body-parse failures, and separate upstream faults from router-side rejections. See `docs/metrics.md` for updated Grafana + alerting examples. **Breaking:** this is a clean supersede — dashboards or alerts built against `status_class="4xx"` or `status_class="5xx"` will return empty on merge and must be updated to the 7-value enum.
+- feat: route the three router-side early-return paths (body-too-large 413, body-read-failed 400, alias-rewrite-failed 500) through `metrics.ObserveRequest(..., isRouterError=true)` so they emit `4xx_bad_request` / `5xx_router` in `ccrouter_requests_total`. Previously these paths bypassed metrics entirely — an operator staring at Grafana saw a healthy service while requests were being rejected at the door.
+- fix: model label on `ccrouter_requests_total` and `ccrouter_tokens_total` no longer emits `model=""` for probe traffic or misshapen bodies. New sentinel chain (post-alias resolved → pre-alias original → `_unknown_`) resolves the label at the call site; the exported `handler.UnknownModelLabel = "_unknown_"` constant provides the sentinel. Every "top-N models" Grafana panel now breaks down real model names — no empty-string row hiding the sum of no-model-field traffic.
+- **Breaking:** `handler.Metrics.ObserveRequest` signature gains a 5th positional argument `isRouterError bool`. The happy path at `NewModelRouter` passes `false`; the three router-side early-return paths pass `true`. Existing `metrics_test.go` call sites (8) were updated in lockstep.
 
 ## v0.17.2
 
