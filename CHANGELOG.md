@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.17.1
 
 - fix: extract token counts for Anthropic SSE responses. v0.17.0's extractor worked for JSON responses (`minimax`, 452/457 = 99% success) but returned the `noUsage` sentinel for 100% of `anthropic-subscription` 200 responses (0/19) because (a) `Content-Type` sniffing via `rec.Header()` was unreliable for reverse-proxied SSE responses and (b) Anthropic splits `input_tokens` (in the `message_start` event) from `output_tokens` (in the terminal `message_delta` event), while the extractor scanned only the terminal event. Fix: detect SSE via `Content-Type` OR a content scan for the `event: message_` marker, and scan for BOTH `message_start` (for `input_tokens`) and terminal `message_delta` (for `output_tokens`), combining the two into a single `TokenUsage`. Partial-data behavior: `message_start` only → `in=<N> out=-`; `message_delta` only → `in=- out=<M>`; neither → `in=- out=-`. The `Unwrap()` chain, the 64 KB tail buffer, and the `[req]` line format are unchanged; the `minimax` JSON path is unchanged. See [specs/in-progress/005-bug-anthropic-tokens-not-extracted.md](specs/in-progress/005-bug-anthropic-tokens-not-extracted.md).
 
