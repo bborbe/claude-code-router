@@ -170,7 +170,11 @@ func NewModelRouter(
 		}
 		usage := noUsage
 		if status == http.StatusOK {
-			usage = ExtractUsage(ur.Tail(), rec.Header().Get("Content-Type"))
+			usage = ExtractUsage(
+				ur.Tail(),
+				rec.Header().Get("Content-Type"),
+				rec.Header().Get("Content-Encoding"),
+			)
 		}
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {

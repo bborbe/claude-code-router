@@ -6,6 +6,8 @@ package handler_test
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"io"
 	"net"
@@ -228,7 +230,7 @@ var _ = Describe("extractUsage", func() {
 			tail := []byte(
 				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
 			)
-			usage := handler.ExtractUsage(tail, "text/event-stream")
+			usage := handler.ExtractUsage(tail, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("42"))
 			Expect(usage.Output).To(Equal("17"))
 		})
@@ -240,7 +242,7 @@ var _ = Describe("extractUsage", func() {
 					"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n\n" +
 					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":300,\"output_tokens\":99}}\n\n",
 			)
-			usage := handler.ExtractUsage(tail, "text/event-stream")
+			usage := handler.ExtractUsage(tail, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("300"))
 			Expect(usage.Output).To(Equal("99"))
 		})
@@ -258,7 +260,7 @@ var _ = Describe("extractUsage", func() {
 			}
 			tail := append(filler, terminalEvent...)
 
-			usage := handler.ExtractUsage(tail, "text/event-stream")
+			usage := handler.ExtractUsage(tail, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("7"))
 			Expect(usage.Output).To(Equal("3"))
 		})
@@ -271,13 +273,13 @@ var _ = Describe("extractUsage", func() {
 			}
 			tail := filler
 
-			usage := handler.ExtractUsage(tail, "text/event-stream")
+			usage := handler.ExtractUsage(tail, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
 
 		It("returns noUsage for empty tail", func() {
-			usage := handler.ExtractUsage(nil, "text/event-stream")
+			usage := handler.ExtractUsage(nil, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
@@ -287,7 +289,7 @@ var _ = Describe("extractUsage", func() {
 			tail := []byte(
 				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42",
 			)
-			usage := handler.ExtractUsage(tail, "text/event-stream")
+			usage := handler.ExtractUsage(tail, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
@@ -297,14 +299,14 @@ var _ = Describe("extractUsage", func() {
 		It("extracts usage from JSON with usage block", func() {
 			// Use distinct numbers: input=100, output=5.
 			tail := []byte(`{"id":"msg_01","usage":{"input_tokens":100,"output_tokens":5}}`)
-			usage := handler.ExtractUsage(tail, "application/json")
+			usage := handler.ExtractUsage(tail, "application/json", "")
 			Expect(usage.Input).To(Equal("100"))
 			Expect(usage.Output).To(Equal("5"))
 		})
 
 		It("returns noUsage when usage block is absent", func() {
 			tail := []byte(`{"ok":true}`)
-			usage := handler.ExtractUsage(tail, "application/json")
+			usage := handler.ExtractUsage(tail, "application/json", "")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
@@ -312,14 +314,14 @@ var _ = Describe("extractUsage", func() {
 		It("reports zero tokens as 0 when usage is present with zeros", func() {
 			// Upstream literally sent zeros — extractor reports what it parsed.
 			tail := []byte(`{"usage":{"input_tokens":0,"output_tokens":0}}`)
-			usage := handler.ExtractUsage(tail, "application/json")
+			usage := handler.ExtractUsage(tail, "application/json", "")
 			Expect(usage.Input).To(Equal("0"))
 			Expect(usage.Output).To(Equal("0"))
 		})
 
 		It("returns noUsage for malformed JSON", func() {
 			tail := []byte(`{not json`)
-			usage := handler.ExtractUsage(tail, "application/json")
+			usage := handler.ExtractUsage(tail, "application/json", "")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
@@ -336,7 +338,7 @@ var _ = Describe("extractUsage", func() {
 				tail := []byte(
 					"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":42,\"output_tokens\":17}}\n\n",
 				)
-				usage := handler.ExtractUsage(tail, "application/json")
+				usage := handler.ExtractUsage(tail, "application/json", "")
 				Expect(usage.Input).To(Equal("42"))
 				Expect(usage.Output).To(Equal("17"))
 			},
@@ -348,7 +350,7 @@ var _ = Describe("extractUsage", func() {
 				"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1000,\"output_tokens\":1}}}\n\n" +
 					"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":250}}\n\n",
 			)
-			usage := handler.ExtractUsage(tail, "")
+			usage := handler.ExtractUsage(tail, "", "")
 			Expect(usage.Input).To(Equal("1000"))
 			Expect(usage.Output).To(Equal("250"))
 		})
@@ -359,7 +361,7 @@ var _ = Describe("extractUsage", func() {
 				"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":55,\"output_tokens\":1}}}\n\n" +
 					"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":66}}\n\n",
 			)
-			usage := handler.ExtractUsage(tail, "application/octet-stream")
+			usage := handler.ExtractUsage(tail, "application/octet-stream", "")
 			Expect(usage.Input).To(Equal("55"))
 			Expect(usage.Output).To(Equal("66"))
 		})
@@ -383,7 +385,7 @@ var _ = Describe("extractUsage", func() {
 						panicked = true
 					}
 				}()
-				u := handler.ExtractUsage([]byte(deepJSON), "application/json")
+				u := handler.ExtractUsage([]byte(deepJSON), "application/json", "")
 				return u.Input, u.Output
 			}
 			in, out := fn()
@@ -407,7 +409,7 @@ var _ = Describe("extractUsage", func() {
 						"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":128}}\n\n" +
 						"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
 				)
-				usage := handler.ExtractUsage(tail, "text/event-stream")
+				usage := handler.ExtractUsage(tail, "text/event-stream", "")
 				Expect(usage.Input).To(Equal("42"))
 				Expect(usage.Output).To(Equal("128"))
 			},
@@ -421,7 +423,7 @@ var _ = Describe("extractUsage", func() {
 				tail := []byte(
 					"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":999,\"output_tokens\":1}}}\n\n",
 				)
-				usage := handler.ExtractUsage(tail, "text/event-stream")
+				usage := handler.ExtractUsage(tail, "text/event-stream", "")
 				Expect(usage.Input).To(Equal("999"))
 				Expect(usage.Output).To(Equal(""))
 				in, out := handler.UsageLogLineValue(usage)
@@ -438,7 +440,7 @@ var _ = Describe("extractUsage", func() {
 				tail := []byte(
 					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":77}}\n\n",
 				)
-				usage := handler.ExtractUsage(tail, "text/event-stream")
+				usage := handler.ExtractUsage(tail, "text/event-stream", "")
 				Expect(usage.Input).To(Equal(""))
 				Expect(usage.Output).To(Equal("77"))
 				in, out := handler.UsageLogLineValue(usage)
@@ -452,7 +454,7 @@ var _ = Describe("extractUsage", func() {
 			tail := []byte(
 				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"filler\"}}\n\n",
 			)
-			usage := handler.ExtractUsage(tail, "text/event-stream")
+			usage := handler.ExtractUsage(tail, "text/event-stream", "")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
@@ -492,9 +494,162 @@ var _ = Describe("extractUsage", func() {
 
 			// Content-Type at the outer recorder should be forwarded by the proxy,
 			// but the fix must also work if it was NOT — use whatever the recorder saw.
-			usage := handler.ExtractUsage(tail, rr.Header().Get("Content-Type"))
+			usage := handler.ExtractUsage(tail, rr.Header().Get("Content-Type"), "")
 			Expect(usage.Input).To(Equal("11"))
 			Expect(usage.Output).To(Equal("22"))
+		})
+	})
+
+	// Anti-fake: upstream token numbers are varied across all cases —
+	// a hardcoded constant extractor must fail these specs (spec 006 AC).
+	Describe("Content-Encoding: gzip decompression (spec 006)", func() {
+		gzipBytes := func(raw []byte) []byte {
+			var buf bytes.Buffer
+			gw := gzip.NewWriter(&buf)
+			_, err := gw.Write(raw)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gw.Close()).To(Succeed())
+			return buf.Bytes()
+		}
+
+		It("decompresses gzipped JSON and extracts usage", func() {
+			// Anti-fake: input=142, output=271 — distinct from every other case.
+			raw := []byte(`{"id":"msg_g1","usage":{"input_tokens":142,"output_tokens":271}}`)
+			tail := gzipBytes(raw)
+			usage := handler.ExtractUsage(tail, "application/json", "gzip")
+			Expect(usage.Input).To(Equal("142"))
+			Expect(usage.Output).To(Equal("271"))
+		})
+
+		It("decompresses gzipped split-event SSE and combines input+output tokens", func() {
+			// Anti-fake: input=513, output=624.
+			raw := []byte(
+				"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_g2\",\"usage\":{\"input_tokens\":513,\"output_tokens\":1}}}\n\n" +
+					"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"x\"}}\n\n" +
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":624}}\n\n",
+			)
+			tail := gzipBytes(raw)
+			usage := handler.ExtractUsage(tail, "text/event-stream", "gzip")
+			Expect(usage.Input).To(Equal("513"))
+			Expect(usage.Output).To(Equal("624"))
+		})
+
+		It("treats Content-Encoding case-insensitively (GZIP == gzip)", func() {
+			// Anti-fake: input=88, output=911.
+			raw := []byte(`{"usage":{"input_tokens":88,"output_tokens":911}}`)
+			tail := gzipBytes(raw)
+			usage := handler.ExtractUsage(tail, "application/json", "GZIP")
+			Expect(usage.Input).To(Equal("88"))
+			Expect(usage.Output).To(Equal("911"))
+		})
+
+		It("trims surrounding whitespace on Content-Encoding", func() {
+			// Anti-fake: input=17, output=29.
+			raw := []byte(`{"usage":{"input_tokens":17,"output_tokens":29}}`)
+			tail := gzipBytes(raw)
+			usage := handler.ExtractUsage(tail, "application/json", "  gzip  ")
+			Expect(usage.Input).To(Equal("17"))
+			Expect(usage.Output).To(Equal("29"))
+		})
+
+		It(
+			"decompresses a large gzipped body (1.5 MiB uncompressed) that fits under the 2 MiB tail cap",
+			func() {
+				// Anti-fake: input=2048, output=3072.
+				const padSize = 1<<20 + (1 << 19) // 1.5 MiB of filler
+				padding := strings.Repeat("x", padSize)
+				raw := []byte(
+					`{"pad":"` + padding + `","usage":{"input_tokens":2048,"output_tokens":3072}}`,
+				)
+				tail := gzipBytes(raw)
+				// Sanity: compressed size should comfortably fit under 2 MiB.
+				Expect(len(tail)).To(BeNumerically("<", handler.TailBufferBytes))
+				usage := handler.ExtractUsage(tail, "application/json", "gzip")
+				Expect(usage.Input).To(Equal("2048"))
+				Expect(usage.Output).To(Equal("3072"))
+			},
+		)
+
+		It(
+			"returns noUsage cleanly when the gzipped body was truncated by the tail buffer",
+			func() {
+				// A 3 MiB uncompressed JSON gzipped will exceed the 2 MiB tail cap.
+				// Use incompressible-ish random-looking content so gzip doesn't
+				// shrink it below the cap (anti-fake: a repeated byte compresses
+				// to ~0.1% and would falsely fit).
+				const rawSize = 3 << 20
+				raw := make([]byte, rawSize)
+				for i := range raw {
+					raw[i] = byte((i*31 + 7) & 0xff)
+				}
+				// Prepend a JSON prefix so if decompression somehow succeeds, the
+				// JSON parse still fails and returns noUsage — belt-and-braces.
+				compressed := gzipBytes(raw)
+				// Force truncation to <= TailBufferBytes.
+				if len(compressed) > handler.TailBufferBytes {
+					compressed = compressed[:handler.TailBufferBytes]
+				}
+				usage := handler.ExtractUsage(compressed, "application/json", "gzip")
+				Expect(usage.Input).To(Equal("-"))
+				Expect(usage.Output).To(Equal("-"))
+			},
+		)
+
+		It("preserves the identity path when Content-Encoding is empty", func() {
+			// Anti-fake: input=61, output=83.
+			tail := []byte(`{"usage":{"input_tokens":61,"output_tokens":83}}`)
+			usage := handler.ExtractUsage(tail, "application/json", "")
+			Expect(usage.Input).To(Equal("61"))
+			Expect(usage.Output).To(Equal("83"))
+		})
+
+		It("treats Content-Encoding: identity as a no-op", func() {
+			// Anti-fake: input=71, output=89.
+			tail := []byte(`{"usage":{"input_tokens":71,"output_tokens":89}}`)
+			usage := handler.ExtractUsage(tail, "application/json", "identity")
+			Expect(usage.Input).To(Equal("71"))
+			Expect(usage.Output).To(Equal("89"))
+		})
+
+		It("returns noUsage for unsupported encodings (br)", func() {
+			// Even if the bytes are structurally valid JSON with a usage block,
+			// an unsupported encoding must not extract — spec 006 defers br/
+			// deflate/zstd. The [req] line logs in=- out=-.
+			raw := []byte(`{"usage":{"input_tokens":31,"output_tokens":47}}`)
+			usage := handler.ExtractUsage(raw, "application/json", "br")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+
+		It("returns noUsage on corrupt gzip bytes (no panic)", func() {
+			// Random bytes that are not a valid gzip header.
+			corrupt := []byte{
+				0xde,
+				0xad,
+				0xbe,
+				0xef,
+				0x01,
+				0x02,
+				0x03,
+				0x04,
+				0x05,
+				0x06,
+				0x07,
+				0x08,
+			}
+			usage := handler.ExtractUsage(corrupt, "application/json", "gzip")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+
+		It("returns noUsage for chained encodings (gzip, br)", func() {
+			// The decoder currently supports only single-encoding gzip; a
+			// chained header is treated as an unknown encoding and yields
+			// noUsage (spec 006 Failure Modes).
+			raw := []byte(`{"usage":{"input_tokens":13,"output_tokens":19}}`)
+			usage := handler.ExtractUsage(raw, "application/json", "gzip, br")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
 		})
 	})
 })
