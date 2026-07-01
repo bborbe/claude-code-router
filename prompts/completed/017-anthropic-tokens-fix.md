@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["005"]
+spec: [005-bug-anthropic-tokens-not-extracted]
 summary: 'Fixed Anthropic SSE token extraction: widened SSE detection to Content-Type OR content-scan fallback, rewrote extractUsageSSE to scan for message_start (input_tokens) + message_delta (output_tokens) and combine them, added Ginkgo specs for split-event, wrong/empty Content-Type, and reverse-proxy tee paths, added UsageLogLineValue export, added CHANGELOG Unreleased fix entry.'
 execution_id: claude-code-router-bug-token-anthropic-exec-017-anthropic-tokens-fix
 dark-factory-version: dev

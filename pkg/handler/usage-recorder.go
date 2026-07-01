@@ -6,20 +6,66 @@ package handler
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 )
 
 // TailBufferBytes caps the number of response-body bytes retained for
-// post-request usage extraction. The terminal Anthropic SSE
-// `message_delta` event (which carries usage) is always the last chunk
-// of a stream, and non-streaming JSON usage bodies fit comfortably
-// within this bound; a full 5 MB streaming response therefore occupies
-// at most TailBufferBytes of additional memory. This is a frozen
-// constant, NOT a config field — see spec 004 Non-goals.
-const TailBufferBytes = 64 << 10 // 64 KB
+// post-request usage extraction. The bound must hold the FULL response
+// body when the upstream sends `Content-Encoding: gzip` because gzip is
+// not self-synchronizing — decompression requires the start-of-stream
+// bytes, so a mid-stream tail is unrecoverable. Real Anthropic 200
+// responses have been observed at ~500 KB gzipped through
+// Cloudflare (spec 006 Reproduction). 2 MiB is a frozen constant
+// chosen to cover the observed p99 with headroom; it is NOT a YAML
+// field (spec 006 Non-goals). A full 5 MB streaming response therefore
+// occupies at most TailBufferBytes of additional memory.
+const TailBufferBytes = 2 << 20 // 2 MiB
+
+// decodedTailCapBytes bounds the number of decompressed bytes read from
+// a gzip stream during usage extraction. A hostile ~2 MiB gzip payload
+// can inflate to gigabytes; this bound keeps memory + CPU predictable.
+// Frozen constant, NOT a config field (spec 006 Non-goals).
+const decodedTailCapBytes = 8 << 20 // 8 MiB
+
+// decodeIfEncoded returns tail decompressed when contentEncoding names a
+// supported encoding (currently: gzip only), or tail unchanged when the
+// encoding is empty or "identity" (both are no-op encodings per RFC 9110
+// §8.4). For any other encoding value ("br", "deflate", "zstd", chained
+// encodings, unknown tokens) the helper returns nil so the caller's
+// len(tail) == 0 guard short-circuits to noUsage — spec 006 defers those
+// encodings and requires the [req] line to log in=- out=-.
+//
+// Decompression is bounded by decodedTailCapBytes to defend against
+// decompression bombs. A truncated gzip stream, corrupt bytes, or an
+// I/O error returns nil (again short-circuiting to noUsage via the
+// caller's empty-tail guard). This function itself does not panic;
+// io.ReadAll and gzip.NewReader return errors on every failure shape
+// observed on real Anthropic + Cloudflare traffic.
+func decodeIfEncoded(tail []byte, contentEncoding string) []byte {
+	enc := strings.ToLower(strings.TrimSpace(contentEncoding))
+	switch enc {
+	case "", "identity":
+		return tail
+	case "gzip":
+		gz, err := gzip.NewReader(bytes.NewReader(tail))
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = gz.Close() }()
+		decoded, err := io.ReadAll(io.LimitReader(gz, decodedTailCapBytes))
+		if err != nil {
+			return nil
+		}
+		return decoded
+	default:
+		return nil
+	}
+}
 
 // usageRecorder wraps a *statusRecorder and tees every byte written to
 // the response into a bounded tail buffer (≤ TailBufferBytes) that
@@ -225,7 +271,7 @@ func (u TokenUsage) logLineValue() (in, out string) {
 //   - Neither parseable                              -> noUsage                              (logs "in=- out=-")
 //
 //nolint:revive // intentionally exported for test package access
-func ExtractUsage(tail []byte, contentType string) (usage TokenUsage) {
+func ExtractUsage(tail []byte, contentType, contentEncoding string) (usage TokenUsage) {
 	defer func() {
 		if r := recover(); r != nil {
 			usage = noUsage
@@ -233,6 +279,18 @@ func ExtractUsage(tail []byte, contentType string) (usage TokenUsage) {
 	}()
 
 	// Empty tail: nothing to parse.
+	if len(tail) == 0 {
+		return noUsage
+	}
+
+	// Decode Content-Encoding (currently: gzip only). See spec 006:
+	// Cloudflare + Anthropic send gzipped bodies to the router, and
+	// text scans over compressed bytes cannot find `usage` or
+	// `event: message_` markers. decodeIfEncoded returns tail unchanged
+	// when the encoding is empty or "identity"; returns decompressed
+	// bytes for gzip; returns nil for unsupported encodings or on
+	// gzip error (defers to the empty-check that follows).
+	tail = decodeIfEncoded(tail, contentEncoding)
 	if len(tail) == 0 {
 		return noUsage
 	}
