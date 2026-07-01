@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.18.0
 
 - feat: add `ccrouter_tokens_total{provider,model,direction}` counter fed from the already-landed `ExtractUsage` tee. Operators can chart `sum by (provider, direction) (rate(ccrouter_tokens_total[5m]))` to see LLM token throughput per provider and per model. Direction is bounded to `input`/`output`; zero, negative, non-numeric, and unknown-direction inputs are dropped at the `ObserveTokens` seam so bad upstream data never inflates Prometheus. Non-2xx responses do not increment the counter — token counting is a strict success-path observation.
 - feat: expand `ccrouter_requests_total{status_class}` from 4 buckets (`2xx`/`3xx`/`4xx`/`5xx`) to a 7-value taxonomy (`2xx`, `3xx`, `4xx_auth` for 401/403, `4xx_rate_limited` for 429, `4xx_bad_request` for other 4xx, `5xx_upstream` for upstream 5xx, `5xx_router` for router-side 5xx). Operators can now alert on `status_class="4xx_rate_limited"` specifically instead of any 4xx, distinguish auth failures from body-parse failures, and separate upstream faults from router-side rejections. See `docs/metrics.md` for updated Grafana + alerting examples. **Breaking:** this is a clean supersede — dashboards or alerts built against `status_class="4xx"` or `status_class="5xx"` will return empty on merge and must be updated to the 7-value enum.
