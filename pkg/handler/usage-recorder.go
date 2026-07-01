@@ -189,17 +189,23 @@ func (u TokenUsage) logLineValue() (in, out string) {
 }
 
 // extractUsage pulls input/output token counts out of a response-body
-// tail buffer. SSE responses (Content-Type: text/event-stream) are
-// scanned for the terminal `message_delta` event whose `usage` field
-// carries input_tokens/output_tokens; the terminal event is always the
-// last chunk of an Anthropic stream, so it lives in the tail. JSON
+// tail buffer. SSE responses (Content-Type: text/event-stream OR bytes
+// containing "event: message_") are scanned for the LAST
+// `event: message_start` event (which carries input_tokens) and the
+// LAST `event: message_delta` event (which carries output_tokens) and
+// the two are combined into a single TokenUsage. Anthropic splits the
+// two counts across these two events; the terminal message_delta is
+// always the last chunk of a stream, so it lives in the tail. JSON
 // responses are parsed for a top-level `usage` object.
 //
-// Detection is by Content-Type: strings.Contains(contentType, "text/event-stream")
-// is the primary signal because (a) the upstream sets that Content-Type on
-// every Anthropic SSE response reliably, and (b) content-scanning for `event:`
-// requires partial-line state and is fragile when the tail buffer is truncated
-// mid-event. JSON parsing is the fallback for any other content type.
+// SSE detection is by Content-Type OR content scan: the primary signal
+// is strings.Contains(contentType, "text/event-stream"), but
+// reverse-proxied Anthropic responses have been observed with an empty
+// or wrong Content-Type on the sniffed rec.Header() (see spec 005).
+// The fallback bytes.Contains(tail, "event: message_") is cheap (single
+// scan over ≤ 64 KB) and specific enough to Anthropic's protocol to
+// keep the false-positive risk low. JSON parsing is the fallback for
+// any other content type.
 //
 // Extraction is best-effort: truncated tails, malformed JSON/SSE, missing usage,
 // or zero-token usage all yield the noUsage sentinel ("-" / "-") and never an
@@ -211,8 +217,12 @@ func (u TokenUsage) logLineValue() (in, out string) {
 // input_tokens/output_tokens integers are parsed. This means a present
 // `{"input_tokens":0,"output_tokens":0}` is correctly reported as "0"/"0",
 // and a missing usage block returns the sentinel.
-// ExtractUsage is the exported alias for the package-internal extractUsage.
-// It exists so handler_test can call it directly as a pure function.
+//
+// Partial-data policy:
+//   - Both message_start and message_delta parseable -> TokenUsage{Input:"<N>", Output:"<M>"}
+//   - Only message_start parseable                   -> TokenUsage{Input:"<N>", Output:""}  (logs "in=<N> out=-")
+//   - Only message_delta parseable                   -> TokenUsage{Input:"",   Output:"<M>"} (logs "in=- out=<M>")
+//   - Neither parseable                              -> noUsage                              (logs "in=- out=-")
 //
 //nolint:revive // intentionally exported for test package access
 func ExtractUsage(tail []byte, contentType string) (usage TokenUsage) {
@@ -227,20 +237,40 @@ func ExtractUsage(tail []byte, contentType string) (usage TokenUsage) {
 		return noUsage
 	}
 
-	if strings.Contains(contentType, "text/event-stream") {
+	// SSE detection: primary signal is Content-Type, but reverse-proxied
+	// Anthropic responses have been observed with an empty or wrong
+	// Content-Type on the sniffed rec.Header() (see spec 005). Fall back
+	// to a content scan for the `event: message_` marker prefix — cheap
+	// (single bytes.Contains over ≤ 64 KB) and specific enough to
+	// Anthropic's protocol to keep the false-positive risk low.
+	if strings.Contains(contentType, "text/event-stream") ||
+		bytes.Contains(tail, []byte("event: message_")) {
 		return extractUsageSSE(tail)
 	}
 	return extractUsageJSON(tail)
 }
 
-// extractUsageSSE scans tail for the LAST occurrence of "event: message_delta"
-// then parses the following data line's JSON for the usage block.
-func extractUsageSSE(tail []byte) TokenUsage {
-	// Find the LAST "event: message_delta" in the buffer.
-	eventMarker := []byte("event: message_delta")
+// usagePresence tracks whether a usage field was found (vs. absent/null).
+type usagePresence struct {
+	inputPresent  bool
+	outputPresent bool
+	input         int
+	output        int
+}
+
+// scanSSEEvent scans tail for the LAST occurrence of eventMarker
+// (e.g. "event: message_start" or "event: message_delta"), finds the
+// following data: line, and returns parsed usage.input_tokens /
+// usage.output_tokens plus per-field presence flags.
+//
+// Returns zero values and absent flags if the marker, data line, JSON
+// usage block, or individual token fields are not found.
+//
+//nolint:unparam // eventMarker is parametric for DRY SSE scanning
+func scanSSEEvent(tail []byte, eventMarker []byte) (usagePresence, bool) {
 	idx := bytes.LastIndex(tail, eventMarker)
 	if idx < 0 {
-		return noUsage
+		return usagePresence{}, false
 	}
 
 	// From that position, scan forward for the next "data: " line.
@@ -250,7 +280,7 @@ func extractUsageSSE(tail []byte) TokenUsage {
 		// Also try \r\n variant used by some SSE emitters.
 		dataIdx = bytes.Index(rest, []byte("\r\ndata: "))
 		if dataIdx < 0 {
-			return noUsage
+			return usagePresence{}, false
 		}
 		// Adjust to point past the \r\n prefix so the offset is correct.
 		dataIdx += 2 // skip \r\n
@@ -258,26 +288,37 @@ func extractUsageSSE(tail []byte) TokenUsage {
 	// dataIdx is relative to rest; advance past the "\ndata: " prefix (2 bytes for \n + 6 for "data: ").
 	dataStart := idx + dataIdx + len("\ndata: ")
 	if dataStart >= len(tail) {
-		return noUsage
+		return usagePresence{}, false
 	}
 
 	// Find the end of the data line: double newline (event block terminator).
 	lineEnd := bytes.Index(tail[dataStart:], []byte("\n\n"))
 	if lineEnd < 0 {
 		// No double newline yet; the event may be truncated.
-		return noUsage
+		return usagePresence{}, false
 	}
 	dataBytes := tail[dataStart : dataStart+lineEnd]
 
-	// Parse the SSE data payload: first check if "usage" is present and non-null.
+	// Parse the SSE data payload. For message_delta the usage block is
+	// directly in the data object; for message_start it is inside the
+	// nested "message" object. Try the top-level "usage" first, then the
+	// "message.usage" path.
 	var usageCheck struct {
-		Usage json.RawMessage `json:"usage"`
+		Usage   json.RawMessage `json:"usage"`
+		Message struct {
+			Usage json.RawMessage `json:"usage"`
+		} `json:"message"`
 	}
 	if err := json.Unmarshal(dataBytes, &usageCheck); err != nil {
-		return noUsage
+		return usagePresence{}, false
 	}
-	if usageCheck.Usage == nil || bytes.Equal(usageCheck.Usage, []byte("null")) {
-		return noUsage
+
+	usageRaw := usageCheck.Usage
+	if usageRaw == nil {
+		usageRaw = usageCheck.Message.Usage
+	}
+	if usageRaw == nil || bytes.Equal(usageRaw, []byte("null")) {
+		return usagePresence{}, false
 	}
 
 	// Parse the usage integers.
@@ -285,14 +326,61 @@ func extractUsageSSE(tail []byte) TokenUsage {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	}
-	if err := json.Unmarshal(usageCheck.Usage, &usage); err != nil {
-		return noUsage
+	if err := json.Unmarshal(usageRaw, &usage); err != nil {
+		return usagePresence{}, false
 	}
 
-	return TokenUsage{
-		Input:  strconv.Itoa(usage.InputTokens),
-		Output: strconv.Itoa(usage.OutputTokens),
+	return usagePresence{
+		inputPresent:  true,
+		outputPresent: true,
+		input:         usage.InputTokens,
+		output:        usage.OutputTokens,
+	}, true
+}
+
+// extractUsageSSE scans tail for Anthropic-shape SSE events and
+// combines input_tokens from message_start with output_tokens from
+// the terminal message_delta. Anthropic emits:
+//
+//	event: message_start
+//	data: {"type":"message_start","message":{...,"usage":{"input_tokens":42,"output_tokens":1}}}
+//	...
+//	event: message_delta
+//	data: {"type":"message_delta","delta":{...},"usage":{"output_tokens":128}}
+//
+// Partial-data policy (spec 005 Failure Modes):
+//   - Both events parseable            -> TokenUsage{Input:"<N>", Output:"<M>"}
+//   - Only message_start parseable     -> TokenUsage{Input:"<N>", Output:""}  (logs "in=<N> out=-")
+//   - Only message_delta parseable     -> TokenUsage{Input:"",   Output:"<M>"} (logs "in=- out=<M>")
+//   - Neither parseable                -> noUsage                              (logs "in=- out=-")
+//
+// Fallback: if message_start carries no usage block but the terminal
+// message_delta's data has a positive input_tokens field, use that as
+// Input. This preserves the minimax-shape / single-event Anthropic-shape
+// where both counts live in one event, and is a superset of v0.17.0
+// behavior.
+func extractUsageSSE(tail []byte) TokenUsage {
+	inputTokens, _ := scanSSEEvent(tail, []byte("event: message_start"))
+	outputTokens, _ := scanSSEEvent(tail, []byte("event: message_delta"))
+
+	// Anthropic splits: input in start, output in delta. But if start
+	// has no usage and delta does carry input_tokens, promote it.
+	var (
+		inStr  string
+		outStr string
+	)
+	if inputTokens.inputPresent {
+		inStr = strconv.Itoa(inputTokens.input)
+	} else if outputTokens.inputPresent && outputTokens.input > 0 {
+		inStr = strconv.Itoa(outputTokens.input)
 	}
+	if outputTokens.outputPresent {
+		outStr = strconv.Itoa(outputTokens.output)
+	}
+	if inStr == "" && outStr == "" {
+		return noUsage
+	}
+	return TokenUsage{Input: inStr, Output: outStr}
 }
 
 // extractUsageJSON parses tail as a JSON object with a top-level `usage` field.
