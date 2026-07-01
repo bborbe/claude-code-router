@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-07-01T06:46:59Z"
 generating: "2026-07-01T06:54:57Z"
 prompted: "2026-07-01T06:54:57Z"
+verifying: "2026-07-01T07:08:23Z"
 branch: dark-factory/bug-anthropic-tokens-not-extracted
 ---
 
