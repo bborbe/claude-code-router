@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.17.2
 
 - fix: extract token counts for gzip-encoded upstream responses. v0.17.0's extractor + v0.17.1's split-event widening both scanned text markers over raw response bytes; live trace of the primary production provider (`anthropic-subscription` via Cloudflare) revealed that Anthropic serves `Content-Encoding: gzip` on both JSON and SSE responses, so `usage` / `event: message_` never appear in the tail and 5/5 post-v0.17.1 200s still logged `in=- out=-`. Additionally, real non-streaming JSON responses reach ~500 KB gzipped — far beyond the previous 64 KB tail bound, and gzip is not self-synchronizing so a mid-stream tail is unrecoverable. Fix: grow `TailBufferBytes` from 64 KiB to 2 MiB (frozen constant, no YAML field), decode `Content-Encoding: gzip` (case-insensitive, whitespace-trimmed) before running the existing SSE/JSON scans, bound decompression at 8 MiB to defend against decompression bombs, and pass `Content-Encoding` from the reverse-proxied response through the extractor. Missing header and `identity` behave as no-ops; `br` / `deflate` / `zstd` / chained encodings log `in=- out=-` (deferred to a follow-up bug if observed in production). Corrupt or truncated gzip returns `noUsage` cleanly via the pre-existing `defer recover()` and empty-tail guard. The `Unwrap()` chain, the `[req]` line format, and the minimax + uncompressed-SSE paths are unchanged; the request path (including `Accept-Encoding`) is untouched. See [specs/in-progress/006-bug-tokens-gzip-decompress.md](specs/in-progress/006-bug-tokens-gzip-decompress.md).
 
