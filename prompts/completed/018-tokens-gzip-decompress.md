@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["006"]
+spec: [006-bug-tokens-gzip-decompress]
 summary: 'Implemented gzip decompression for token usage extraction: grew TailBufferBytes to 2 MiB, added decodeIfEncoded helper, grew ExtractUsage to 3 args, wired Content-Encoding header, updated all test call sites, added 11 new gzip Ginkgo specs, updated CHANGELOG.'
 execution_id: claude-code-router-bug-gzip-exec-018-tokens-gzip-decompress
 dark-factory-version: dev
