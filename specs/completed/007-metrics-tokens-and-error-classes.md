@@ -1,5 +1,5 @@
 ---
-status: verifying
+status: completed
 tags:
     - dark-factory
     - spec
@@ -7,6 +7,7 @@ approved: "2026-07-01T10:46:18Z"
 generating: "2026-07-01T10:55:24Z"
 prompted: "2026-07-01T10:55:24Z"
 verifying: "2026-07-01T11:13:19Z"
+completed: "2026-07-01T12:30:04Z"
 branch: dark-factory/metrics-tokens-and-error-classes
 ---
 
