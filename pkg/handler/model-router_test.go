@@ -159,6 +159,188 @@ var _ = Describe("ModelRouter", func() {
 		Expect(seen).To(Equal(body))
 	})
 
+	Context("[1m] suffix stripping", func() {
+		It("strips [1m] produced by an alias value (deepseek-pro -> deepseek-v4-pro[1m])", func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			dsRoutes := []handler.ModelRoute{
+				{Pattern: "deepseek-*", ProviderName: "seibert-vllm", Handler: capturing},
+			}
+			aliases := map[string]string{"deepseek-pro": "deepseek-v4-pro[1m]"}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				aliases,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"deepseek-pro"}`))
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("deepseek-v4-pro"))
+		})
+
+		It("routes deepseek-v4-pro-max[1m] as deepseek-v4-pro-max via glob", func() {
+			dsRoutes := []handler.ModelRoute{
+				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: anthropic},
+				{
+					Pattern:      "deepseek-*",
+					ProviderName: "seibert-vllm",
+					Handler:      labelHandler("seibert-vllm"),
+				},
+			}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"deepseek-v4-pro-max[1m]"}`))
+			Expect(rec.Body.String()).To(Equal("seibert-vllm"))
+		})
+
+		It("rewrites body .model from deepseek-v4-pro-max[1m] to deepseek-v4-pro-max", func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			dsRoutes := []handler.ModelRoute{
+				{Pattern: "deepseek-*", ProviderName: "seibert-vllm", Handler: capturing},
+			}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"deepseek-v4-pro-max[1m]"}`))
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("deepseek-v4-pro-max"))
+		})
+
+		It("does not strip [1m] from model without trailing suffix", func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			dsRoutes := []handler.ModelRoute{
+				{Pattern: "deepseek-*", ProviderName: "seibert-vllm", Handler: capturing},
+			}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"deepseek-v4-pro-max"}`))
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("deepseek-v4-pro-max"))
+		})
+
+		It("does not strip [1m] mid-string — only trailing suffix", func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			dsRoutes := []handler.ModelRoute{
+				{Pattern: "*-suffix", ProviderName: "test-provider", Handler: capturing},
+			}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"model[1m]-suffix"}`))
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("model[1m]-suffix"))
+		})
+
+		It("preserves other top-level fields across [1m] strip rewrite", func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			dsRoutes := []handler.ModelRoute{
+				{Pattern: "deepseek-*", ProviderName: "seibert-vllm", Handler: capturing},
+			}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			body := `{"model":"deepseek-v4-pro-max[1m]","max_tokens":4096,"messages":[{"role":"user","content":"hi"}]}`
+			mux.ServeHTTP(rec, post(body))
+			var seen map[string]any
+			Expect(json.Unmarshal(capturedBody, &seen)).To(Succeed())
+			Expect(seen["model"]).To(Equal("deepseek-v4-pro-max"))
+			Expect(seen["max_tokens"]).To(Equal(float64(4096)))
+			messages, ok := seen["messages"].([]any)
+			Expect(ok).To(BeTrue())
+			Expect(len(messages)).To(BeNumerically(">", 0))
+		})
+
+		It("uses cleaned model in metrics label (no [1m] series)", func() {
+			m := handler.NewMetrics(nil)
+			dsRoutes := []handler.ModelRoute{
+				{
+					Pattern:      "deepseek-*",
+					ProviderName: "seibert-vllm",
+					Handler:      labelHandler("seibert-vllm"),
+				},
+			}
+			mux = handler.NewModelRouter(
+				dsRoutes,
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				m,
+				testDateTime,
+			)
+			mux.ServeHTTP(rec, post(`{"model":"deepseek-v4-pro-max[1m]"}`))
+			Expect(testutil.ToFloat64(
+				m.RequestsTotal.WithLabelValues("seibert-vllm", "deepseek-v4-pro-max", "2xx"),
+			)).To(Equal(float64(1)))
+			// No series with the [1m] suffix: assert the exact series set.
+			// A leaked deepseek-v4-pro-max[1m] series would add a line and
+			// fail this compare.
+			expectedMetric := `
+				# HELP ccrouter_requests_total Total number of /v1/* requests routed, labeled by provider, model, and status_class (2xx/3xx/4xx_auth/4xx_rate_limited/4xx_bad_request/5xx_upstream/5xx_router).
+				# TYPE ccrouter_requests_total counter
+				ccrouter_requests_total{model="deepseek-v4-pro-max",provider="seibert-vllm",status_class="2xx"} 1
+			`
+			Expect(testutil.CollectAndCompare(
+				m.RequestsTotal,
+				strings.NewReader(expectedMetric),
+				"ccrouter_requests_total",
+			)).To(Succeed())
+		})
+	})
+
 	Context("alias resolution", func() {
 		It("rewrites the request body's .model field when an alias matches", func() {
 			var capturedBody []byte
