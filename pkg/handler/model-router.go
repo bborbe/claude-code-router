@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	bberrors "github.com/bborbe/errors"
@@ -155,6 +156,37 @@ func NewModelRouter(
 			r.ContentLength = int64(len(body))
 			aliasResolved = resolved
 			model = resolved
+		}
+
+		// Claude Code annotates model names with [1m] to mark 1M-token
+		// context windows (e.g. deepseek-v4-pro-max[1m]). The upstream LLM
+		// does not recognize the suffixed name, causing 4xx errors. Strip a
+		// trailing [1m] AFTER alias resolution so both sources are covered:
+		// a client-sent suffix (deepseek-v4-pro-max[1m]) and an alias whose
+		// config value itself carries the suffix (deepseek-pro ->
+		// deepseek-v4-pro[1m]). Rewrite the body so the upstream and the
+		// metrics label both see the canonical name.
+		if suffix := "[1m]"; strings.HasSuffix(model, suffix) {
+			cleaned := strings.TrimSuffix(model, suffix)
+			rewritten, rerr := rewriteModelField(r.Context(), body, cleaned)
+			if rerr != nil {
+				glog.Errorf("[1m-strip] rewrite failed for %q: %v", model, rerr)
+				http.Error(w, "model name normalization failed", http.StatusInternalServerError)
+				latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+				metrics.ObserveRequest(
+					UnknownModelLabel,
+					UnknownModelLabel,
+					http.StatusInternalServerError,
+					latency.Seconds(),
+					true,
+				)
+				return
+			}
+			glog.V(2).Infof("[1m-strip] %s -> %s", model, cleaned)
+			body = rewritten
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+			model = cleaned
 		}
 
 		providerName := defaultProviderName
