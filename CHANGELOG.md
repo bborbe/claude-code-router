@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.18.1
 
 - fix: strip the `[1m]` context-window marker Claude Code appends to model names (e.g. `deepseek-v4-pro-max[1m]`) before dispatch. The suffix is a client-side annotation marking a 1M-token context window; upstreams (notably seibert-vLLM) reject the literal suffixed name with 4xx. The router now trims a trailing `[1m]` from the request `model` field, rewrites the body so the upstream sees the canonical name, and emits the cleaned name as the metrics label so `[1m]` and non-`[1m]` requests share a single `ccrouter_requests_total` / `ccrouter_tokens_total` series. Stripping is universal (all providers), only fires on an exact trailing `[1m]` (never mid-string), and preserves all other body fields. Live evidence: 25 requests (`deepseek-v4-pro-max[1m]` ×3, `deepseek-v4-pro-fast[1m]` ×20, `deepseek-v4-pro[1m]` ×2) were 100% 4xx before this fix.
 
