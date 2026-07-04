@@ -11,6 +11,7 @@ package pkg
 
 import (
 	"context"
+	"path/filepath"
 
 	librun "github.com/bborbe/run"
 	"github.com/golang/glog"
@@ -29,8 +30,8 @@ type ServerFactory func(ctx context.Context, listen, configPath string) (librun.
 // argument tagger. Exported fields with tags are CLI args; unexported
 // fields are dependencies injected by main.
 type App struct {
-	Listen     string `arg:"listen"      default:"127.0.0.1:8788"                    env:"LISTEN"      required:"true" usage:"address to listen to"`
-	ConfigPath string `arg:"config-path" default:"~/.claude-code-router/config.yaml" env:"CONFIG_PATH" required:"true" usage:"path to claude-code-router YAML config"`
+	Listen     string `arg:"listen"      default:"127.0.0.1:8788" env:"LISTEN"      required:"true"  usage:"address to listen to"`
+	ConfigPath string `arg:"config-path" default:""               env:"CONFIG_PATH" required:"false" usage:"path to claude-code-router YAML config (default: XDG ~/.config/claude-code-router/config.yaml, falls back to legacy ~/.claude-code-router/config.yaml if that's the only one present)"`
 
 	serverFactory ServerFactory
 }
@@ -40,13 +41,24 @@ func NewApp(serverFactory ServerFactory) *App {
 	return &App{serverFactory: serverFactory}
 }
 
+// resolveConfigPath returns explicit unchanged if non-empty (an explicit
+// --config-path flag or CONFIG_PATH env value always wins). If explicit is
+// empty, it resolves the default via FindConfigDir + "config.yaml".
+func resolveConfigPath(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return filepath.Join(FindConfigDir("claude-code-router"), "config.yaml")
+}
+
 // Run is invoked by service.MainCmd after argument parsing.
 func (a *App) Run(ctx context.Context) error {
+	configPath := resolveConfigPath(a.ConfigPath)
 	glog.V(1).Infof(
 		"starting claude-code-router version=%s listen=%s config=%s",
-		version, a.Listen, a.ConfigPath,
+		version, a.Listen, configPath,
 	)
-	runner, err := a.serverFactory(ctx, a.Listen, a.ConfigPath)
+	runner, err := a.serverFactory(ctx, a.Listen, configPath)
 	if err != nil {
 		return err
 	}

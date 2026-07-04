@@ -1,12 +1,14 @@
 # claude-code-router config
 
-The router loads its provider list from a YAML file. Default path:
+The router loads its provider list from a YAML file. Default path (XDG):
 
 ```
-~/.claude-code-router/config.yaml
+~/.config/claude-code-router/config.yaml
 ```
 
-Override with `--config-path` or `CONFIG_PATH` env var.
+Falls back to the legacy `~/.claude-code-router/config.yaml` if the XDG directory doesn't exist yet but the legacy one does.
+
+Override with `--config-path` or `CONFIG_PATH` env var — an explicit value always wins over both defaults.
 
 ## Schema
 

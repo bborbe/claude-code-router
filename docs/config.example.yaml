@@ -1,5 +1,5 @@
 # claude-code-router example config
-# Copy to ~/.claude-code-router/config.yaml and chmod 600
+# Copy to ~/.config/claude-code-router/config.yaml and chmod 600 (XDG; falls back to legacy ~/.claude-code-router/config.yaml if that's the only one present)
 # Full reference: docs/config.md
 
 router:
