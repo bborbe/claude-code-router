@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.19.0
 
 - feat: migrate default config path to XDG `~/.config/claude-code-router/config.yaml`, falling back to the legacy `~/.claude-code-router/config.yaml` when only that exists. New installs land in the XDG location; existing installs keep working unchanged. `--config-path` / `CONFIG_PATH` still override unconditionally.
 
