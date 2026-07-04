@@ -17,12 +17,12 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
 
    Drops `claude-code-router` into `$(go env GOPATH)/bin/`.
 
-2. Create the config at `~/.claude-code-router/config.yaml`:
+2. Create the config at `~/.config/claude-code-router/config.yaml` (XDG; falls back to the legacy `~/.claude-code-router/config.yaml` if that's the only one present):
 
    ```bash
-   mkdir -p ~/.claude-code-router
-   cp docs/config.example.yaml ~/.claude-code-router/config.yaml
-   chmod 600 ~/.claude-code-router/config.yaml
+   mkdir -p ~/.config/claude-code-router
+   cp docs/config.example.yaml ~/.config/claude-code-router/config.yaml
+   chmod 600 ~/.config/claude-code-router/config.yaml
    # then edit the file, paste real provider tokens
    ```
 

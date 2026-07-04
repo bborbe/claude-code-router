@@ -161,3 +161,34 @@ func expandTilde(p string) (string, error) {
 	}
 	return filepath.Join(home, p[2:]), nil
 }
+
+// FindConfigDir returns the config directory for toolName using XDG
+// conventions with legacy dotfile fallback. Priority:
+//  1. ~/.config/<toolName>/ if it exists
+//  2. ~/.<toolName>/ if it exists
+//  3. ~/.config/<toolName>/ (XDG default when neither exists — new installs
+//     land in the XDG location from the start)
+//
+// Deliberately does NOT use os.UserConfigDir() — on macOS that resolves to
+// ~/Library/Application Support, which is not this project's XDG convention
+// (~/.config/<tool>/ on every platform, matching task-watcher and vault-ui).
+func FindConfigDir(toolName string) string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".config", toolName)
+	}
+	return findConfigDirFromHome(homeDir, toolName)
+}
+
+func findConfigDirFromHome(homeDir, toolName string) string {
+	xdgPath := filepath.Join(homeDir, ".config", toolName)
+	legacyPath := filepath.Join(homeDir, "."+toolName)
+
+	if info, err := os.Stat(xdgPath); err == nil && info.IsDir() {
+		return xdgPath
+	}
+	if info, err := os.Stat(legacyPath); err == nil && info.IsDir() {
+		return legacyPath
+	}
+	return xdgPath
+}

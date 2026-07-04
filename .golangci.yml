@@ -49,6 +49,16 @@ linters:
               desc: "deprecated, use revive or staticcheck instead"
             - pkg: "io/ioutil"
               desc: "deprecated since Go 1.16, use io and os packages instead"
+        Pkg:
+          files:
+            - $all
+          deny:
+            - pkg: "github.com/pkg/errors"
+              desc: "use github.com/bborbe/errors instead"
+            - pkg: "github.com/bborbe/argument"
+              desc: "use github.com/bborbe/argument/v2 instead"
+            - pkg: "golang.org/x/net/context"
+              desc: "use context from standard library instead"
 
     funlen:
       lines: 80

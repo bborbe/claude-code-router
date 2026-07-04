@@ -3,6 +3,7 @@ module github.com/bborbe/claude-code-router
 go 1.26.4
 
 require (
+	github.com/bborbe/argument/v2 v2.12.27
 	github.com/bborbe/errors v1.5.13
 	github.com/bborbe/http v1.26.13
 	github.com/bborbe/log v1.6.14
@@ -18,7 +19,6 @@ require (
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
-	github.com/bborbe/argument/v2 v2.12.27 // indirect
 	github.com/bborbe/collection v1.20.13 // indirect
 	github.com/bborbe/kv v1.21.2 // indirect
 	github.com/bborbe/math v1.3.11 // indirect
