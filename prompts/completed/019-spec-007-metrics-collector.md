@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["007"]
+spec: [007-metrics-tokens-and-error-classes]
 summary: Added ccrouter_tokens_total counter, expanded status_class to 7-value enum, added ObserveTokens with drop rules, and updated all test call sites
 execution_id: claude-code-router-tokens-exec-019-spec-007-metrics-collector
 dark-factory-version: dev

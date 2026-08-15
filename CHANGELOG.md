@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add `requiresLeadingSystem` per-provider field to config, listing glob patterns for models whose chat template rejects system-role messages that are not the first conversation entry; validated at config load time with distinct error messages per provider and pattern
+
 ## v0.19.2
 
 - fix: bump Go toolchain to 1.26.6, fixing stdlib vulnerabilities GO-2026-5026, GO-2026-5972, GO-2026-6089, GO-2026-6090

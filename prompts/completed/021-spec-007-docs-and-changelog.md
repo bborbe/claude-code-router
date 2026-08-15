@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["007"]
+spec: [007-metrics-tokens-and-error-classes]
 summary: Updated docs/metrics.md (Series table, status_class cardinality, Grafana queries, alert) and CHANGELOG.md (## Unreleased) to reflect ccrouter_tokens_total counter and 7-value status_class taxonomy shipped by prompts 1 and 2
 execution_id: claude-code-router-tokens-exec-021-spec-007-docs-and-changelog
 dark-factory-version: dev

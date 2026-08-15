@@ -63,6 +63,22 @@ type Provider struct {
 	// router uses to match request body's `model` field. Examples:
 	// "claude-opus-*", "MiniMax-*", "qwen*".
 	Models []string `yaml:"models"`
+	// RequiresLeadingSystem lists glob patterns (same syntax as
+	// Models) naming models behind this provider whose chat template
+	// rejects a system-role message that is not the first entry of
+	// the conversation. When the resolved model name matches one of
+	// these patterns, the router lifts every out-of-place system
+	// message into the top-level system block before forwarding.
+	//
+	// Scoped per model, never per provider: ollama's system-position
+	// restriction lives in each model's chat template, so qwen3.6 and
+	// qwen3.8 behave differently behind one provider (verified
+	// 2026-08-15 with identical curl payloads against the same ollama
+	// instance: qwen3.6 -> 200, qwen3.8 -> 500).
+	//
+	// Absent, nil, and empty are equivalent and all mean "never
+	// transform anything for this provider".
+	RequiresLeadingSystem []string `yaml:"requiresLeadingSystem,omitempty"`
 }
 
 // Load reads, parses, and validates the config at path. Tilde-prefix
@@ -109,6 +125,15 @@ func (c *Config) Validate(ctx context.Context) error {
 			if _, err := path.Match(pattern, ""); err != nil {
 				return errors.Wrapf(ctx, err,
 					"provider %q: invalid model glob %q",
+					name, pattern,
+				)
+			}
+		}
+		for _, pattern := range prov.RequiresLeadingSystem {
+			// path.Match validates pattern syntax against a dummy string.
+			if _, err := path.Match(pattern, ""); err != nil {
+				return errors.Wrapf(ctx, err,
+					"provider %q: invalid requiresLeadingSystem glob %q",
 					name, pattern,
 				)
 			}

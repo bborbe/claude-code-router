@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["007"]
+spec: [007-metrics-tokens-and-error-classes]
 summary: 'Wire token counter and router-error taxonomy into NewModelRouter: ExtractUsage moved above sampler gate, three early-return paths call ObserveRequest(isRouterError=true), model label resolved via sentinel chain'
 execution_id: claude-code-router-tokens-exec-020-spec-007-model-router-wiring
 dark-factory-version: dev
