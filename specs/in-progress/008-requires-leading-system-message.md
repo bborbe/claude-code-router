@@ -1,6 +1,7 @@
 ---
-status: approved
+status: verifying
 approved: "2026-08-15T10:25:11Z"
+verifying: "2026-08-15T20:59:08Z"
 branch: dark-factory/requires-leading-system-message
 ---
 
