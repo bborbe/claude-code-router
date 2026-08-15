@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["008"]
+spec: [008-requires-leading-system-message]
 summary: Added RequiresLeadingSystem []string field to Provider struct with load-time glob validation and five Ginkgo specs covering parse, backward compat, empty list, malformed pattern error, and regression guard
 execution_id: claude-code-router-qwen38-system-exec-023-spec-008-config-requires-leading-system
 dark-factory-version: dev

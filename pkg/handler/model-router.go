@@ -41,6 +41,13 @@ type ModelRoute struct {
 	Pattern      string
 	ProviderName string
 	Handler      http.Handler
+	// RequiresLeadingSystem carries this route's provider's
+	// `requiresLeadingSystem` config globs. When the resolved model
+	// name matches one of them, the router lifts non-leading
+	// system-role messages into the top-level system block before
+	// dispatching. Nil or empty (the default for every route built
+	// from a config that omits the field) means: never transform.
+	RequiresLeadingSystem []string
 }
 
 // NewModelRouter returns an HTTP handler that body-parses each request's
@@ -191,14 +198,35 @@ func NewModelRouter(
 
 		providerName := defaultProviderName
 		target := defaultHandler
+		var requiresLeadingSystem []string
 		for _, route := range routes {
 			ok, _ := path.Match(route.Pattern, model)
 			if ok {
 				providerName = route.ProviderName
 				target = route.Handler
+				requiresLeadingSystem = route.RequiresLeadingSystem
 				glog.V(2).
 					Infof("[route] model=%q matched %q -> provider=%s", model, route.Pattern, providerName)
 				break
+			}
+		}
+
+		// Models whose chat template rejects a system message that is not
+		// first (spec 008): lift the misplaced entries into the top-level
+		// system block. Runs AFTER alias resolution and [1m] stripping so
+		// the pattern is matched against the model name the upstream sees.
+		// Any body shape the transform cannot interpret is forwarded
+		// unchanged with one warning — never a router-generated 5xx.
+		if matchesAnyPattern(requiresLeadingSystem, model) {
+			lifted, moved, lerr := liftSystemMessages(r.Context(), body)
+			switch {
+			case lerr != nil:
+				glog.Warningf("[system-lift] skipped model=%s: %v", model, lerr)
+			case moved > 0:
+				glog.V(2).Infof("[system-lift] model=%s moved=%d", model, moved)
+				body = lifted
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.ContentLength = int64(len(body))
 			}
 		}
 

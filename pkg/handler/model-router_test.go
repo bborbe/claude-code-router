@@ -1383,6 +1383,492 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 	})
 })
 
+var _ = Describe("ModelRouter system lift", func() {
+	BeforeEach(func() {
+		// Ensure glog flags are parsed so V(log level) works correctly.
+		// Without this, glog may not output at the expected verbosity level.
+		_ = flag.Set("logtostderr", "true")
+		_ = flag.Set("v", "1")
+	})
+
+	const liftBody = `{"model":"qwen3.8:27b-mlx","max_tokens":64,"system":[{"type":"text","text":"top"}],"messages":[{"role":"user","content":"hi"},{"role":"system","content":"A"},{"role":"assistant","content":"ok"},{"role":"system","content":"B"}]}`
+
+	It("lifts non-leading system entries for a matching model, preserving order", func() {
+		var capturedBody []byte
+		var capturedContentLength int64
+		var capturedStatus int
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+			capturedContentLength = r.ContentLength
+		})
+		upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+			capturedContentLength = r.ContentLength
+			capturedStatus = http.StatusTeapot
+			w.WriteHeader(http.StatusTeapot)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               upstream,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		mux.ServeHTTP(rec, post(liftBody))
+
+		var result map[string]interface{}
+		Expect(json.Unmarshal(capturedBody, &result)).To(Succeed())
+
+		messages, ok := result["messages"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(messages)).To(Equal(2))
+		msg0, ok := messages[0].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(msg0["role"]).To(Equal("user"))
+		msg1, ok := messages[1].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(msg1["role"]).To(Equal("assistant"))
+
+		systemRaw, ok := result["system"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(systemRaw)).To(Equal(3))
+		sys0, ok := systemRaw[0].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(sys0["text"]).To(Equal("top"))
+		sys1, ok := systemRaw[1].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(sys1["text"]).To(Equal("A"))
+		sys2, ok := systemRaw[2].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(sys2["text"]).To(Equal("B"))
+
+		Expect(capturedContentLength).To(Equal(int64(len(capturedBody))))
+		Expect(capturedStatus).To(Equal(http.StatusTeapot))
+	})
+
+	It("forwards byte-identically for a non-matching model on the same provider", func() {
+		var capturedBody []byte
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               capturing,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		body := `{"model":"qwen3.6:35b-a3b-coding-nvfp4","max_tokens":64,"system":[{"type":"text","text":"top"}],"messages":[{"role":"user","content":"hi"},{"role":"system","content":"A"},{"role":"assistant","content":"ok"},{"role":"system","content":"B"}]}`
+		mux.ServeHTTP(rec, post(body))
+		Expect(capturedBody).To(Equal([]byte(body)))
+	})
+
+	It("forwards byte-identically when the route declares no requiresLeadingSystem", func() {
+		var capturedBody []byte
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:      "qwen*",
+				ProviderName: "ollama-local",
+				Handler:      capturing,
+				// RequiresLeadingSystem omitted
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		mux.ServeHTTP(rec, post(liftBody))
+		Expect(capturedBody).To(Equal([]byte(liftBody)))
+
+		out := captureStderr(func() {})
+		Expect(strings.Count(out, "[system-lift]")).To(Equal(0))
+	})
+
+	It("forwards byte-identically when requiresLeadingSystem is an explicit empty list", func() {
+		var capturedBody []byte
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               capturing,
+				RequiresLeadingSystem: []string{},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		mux.ServeHTTP(rec, post(liftBody))
+		Expect(capturedBody).To(Equal([]byte(liftBody)))
+
+		out := captureStderr(func() {})
+		Expect(strings.Count(out, "[system-lift]")).To(Equal(0))
+	})
+
+	It("forwards byte-identically and warns once when messages is not a list", func() {
+		var capturedBody []byte
+		var capturedStatus int
+		upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+			capturedStatus = http.StatusTeapot
+			w.WriteHeader(http.StatusTeapot)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               upstream,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			upstream,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		body := `{"model":"qwen3.8:27b-mlx","messages":"nope"}`
+		out := captureStderr(func() {
+			mux.ServeHTTP(rec, post(body))
+		})
+		Expect(capturedBody).To(Equal([]byte(body)))
+		Expect(capturedStatus).To(Equal(http.StatusTeapot))
+		Expect(strings.Count(out, "[system-lift]")).To(Equal(1))
+		Expect(out).To(MatchRegexp(`W\d{4} .*\[system-lift\] skipped`))
+	})
+
+	It("forwards byte-identically and warns once when a message entry is not an object", func() {
+		var capturedBody []byte
+		var capturedStatus int
+		upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+			capturedStatus = http.StatusTeapot
+			w.WriteHeader(http.StatusTeapot)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               upstream,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			upstream,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		body := `{"model":"qwen3.8:27b-mlx","messages":[{"role":"user","content":"hi"},42]}`
+		out := captureStderr(func() {
+			mux.ServeHTTP(rec, post(body))
+		})
+		Expect(capturedBody).To(Equal([]byte(body)))
+		Expect(capturedStatus).To(Equal(http.StatusTeapot))
+		Expect(strings.Count(out, "[system-lift]")).To(Equal(1))
+		Expect(out).To(MatchRegexp(`W\d{4} .*\[system-lift\] skipped`))
+	})
+
+	It(
+		"emits exactly one [system-lift] line naming the model and moved count, with no content",
+		func() {
+			// Anti-fake: moved=2 is derived from the fixture's two misplaced entries —
+			// a hardcoded moved=1 or a content-echoing format string fails this spec.
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				io.ReadAll(r.Body)
+			})
+			routes := []handler.ModelRoute{
+				{
+					Pattern:               "qwen*",
+					ProviderName:          "ollama-local",
+					Handler:               capturing,
+					RequiresLeadingSystem: []string{"qwen3.8*"},
+				},
+			}
+			mux := handler.NewModelRouter(
+				routes,
+				"default-fallback",
+				capturing,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			rec := httptest.NewRecorder()
+			post := func(body string) *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+			}
+			// [system-lift] is V(2), same level as [alias] and [1m-strip]
+			_ = flag.Set("logtostderr", "true")
+			_ = flag.Set("v", "2")
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(liftBody))
+			})
+			lineRegex := regexp.MustCompile(`\[system-lift\][^\n]*`)
+			matches := lineRegex.FindAllString(out, -1)
+			Expect(len(matches)).To(Equal(1))
+			line := matches[0]
+			Expect(line).To(ContainSubstring("model=qwen3.8:27b-mlx"))
+			Expect(line).To(ContainSubstring("moved=2"))
+			Expect(line).NotTo(ContainSubstring("A"))
+			Expect(line).NotTo(ContainSubstring("B"))
+		},
+	)
+
+	It(
+		"leaves a system entry that is already first in place and forwards byte-identically",
+		func() {
+			var capturedBody []byte
+			capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				capturedBody, _ = io.ReadAll(r.Body)
+			})
+			routes := []handler.ModelRoute{
+				{
+					Pattern:               "qwen*",
+					ProviderName:          "ollama-local",
+					Handler:               capturing,
+					RequiresLeadingSystem: []string{"qwen3.8*"},
+				},
+			}
+			mux := handler.NewModelRouter(
+				routes,
+				"default-fallback",
+				capturing,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			rec := httptest.NewRecorder()
+			post := func(body string) *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+			}
+			body := `{"model":"qwen3.8:27b-mlx","system":[{"type":"text","text":"top"}],"messages":[{"role":"system","content":"first"},{"role":"user","content":"hi"}]}`
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(body))
+			})
+			Expect(capturedBody).To(Equal([]byte(body)))
+
+			var result map[string]interface{}
+			Expect(json.Unmarshal(capturedBody, &result)).To(Succeed())
+			messages, ok := result["messages"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(len(messages)).To(Equal(2))
+			msg0, ok := messages[0].(map[string]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(msg0["role"]).To(Equal("system"))
+
+			systemRaw, ok := result["system"].([]interface{})
+			Expect(ok).To(BeTrue())
+			Expect(len(systemRaw)).To(Equal(1))
+
+			Expect(strings.Count(out, "[system-lift]")).To(Equal(0))
+		},
+	)
+
+	It("normalizes string and block-list system content through the full router path", func() {
+		var capturedBody []byte
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               capturing,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		body := `{"model":"qwen3.8:27b-mlx","messages":[{"role":"user","content":"hi"},{"role":"system","content":"hello"},{"role":"system","content":[{"type":"text","text":"x"},{"type":"text","text":"y"}]}]}`
+		mux.ServeHTTP(rec, post(body))
+
+		var result map[string]interface{}
+		Expect(json.Unmarshal(capturedBody, &result)).To(Succeed())
+
+		systemRaw, ok := result["system"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(systemRaw)).To(Equal(3))
+		block0, ok := systemRaw[0].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(block0["type"]).To(Equal("text"))
+		Expect(block0["text"]).To(Equal("hello"))
+		block1, ok := systemRaw[1].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(block1["type"]).To(Equal("text"))
+		Expect(block1["text"]).To(Equal("x"))
+		block2, ok := systemRaw[2].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(block2["type"]).To(Equal("text"))
+		Expect(block2["text"]).To(Equal("y"))
+	})
+
+	It("does not transform a request that fell through to the default provider", func() {
+		var capturedBody []byte
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               capturing,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		body := `{"model":"gemini-3-pro","messages":[{"role":"user","content":"hi"},{"role":"system","content":"A"}]}`
+		out := captureStderr(func() {
+			mux.ServeHTTP(rec, post(body))
+		})
+		Expect(capturedBody).To(Equal([]byte(body)))
+		Expect(strings.Count(out, "[system-lift]")).To(Equal(0))
+	})
+
+	It("still routes, strips [1m], and resolves aliases unchanged alongside the transform", func() {
+		var capturedBody []byte
+		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "qwen*",
+				ProviderName:          "ollama-local",
+				Handler:               capturing,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		aliases := map[string]string{"q38": "qwen3.8:27b-mlx[1m]"}
+		mux := handler.NewModelRouter(
+			routes,
+			"default-fallback",
+			capturing,
+			aliases,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		body := `{"model":"q38","messages":[{"role":"user","content":"hi"},{"role":"system","content":"A"}]}`
+		mux.ServeHTTP(rec, post(body))
+
+		var result map[string]interface{}
+		Expect(json.Unmarshal(capturedBody, &result)).To(Succeed())
+		// Alias resolved and [1m] stripped
+		Expect(result["model"]).To(Equal("qwen3.8:27b-mlx"))
+
+		// Transform still fired: no system entries left in messages
+		messages, ok := result["messages"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(messages)).To(Equal(1))
+		msg0, ok := messages[0].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(msg0["role"]).To(Equal("user"))
+
+		// And one text block A in system
+		systemRaw, ok := result["system"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(systemRaw)).To(Equal(1))
+		block, ok := systemRaw[0].(map[string]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(block["type"]).To(Equal("text"))
+		Expect(block["text"]).To(Equal("A"))
+	})
+})
+
 // boomReader is an io.Reader that returns an error on first Read.
 // Used to simulate a body-read failure for 400 early-return testing.
 type boomReader struct{}

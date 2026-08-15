@@ -1,6 +1,6 @@
 ---
 status: approved
-spec: ["008"]
+spec: [008-requires-leading-system-message]
 created: "2026-08-15T10:40:00Z"
 queued: "2026-08-15T10:45:24Z"
 ---

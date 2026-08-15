@@ -1,8 +1,13 @@
 ---
-status: approved
-spec: ["008"]
+status: completed
+spec: [008-requires-leading-system-message]
+summary: 'Implemented system-lift transform: ModelRoute gains RequiresLeadingSystem field, new liftSystemMessages function moves non-leading system-role entries into top-level system block for models matching provider patterns'
+execution_id: claude-code-router-qwen38-system-exec-024-spec-008-router-system-lift
+dark-factory-version: dev
 created: "2026-08-15T10:40:00Z"
 queued: "2026-08-15T10:45:24Z"
+started: "2026-08-15T10:48:23Z"
+completed: "2026-08-15T20:54:32Z"
 ---
 
 <summary>
