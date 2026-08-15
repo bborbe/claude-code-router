@@ -81,26 +81,21 @@ func liftSystemMessages(ctx context.Context, body []byte) ([]byte, int, error) {
 	lifted := make([]json.RawMessage, 0, len(messages))
 	moved := 0
 	for i, rawMessage := range messages {
-		var message map[string]json.RawMessage
-		if err := json.Unmarshal(rawMessage, &message); err != nil {
-			return nil, 0, bberrors.Wrapf(ctx, err, "parse message %d as a JSON object", i)
+		// messages is request-scoped and caller-controlled — a real Claude
+		// Code payload carries 45+ system entries — so honour cancellation
+		// rather than finishing a transform whose response nobody will read.
+		select {
+		case <-ctx.Done():
+			return nil, 0, bberrors.Wrapf(ctx, ctx.Err(), "lift system messages")
+		default:
 		}
-		rawRole, hasRole := message["role"]
-		if !hasRole || i == 0 {
-			kept = append(kept, rawMessage)
-			continue
-		}
-		var role string
-		if err := json.Unmarshal(rawRole, &role); err != nil {
-			return nil, 0, bberrors.Wrapf(ctx, err, "parse role of message %d as a string", i)
-		}
-		if role != "system" {
-			kept = append(kept, rawMessage)
-			continue
-		}
-		blocks, err := normalizeToBlocks(ctx, message["content"])
+		blocks, lift, err := liftableBlocks(ctx, i, rawMessage)
 		if err != nil {
-			return nil, 0, bberrors.Wrapf(ctx, err, "normalize content of message %d", i)
+			return nil, 0, err
+		}
+		if !lift {
+			kept = append(kept, rawMessage)
+			continue
 		}
 		lifted = append(lifted, blocks...)
 		moved++
@@ -128,6 +123,44 @@ func liftSystemMessages(ctx context.Context, body []byte) ([]byte, int, error) {
 		return nil, 0, bberrors.Wrapf(ctx, err, "re-marshal body")
 	}
 	return out, moved, nil
+}
+
+// liftableBlocks decides what happens to one entry of the `messages`
+// list. It reports lift=true, plus the entry's normalized content
+// blocks, only for a system-role entry at an index other than 0 — the
+// exact set liftSystemMessages moves. Everything else (index 0
+// whatever its role, an entry carrying no `role` key, any non-system
+// role) reports lift=false and is kept in place by the caller.
+//
+// Errors match the shapes liftSystemMessages documents: an entry that
+// is not a JSON object, a `role` that is not a string, or a `content`
+// that is neither string nor list. They are returned already wrapped,
+// so the caller must not wrap them a second time.
+func liftableBlocks(
+	ctx context.Context,
+	i int,
+	rawMessage json.RawMessage,
+) ([]json.RawMessage, bool, error) {
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(rawMessage, &message); err != nil {
+		return nil, false, bberrors.Wrapf(ctx, err, "parse message %d as a JSON object", i)
+	}
+	rawRole, hasRole := message["role"]
+	if !hasRole || i == 0 {
+		return nil, false, nil
+	}
+	var role string
+	if err := json.Unmarshal(rawRole, &role); err != nil {
+		return nil, false, bberrors.Wrapf(ctx, err, "parse role of message %d as a string", i)
+	}
+	if role != "system" {
+		return nil, false, nil
+	}
+	blocks, err := normalizeToBlocks(ctx, message["content"])
+	if err != nil {
+		return nil, false, bberrors.Wrapf(ctx, err, "normalize content of message %d", i)
+	}
+	return blocks, true, nil
 }
 
 // normalizeToBlocks converts a system content value into a list of
