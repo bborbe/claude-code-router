@@ -1460,6 +1460,49 @@ var _ = Describe("ModelRouter system lift", func() {
 		Expect(capturedStatus).To(Equal(http.StatusTeapot))
 	})
 
+	It("lifts on the default-provider fallback path when no route pattern matches", func() {
+		var capturedBody []byte
+		defaultUpstream := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+		})
+		routed := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			Fail("request must not reach the routed handler")
+		})
+		// The model matches no route pattern, so it falls through to
+		// defaultHandler — whose provider still declares the restriction.
+		routes := []handler.ModelRoute{
+			{
+				Pattern:               "llama*",
+				ProviderName:          "ollama-local",
+				Handler:               routed,
+				RequiresLeadingSystem: []string{"qwen3.8*"},
+			},
+		}
+		mux := handler.NewModelRouter(
+			routes,
+			"ollama-local",
+			defaultUpstream,
+			nil,
+			alwaysSample,
+			testMetrics,
+			testDateTime,
+		)
+		rec := httptest.NewRecorder()
+		post := func(body string) *http.Request {
+			return httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		}
+		mux.ServeHTTP(rec, post(liftBody))
+
+		var result map[string]interface{}
+		Expect(json.Unmarshal(capturedBody, &result)).To(Succeed())
+		messages, ok := result["messages"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(messages)).To(Equal(2))
+		systemRaw, ok := result["system"].([]interface{})
+		Expect(ok).To(BeTrue())
+		Expect(len(systemRaw)).To(Equal(3))
+	})
+
 	It("forwards byte-identically for a non-matching model on the same provider", func() {
 		var capturedBody []byte
 		capturing := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

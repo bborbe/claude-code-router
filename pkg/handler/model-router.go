@@ -198,7 +198,17 @@ func NewModelRouter(
 
 		providerName := defaultProviderName
 		target := defaultHandler
+		// Seed from the default provider's own globs: a request matching no
+		// route still reaches defaultHandler, and that provider's chat-template
+		// restriction applies to it just the same. Every route built for a
+		// provider carries that provider's list, so the first one wins.
 		var requiresLeadingSystem []string
+		for _, route := range routes {
+			if route.ProviderName == defaultProviderName {
+				requiresLeadingSystem = route.RequiresLeadingSystem
+				break
+			}
+		}
 		for _, route := range routes {
 			ok, _ := path.Match(route.Pattern, model)
 			if ok {
