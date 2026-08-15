@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.19.2
 
 - fix: bump Go toolchain to 1.26.6, fixing stdlib vulnerabilities GO-2026-5026, GO-2026-5972, GO-2026-6089, GO-2026-6090
 - fix: bump golang.org/x/mod to v0.40.0 and golang.org/x/text to v0.41.0, fixing GO-2026-6179, GO-2026-6180 (sumdb tlog verification bypass and unauthenticated hash lookup) and GO-2026-5970 (infinite loop on invalid input)
