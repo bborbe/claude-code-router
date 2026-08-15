@@ -56,6 +56,10 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
        token: "ollama"
        models:
          - "qwen*"
+       # Lift misplaced system messages for models whose chat template
+       # rejects them (qwen3.8 does; qwen3.6 does not). See docs/config.md.
+       requiresLeadingSystem:
+         - "qwen3.8*"
 
    # Short names that resolve to full model identifiers before routing.
    # Upstream always sees the resolved full name. Single-hop, case-sensitive.

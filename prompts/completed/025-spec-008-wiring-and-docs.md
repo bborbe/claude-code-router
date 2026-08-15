@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [008-requires-leading-system-message]
+summary: Wired requiresLeadingSystem patterns from parsed config into ModelRoute literals in CreateRouterFromConfig, shipped the full operator-facing documentation (docs/config.md with model-scoped rationale, docs/config.example.yaml, README.md, CHANGELOG.md), and added a factory-level integration test proving end-to-end routing with the transform
+execution_id: claude-code-router-qwen38-system-exec-025-spec-008-wiring-and-docs
+dark-factory-version: dev
 created: "2026-08-15T10:40:00Z"
 queued: "2026-08-15T10:45:24Z"
+started: "2026-08-15T20:55:06Z"
+completed: "2026-08-15T20:59:08Z"
 ---
 
 <summary>
