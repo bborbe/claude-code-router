@@ -5,7 +5,10 @@
 // export_test.go re-exports unexported symbols for testing.
 package handler
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
 // TraceTTLFromEnv exposes traceTTLFromEnv for handler_test.
 var TraceTTLFromEnv = traceTTLFromEnv
@@ -47,4 +50,14 @@ func UsageRecorderStatus(u *usageRecorder) int {
 // UsageLogLineValue exposes (TokenUsage).logLineValue for handler_test.
 func UsageLogLineValue(u TokenUsage) (in, out string) {
 	return u.logLineValue()
+}
+
+// LiftSystemMessages exposes liftSystemMessages for handler_test.
+func LiftSystemMessages(ctx context.Context, body []byte) ([]byte, int, error) {
+	return liftSystemMessages(ctx, body)
+}
+
+// MatchesAnyPattern exposes matchesAnyPattern for handler_test.
+func MatchesAnyPattern(patterns []string, model string) bool {
+	return matchesAnyPattern(patterns, model)
 }

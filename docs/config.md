@@ -25,6 +25,9 @@ providers:
     models:                            # filepath.Match glob patterns
       - "<pattern>"
       - ...
+    requiresLeadingSystem:             # optional; glob patterns for models whose chat template rejects a non-leading system message (see ## Requires leading system)
+      - "<pattern>"
+      - ...
 ```
 
 ## Routing
@@ -69,6 +72,44 @@ Then in any Claude Code session:
 |---|---|
 | Alias key equals a provider name (e.g. `aliases: { minimax: ... }` AND `providers: { minimax: ... }`) | **Error** at `config.Load` — daemon refuses to start. Operator must rename the alias key or the provider. |
 | Alias target matches no provider's `models:` glob (e.g. `aliases: { foo: typo-name }` where no provider lists `typo-name*`) | **Warning** at startup via glog (`[config] alias target "typo-name" (from alias key "foo") matches no provider glob`); config still loads. At runtime, requests using that alias get rewritten to the typo string and fall through to `default_provider`, which likely returns 404. Operator notices the warning at startup. |
+
+## Requires leading system
+
+Claude Code puts a `system`-role entry inside the message list, after the first user turn, in addition to the dedicated top-level `system` block. Some models' chat templates reject any system entry that is not first and answer `HTTP 500 {"type":"error","error":{"type":"api_error","message":"system message must be at the beginning"}}` before inference starts.
+
+Example:
+
+```yaml
+providers:
+  ollama-local:
+    upstream: http://localhost:11434
+    token: ollama
+    models:
+      - "qwen*"
+    requiresLeadingSystem:
+      - "qwen3.8*"
+```
+
+### Semantics
+
+- **Glob syntax.** Same `filepath.Match` syntax as `models:` — `*`, `?`, `[abc]`. Matched against the FULLY RESOLVED model name, i.e. after alias resolution and after the `[1m]` suffix is stripped.
+- **Opt-in, default off.** Absent, `null`, and an empty list are equivalent and all mean: never transform anything for this provider. A config that does not mention the field routes byte-for-byte as before.
+- **What the transform does.** Every `system`-role entry that is not at index 0 of `messages` is removed from the list and its content appended to the top-level `system` block, in the order the entries appeared. Content given as a plain string becomes one `{"type":"text","text":"..."}` block; content already given as a block list is appended block for block. The surviving messages keep their relative order.
+- **What it does not do.** A `system` entry already at index 0 stays there and is NOT copied into the top-level block, even when a top-level block also exists — the upstream then receives system content in both places, which is the shape Claude Code already sends today and which upstreams accept. No merging, deduplication, summarisation, or reordering beyond moving entries.
+- **Untransformed paths.** A request whose model does not match, or that has no misplaced system entry, is forwarded as the exact bytes received. Same for a body the transform cannot interpret (`messages` not a list, an entry that is not an object, a system `content` that is neither a string nor a block list): the request is forwarded unchanged with one `WARNING` line and the client gets the upstream's own status — the transform never turns a request into a router-generated error.
+- **Scope is the matched route.** The patterns come from the provider whose `models:` glob matched. A request that matches no provider glob and falls through to `default_provider` is never transformed — if you need the transform for such a model, give that provider a `models:` glob that matches it.
+- **Log line.** On a fire, the router logs `[system-lift] model=qwen3.8:27b-mlx moved=2` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines, so it is invisible at the always-on `V(1)` default. Raise the level with `curl http://127.0.0.1:8788/setloglevel/2` (auto-reverts after 5 minutes) before grepping `/tmp/claude-code-router.log` for it. The line carries the model name and a count only — never system-message content.
+
+### Why per model and not per provider
+
+ollama's system-position restriction is a property of each MODEL's chat template, not of the ollama server, so two models behind the same provider legitimately disagree. Verified 2026-08-15 with identical curl payloads against the same ollama instance: `qwen3.6:35b-a3b-coding-nvfp4` → 200, `qwen3.8:27b-mlx` → 500, `qwen3.8:27b-mtp-q4_K_M` → 500 — all three match the `ollama-local` provider's `qwen*` glob. A provider-wide boolean switch would therefore silently rewrite prompts for models that never needed it, which is why there is no such switch and no global toggle, environment variable, or CLI flag.
+
+### Validation
+
+| Condition | Behavior |
+|---|---|
+| Malformed glob pattern (e.g. `[`) | Config load fails with `provider "<name>": invalid requiresLeadingSystem glob "["`; router refuses to start |
+| Well-formed pattern that matches no model the operator actually uses | Not an error; no warning. The symptom is that no `[system-lift]` line ever appears while the upstream keeps returning 500, and the fix is to widen the pattern. |
 
 ## Auth
 
@@ -143,6 +184,8 @@ providers:
     token: "ollama"                   # Ollama's literal-string convention
     models:
       - "qwen*"
+    requiresLeadingSystem:            # qwen3.8's chat template rejects a non-leading system message
+      - "qwen3.8*"
 
 aliases:
   qwen: qwen3.6:35b-a3b-coding-nvfp4

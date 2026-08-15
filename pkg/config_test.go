@@ -250,4 +250,91 @@ aliases:
 			Expect(string(captured)).To(ContainSubstring("matches no provider"))
 		})
 	})
+
+	Context("requiresLeadingSystem", func() {
+		It("parses a per-provider requiresLeadingSystem list", func() {
+			p := write(`
+router:
+  default_provider: anthropic-subscription
+providers:
+  anthropic-subscription:
+    upstream: https://api.anthropic.com
+    models: ["claude-opus-*"]
+  ollama-local:
+    upstream: http://localhost:11434
+    token: ollama
+    models:
+      - "qwen*"
+    requiresLeadingSystem:
+      - "qwen3.8*"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(
+				cfg.Providers["ollama-local"].RequiresLeadingSystem,
+			).To(Equal([]string{"qwen3.8*"}))
+			Expect(cfg.Providers["anthropic-subscription"].RequiresLeadingSystem).To(BeEmpty())
+		})
+
+		It("loads a config without requiresLeadingSystem — backward compat", func() {
+			p := write(`
+router:
+  default_provider: anthropic-subscription
+providers:
+  anthropic-subscription:
+    upstream: https://api.anthropic.com
+    models: ["claude-opus-*"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic-subscription"].RequiresLeadingSystem).To(BeEmpty())
+		})
+
+		It("treats an explicit empty list as no patterns", func() {
+			p := write(`
+router:
+  default_provider: anthropic-subscription
+providers:
+  anthropic-subscription:
+    upstream: https://api.anthropic.com
+    models: ["claude-opus-*"]
+    requiresLeadingSystem: []
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic-subscription"].RequiresLeadingSystem).To(BeEmpty())
+		})
+
+		It("errors on a malformed requiresLeadingSystem pattern", func() {
+			p := write(`
+router:
+  default_provider: ollama-local
+providers:
+  ollama-local:
+    upstream: http://localhost:11434
+    token: ollama
+    models: ["qwen*"]
+    requiresLeadingSystem: ["["]
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(BeNil())
+			Expect(err.Error()).To(ContainSubstring("requiresLeadingSystem"))
+			Expect(err.Error()).To(ContainSubstring("["))
+			Expect(err.Error()).To(ContainSubstring("ollama-local"))
+		})
+
+		It("still rejects a malformed models glob", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://example.com
+    models: ["[invalid"]
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(MatchError(ContainSubstring("invalid model glob")))
+			Expect(err.Error()).NotTo(ContainSubstring("requiresLeadingSystem"))
+		})
+	})
 })

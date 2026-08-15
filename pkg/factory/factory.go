@@ -156,9 +156,10 @@ func CreateRouterFromConfig(
 		providerHandlers[name] = proxy
 		for _, pattern := range prov.Models {
 			routes = append(routes, handler.ModelRoute{
-				Pattern:      pattern,
-				ProviderName: name,
-				Handler:      proxy,
+				Pattern:               pattern,
+				ProviderName:          name,
+				Handler:               proxy,
+				RequiresLeadingSystem: prov.RequiresLeadingSystem,
 			})
 		}
 	}

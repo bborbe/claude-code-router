@@ -36,6 +36,12 @@ providers:
     token: "ollama"
     models:
       - "qwen*"
+    # Models whose chat template rejects a system message that is not the
+    # first entry (qwen3.8 does; qwen3.6 on the same server does not).
+    # The router lifts misplaced system messages into the top-level system
+    # block for matching models. Omit or leave empty for no transform.
+    requiresLeadingSystem:
+      - "qwen3.8*"
 
 # Short names that map to full model identifiers.
 # Operator-facing only — the upstream always sees the resolved full name.
