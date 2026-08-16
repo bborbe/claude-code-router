@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- update Go to 1.26.6 and update dependencies
+- fix: GO-2026-5970 (golang.org/x/text), GO-2026-6179 (golang.org/x/mod), GO-2026-5026, GO-2026-5972, GO-2026-6089, GO-2026-6090 (stdlib)
+
 ## v0.19.1
 
 - Bump Go toolchain to 1.26.5
