@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.20.0
 
 - feat: add the optional per-provider `requiresLeadingSystem` config field — glob patterns naming models whose chat template rejects a `system`-role message that is not the conversation's first entry. For a matching model the router lifts misplaced system messages into the top-level `system` block, preserving order, and logs `[system-lift] model=<model> moved=<n>` at V(2). Fixes qwen3.8 through ollama, which returned `HTTP 500 system message must be at the beginning` on every Claude Code request. Scoped per model rather than per provider, since the restriction lives in each model's chat template — qwen3.6 and qwen3.8 disagree behind one provider. Absent or empty means byte-identical forwarding, so existing configs are unaffected; an uninterpretable body is forwarded unchanged with one warning rather than failing the request.
 
