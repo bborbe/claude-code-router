@@ -1,3 +1,6 @@
+{{- if and .Values.existingConfigSecret .Values.config -}}
+{{- fail "existingConfigSecret and config are mutually exclusive — set exactly one" -}}
+{{- end -}}
 {{- if and (not .Values.existingConfigSecret) .Values.config -}}
 apiVersion: v1
 kind: ConfigMap

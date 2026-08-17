@@ -5,7 +5,7 @@ include Makefile.docker
 SERVICE = claude-code-router
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X github.com/bborbe/claude-code-router/pkg/cli.version=$(VERSION)
+LDFLAGS := -X github.com/bborbe/claude-code-router/pkg.version=$(VERSION)
 
 .PHONY: default
 default: precommit

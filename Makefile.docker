@@ -60,6 +60,8 @@ CHART_OCI ?= oci://registry-1.docker.io/bborbe
 .PHONY: helm-publish
 helm-publish:
 	@helm lint helm/
-	@helm template smoke helm/ --set config.router.default_provider=smoke --set config.providers.smoke.upstream=http://localhost:1 --set-string 'config.providers.smoke.models={smoke-*}' >/dev/null || exit 1
+	@if ! helm template smoke helm/ --set config.router.default_provider=smoke --set config.providers.smoke.upstream=http://localhost:1 --set-string 'config.providers.smoke.models={smoke-*}' >/dev/null; then \
+		echo "helm template smoke failed" >&2; exit 1; \
+	fi
 	@helm package helm/ -d /tmp
 	@helm push /tmp/claude-code-router-$$(awk '/^version:/{print $$2; exit}' helm/Chart.yaml).tgz $(CHART_OCI)
