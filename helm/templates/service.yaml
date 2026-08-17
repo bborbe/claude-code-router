@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "claude-code-router.labels" . | nindent 4 }}
   annotations:
-    admin/port: {{ .Values.service.adminPort | quote }}
+    admin/port: {{ .Values.listen | trimPrefix ":" | quote }}
     admin/path: {{ .Values.service.adminPath | quote }}
 spec:
   type: ClusterIP
@@ -15,6 +15,6 @@ spec:
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: http
-      port: {{ .Values.service.adminPort | int }}
+      port: {{ .Values.listen | trimPrefix ":" | int }}
       targetPort: http
       protocol: TCP

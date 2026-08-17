@@ -74,7 +74,8 @@ keel:
 rolloutNonce: ""
 
 service:
-  # admin/port + admin/path annotations read by the admin gateway
+  # admin/path annotation read by the admin gateway
   # (https://<stage>.quant.benjamin-borbe.de/admin/<service>/<path>).
-  adminPort: "8788"
+  # admin/port is derived from `listen` so Service port, admin annotation and
+  # containerPort can never drift.
   adminPath: ""

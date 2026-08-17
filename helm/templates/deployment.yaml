@@ -93,6 +93,7 @@ spec:
             httpGet:
               path: /readiness
               port: http
+            failureThreshold: 3
             initialDelaySeconds: 5
             timeoutSeconds: 5
           volumeMounts:
