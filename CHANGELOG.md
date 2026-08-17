@@ -7,6 +7,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 - feat: add container packaging — Dockerfile (scratch, multi-stage) + Makefile.docker `buca` block for building and pushing `bborbe/claude-code-router` images. Follows `go-dockerfile-guide.md` (ca-certs + zoneinfo, `-mod=vendor` via `check-go-mod`, registry-parameterized). Local dev `make build` renamed to `build-local`.
+- feat: add Helm chart (`helm/`) — Deployment + Service + ConfigMap (config.yaml) + Secret (existingSecret/secretEnv), published via `make helm-publish` to `oci://registry-1.docker.io/bborbe/claude-code-router`. Git-rest chart pattern; config mounts at `CONFIG_PATH`, LISTEN from env, probes + prometheus annotations on the same port. For the fleet-facing cluster router (burn relay + GLM/MiniMax fallback).
 
 ## v0.25.0
 

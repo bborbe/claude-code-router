@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "claude-code-router.labels" . | nindent 4 }}
+  annotations:
+    admin/port: {{ .Values.service.adminPort | quote }}
+    admin/path: {{ .Values.service.adminPath | quote }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: claude-code-router
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.service.adminPort | int }}
+      targetPort: http
+      protocol: TCP

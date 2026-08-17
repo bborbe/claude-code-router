@@ -1,0 +1,80 @@
+# claude-code-router — one instance as Deployment + Service.
+#
+# Config: the router reads a single YAML config at CONFIG_PATH. Token-bearing
+# providers (GLM, MiniMax fallback; burn API key) live in a Secret, referenced by
+# existingSecret (keys = provider tokens). Non-secret config (upstream URLs,
+# model globs, aliases, default_provider) can be templated into a ConfigMap via
+# `config`, or supplied wholesale via existingConfigSecret.
+#
+# quant: existingConfigSecret + existingSecret reference teamvault-rendered
+# Secrets (the chart never creates them). Generic clusters: inline the values
+# below and the chart renders ConfigMap + Secret.
+
+image:
+  registry: docker.io
+  repository: bborbe/claude-code-router
+  # Empty defaults to Chart.appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Listen address (LISTEN env). Default matches the router's own default port.
+listen: ":8788"
+logLevel: "2"
+
+# Existing Secret holding the token-bearing config.yaml wholesale under key
+# `config.yaml` (mounted at CONFIG_PATH). Mutually exclusive with `config` —
+# set exactly one. quant sets this.
+existingConfigSecret: ""
+
+# Non-secret config rendered into a ConfigMap under key `config.yaml` and mounted
+# at CONFIG_PATH. Use when the router config carries NO tokens (pass-through
+# providers only), or alongside a small `secret`/existingSecret for tokens the
+# config references. Mutually exclusive with existingConfigSecret.
+config:
+  router:
+    default_provider: ""
+  providers: {}
+  aliases: {}
+  trace: false
+
+# Existing Secret holding token values, mounted as env vars. Keys become env var
+# names. Reference only — the chart never creates the Secret.
+existingSecret: ""
+secretEnv:
+  {}
+
+# Extra env vars (name/value) applied to the container, e.g. teamvault-resolved
+# values the operator wants explicit. Static values only — for secret material
+# prefer existingSecret + secretEnv.
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext: {}
+securityContext: {}
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 50Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# keel auto-redeploy annotations (registry polling). Off by default — versioned
+# deploys bump image.tag + re-apply instead.
+keel:
+  enabled: false
+  pollSchedule: "@every 1m"
+
+# Extra pod annotation to force a rollout. Empty = omit.
+rolloutNonce: ""
+
+service:
+  # admin/port + admin/path annotations read by the admin gateway
+  # (https://<stage>.quant.benjamin-borbe.de/admin/<service>/<path>).
+  adminPort: "8788"
+  adminPath: ""
