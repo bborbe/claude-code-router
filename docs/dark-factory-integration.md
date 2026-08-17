@@ -79,10 +79,10 @@ Applied in two places:
 env:
   ANTHROPIC_BASE_URL: http://host.docker.internal:8788
   # ANTHROPIC_BASE_URL: https://api.minimax.io/anthropic   # keep commented — fallback if router is down
-  # ANTHROPIC_AUTH_TOKEN: <REDACTED>                        # keep commented — router holds the token now
+  # ANTHROPIC_API_KEY: <YOUR_ROUTING_KEY>   # the router's registry key; sent as x-api-key, routes the container's traffic to the key's provider and authenticates it
 ```
 
-The two commented-out lines are deliberate: a 30-second swap-back if the router is unreachable, without re-typing the provider token.
+The two commented-out lines are deliberate: a 30-second swap-back to a direct upstream if the router is unreachable — point `ANTHROPIC_BASE_URL` at the provider and set `ANTHROPIC_API_KEY` to a real provider key.
 
 ### 5. Router config has the provider entries for whatever models dark-factory will request
 

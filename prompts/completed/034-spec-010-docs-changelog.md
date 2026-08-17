@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["010"]
+summary: 'Documented the allowedApiKeys surface and spec-009 supersession across docs/config.md, config.example.yaml, README, dark-factory-integration.md, debug.md, launchd-service.md, and added the ## Unreleased CHANGELOG entry; all AC 14 greps pass and make precommit exits 0'
+execution_id: claude-code-router-exec-034-spec-010-docs-changelog
+dark-factory-version: dev
 created: "2026-08-17T19:12:47Z"
 queued: "2026-08-17T19:50:37Z"
+started: "2026-08-17T20:37:51Z"
+completed: "2026-08-17T20:48:55Z"
 ---
 
 # Docs + changelog: allowedApiKeys surface, supersession of auth, launchd wrapper note

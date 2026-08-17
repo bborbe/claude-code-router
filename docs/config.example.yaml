@@ -7,17 +7,12 @@ router:
 
 # Per-request trace logging for /v1/* traffic.
 # When true, writes one JSON file per request to ~/.claude-code-router/trace/
-# (Authorization + x-api-key + x-router-key headers redacted to ***; bodies verbatim).
+# (Authorization + x-api-key headers redacted to ***; bodies verbatim).
 # Default false — omit or set false for no trace files.
 trace: false
 
-# auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
-#   key: "<YOUR_ROUTER_KEY>"    # ROUTER_AUTH_KEY env var wins over this when set; launchd wrapper injects it from TeamVault (see docs/config.md ## Inbound auth)
-
-# allowedApiKeys:              # optional; registry of API keys that authenticate non-loopback /v1/* requests.
-#   - "<YOUR_API_KEY>"         #   The valid key set is this registry when non-empty, else the union of all
-#                              #   providers' lists. Absent/null/empty = no key enforcement, no key routing.
-#                              #   (see docs/config.md ## Allowed API keys)
+# allowedApiKeys:            # optional; uncomment + list caller keys to require x-api-key auth on /v1/*
+#   - "<CALLER_API_KEY>"     # and to route those callers to a provider (see docs/config.md ## Routing by API key)
 
 providers:
 
@@ -36,6 +31,8 @@ providers:
   minimax:
     upstream: https://api.minimax.io/anthropic
     token: "<YOUR_MINIMAX_API_KEY>"
+    # allowedApiKeys:            # optional; keys that route to THIS provider, overriding model globs
+    #   - "<ROUTING_KEY>"
     models:
       - "MiniMax-*"
 
@@ -50,9 +47,6 @@ providers:
     # block for matching models. Omit or leave empty for no transform.
     requiresLeadingSystem:
       - "qwen3.8*"
-    # allowedApiKeys:          # optional; routing pin — a request presenting one of these keys is
-    #   - "<YOUR_API_KEY>"     #   dispatched to this provider, overriding model globs. A key must not
-    #                          #   be claimed by more than one provider. (see docs/config.md ## Allowed API keys)
 
 # Short names that map to full model identifiers.
 # Operator-facing only — the upstream always sees the resolved full name.

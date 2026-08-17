@@ -68,7 +68,7 @@ Each `/v1/*` request writes exactly one JSON file:
 }
 ```
 
-`Authorization`, `x-api-key`, and `x-router-key` request headers are redacted to `***` (case-insensitive). All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk. See [config.md#trace](config.md) for the config-flag variant (always-on, deprecated in favor of the `/enabletrace` runtime toggle).
+`Authorization` and `x-api-key` request headers are redacted to `***` (case-insensitive). All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk. See [config.md#trace](config.md) for the config-flag variant (always-on, deprecated in favor of the `/enabletrace` runtime toggle).
 
 ## Config changes vs binary upgrades
 
@@ -77,4 +77,4 @@ Each `/v1/*` request writes exactly one JSON file:
 
 ## Trust model
 
-`/setloglevel/`, `/enabletrace`, `/disabletrace` and `/gc` are guarded by an unconditional loopback-only check: a non-loopback request is refused with `403 Forbidden` before handler logic runs, and the remote address is read only from the connection (never `X-Forwarded-For` / `X-Real-IP`). The guard is always on — there is no config knob to disable it — and it is the protection once the listener binds beyond `127.0.0.1`. Binding `0.0.0.0:8788` (e.g. for dark-factory containers) is legitimate; the admin endpoints stay loopback-only. `/v1/*` traffic, by contrast, is protected by the optional `auth.key` check: with a key set, non-loopback callers must present it in the `x-router-key` header or receive a 401. See [config.md § Inbound auth](config.md#inbound-auth) for the full model.
+`/setloglevel/`, `/enabletrace`, `/disabletrace` and `/gc` are guarded by an unconditional loopback-only check: a non-loopback request is refused with `403 Forbidden` before handler logic runs, and the remote address is read only from the connection (never `X-Forwarded-For` / `X-Real-IP`). The guard is always on — there is no config knob to disable it — and it is the protection once the listener binds beyond `127.0.0.1`. Binding `0.0.0.0:8788` (e.g. for dark-factory containers) is legitimate; the admin endpoints stay loopback-only. `/v1/*` traffic, by contrast, is protected by the optional `allowedApiKeys` gate: with a non-empty registry, non-loopback callers must present a registry key in the `x-api-key` header or receive a 401. See [config.md § Routing by API key](config.md#routing-by-api-key) for the full model.

@@ -222,6 +222,10 @@ A line like `limit=33554432 bytes` (32 MB) means you genuinely hit the Anthropic
 
 You probably have `ANTHROPIC_API_KEY` set in your shell — that overrides the subscription OAuth bearer and breaks auth. Unset it (`unset ANTHROPIC_API_KEY`) and reopen the shell. `clauder` deliberately sets only `ANTHROPIC_BASE_URL`.
 
+## Migrating from the retired `ROUTER_AUTH_KEY`
+
+The spec-009 `ROUTER_AUTH_KEY` env-var auth is removed. The launchd wrapper `~/.local/bin/claude-code-router.sh` must stop injecting `ROUTER_AUTH_KEY` from TeamVault — keys now live in the config's `allowedApiKeys`, read at load time like the provider tokens (no env var replaces it). A wrapper that still injects `ROUTER_AUTH_KEY` makes the router refuse to start (fail-closed). See [config.md § Routing by API key](config.md#routing-by-api-key) and its Migrating from 009 note for the full procedure.
+
 ## Related
 
 - [README](../README.md) — overview + `clauder` shell function

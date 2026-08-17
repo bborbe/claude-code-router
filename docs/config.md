@@ -16,10 +16,7 @@ Override with `--config-path` or `CONFIG_PATH` env var — an explicit value alw
 router:
   default_provider: <provider-key>     # required; must match a key under providers:
 
-auth:
-  key: <string>                        # optional; shared key gating non-loopback /v1/* requests (see ## Inbound auth). Absent or empty disables the check.
-
-allowedApiKeys:                       # optional; registry of API keys that authenticate non-loopback /v1/* requests (see ## Allowed API keys). Absent, null, or empty disables key enforcement and key routing.
+allowedApiKeys:                  # optional; list of API keys authenticating non-loopback /v1/* requests (see ## Routing by API key). Absent or empty disables key enforcement and key routing.
   - "<key>"
 
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
@@ -34,8 +31,7 @@ providers:
     requiresLeadingSystem:             # optional; glob patterns for models whose chat template rejects a non-leading system message (see ## Requires leading system)
       - "<pattern>"
       - ...
-    allowedApiKeys:                    # optional; this provider's routing pin — a request presenting one of these keys is dispatched here, overriding model globs (see ## Allowed API keys)
-      - "<key>"
+    # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
 ```
 
 ## Routing
@@ -128,24 +124,7 @@ ollama's system-position restriction is a property of each MODEL's chat template
 
 The router never stores or logs token values; trace files inherit the same invariant — see ## Trace.
 
-## Inbound auth
-
-The optional top-level `auth:` block configures a shared key that gates the `/v1/*` inference path for non-loopback callers.
-
-```yaml
-# auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
-#   key: "<YOUR_ROUTER_KEY>"
-```
-
-- **Disabled by default.** Absent, `null`, and an empty `key` are equivalent and all mean the router behaves exactly as it does today — no caller is challenged. This is the only mode for existing single-user localhost setups, so upgrading is not a behavior change.
-- **Non-empty key ⇒ the check is on.** With `auth.key` set, every non-loopback `/v1/*` request must present the matching key in the `x-router-key` header; a missing or wrong key is refused with `401 Unauthorized` (constant-time comparison via `crypto/subtle`; neither the presented nor the configured key is ever logged). Loopback requests are exempt, so the operator's own Claude Code on the host keeps working keyless.
-- **`ROUTER_AUTH_KEY` wins over the config.** The router resolves the gate key env-first at startup: if the `ROUTER_AUTH_KEY` environment variable is non-empty, it is used regardless of the config's `auth:` block — so `auth.key` may be either a literal key or simply a non-empty marker, and a config with no `auth:` block at all still enables auth when the env var is set. Only when `ROUTER_AUTH_KEY` is empty does `auth.key` apply, so existing literal-key configs keep working unchanged. The env var is the raw secret's home: a launchd wrapper fetches it from TeamVault and injects it at startup, keeping the secret out of the config file entirely.
-- **The key never reaches an upstream.** A presented `x-router-key` is stripped from a cloned request before it is forwarded, so a key carried via `ANTHROPIC_CUSTOM_HEADERS` never leaks to a provider.
-- **SIGHUP applies changes.** `auth.key` lives in the same config that hot-reloads on SIGHUP — edit the file, `kill -HUP $(pgrep claude-code-router)`, and the new key (or its removal) is live without a restart. (`ROUTER_AUTH_KEY` is read once at startup; changing it requires a restart.)
-- **Caller side.** A remote caller (e.g. a dark-factory YOLO container) presents the key by having Claude Code send it: set `ANTHROPIC_CUSTOM_HEADERS` to carry `x-router-key: <value>` alongside `ANTHROPIC_BASE_URL`. Without this, an operator can enable auth but has no way to configure a caller.
-- **Sensitive.** The value is a shared secret, like the provider `token:` fields. Keep the config at `chmod 600`; the router never logs the key. Prefer keeping the raw secret in TeamVault and letting the launchd wrapper inject it via `ROUTER_AUTH_KEY` — never commit a literal key to the config file.
-
-## Allowed API keys
+## Routing by API key
 
 Two optional config fields define key-based authentication and routing: a top-level `allowedApiKeys` registry and an optional per-provider `allowedApiKeys` list.
 
@@ -160,11 +139,20 @@ providers:
       - "<KEY>"
 ```
 
-- **Feature-off by default.** Absent, `null`, and an empty list are equivalent and all mean: no key enforcement and no key routing — the `/v1/*` path behaves exactly as it does today. Existing single-user localhost configs are unaffected.
-- **Top-level registry is the auth superset and single rotation point.** The valid inbound key set for non-loopback callers is the top-level registry when non-empty, else the union of all providers' lists. A key that appears in that set authenticates the caller; adding or removing a key there is the rotation operation.
-- **Per-provider list is the routing pin.** A request whose presented `x-api-key` is in a provider's list is dispatched to that provider, overriding model-glob selection. A key may appear in both the top-level registry and a provider's list — the registry authenticates, the provider claim routes.
-- **Duplicate claims fail load.** Two providers declaring the same key in their `allowedApiKeys` is ambiguous and is rejected at `config.Load` with an error naming the key and both providers — never a silent first-wins at runtime. A single provider listing a key twice in its own list is not a duplicate, and a key in both the top-level registry and a provider's list is not a duplicate.
-- **Literal strings.** Keys are literal strings, like the provider `token:` fields — no format checks, no length limits, and whitespace-only entries are treated as literals. Keep the config at `chmod 600`; the router never logs a key.
+- **Feature-off by default.** Absent, `null`, and empty lists are equivalent and all mean: no key enforcement and no key routing — the `/v1/*` path behaves byte-for-byte exactly as it does today. Existing single-user localhost configs are unaffected.
+- **Valid inbound key set.** The set of keys that authenticate a non-loopback caller is the top-level registry when non-empty, else the union of all providers' lists. Adding or removing a key there is the rotation operation.
+- **Duplicate claims fail load.** Two providers declaring the same key in their `allowedApiKeys` is ambiguous and rejected at config load with an error naming the key and both providers — never a silent first-wins at runtime. A key in both the top-level registry and a provider's list is not a duplicate.
+- **The routing rule.** A request whose presented `x-api-key` value is in a provider's list is dispatched to that provider (its outbound token), overriding model-glob selection. A key that is valid but claimed by no provider routes exactly like a keyless request — glob match, then `default_provider`. A keyless request is unchanged.
+- **The non-loopback auth gate.** With a non-empty registry, every non-loopback `/v1/*` request must present a registry key in the `x-api-key` header or it is refused with `401 Unauthorized` (constant-time comparison via `crypto/subtle`; neither the presented nor the configured key is ever logged). Loopback requests are exempt — the operator's own Claude Code on the host keeps working keyless — but their `x-api-key` is still stripped outbound.
+- **Outbound hygiene.** `x-api-key` is stripped from a cloned request before it is forwarded, in every letter case, so a caller's key never reaches an upstream. `Authorization` behavior is unchanged: a provider with a `token:` sends `Bearer <token>`, a provider without one passes the client's header through.
+- **SIGHUP applies changes.** Both `allowedApiKeys` fields live in the same config that hot-reloads on SIGHUP — edit the file, `kill -HUP $(pgrep claude-code-router)`, and new keys (or their removal) are live without a restart.
+- **Caller side.** A remote caller (e.g. a dark-factory YOLO container) presents its registry key by setting `ANTHROPIC_API_KEY` — Claude Code sends it as `x-api-key`, which the router validates and routes by. Failure-modes caveat: on a machine that also runs a Claude subscription, `ANTHROPIC_API_KEY` overrides the subscription OAuth in `-p` mode — the operator's own host stays keyless loopback.
+- **Supersession.** This replaces the spec-009 `x-router-key` / `auth.key` / `ROUTER_AUTH_KEY` mechanism, which is removed. A config still carrying an `auth:` block fails to load, and the binary refuses to start with `ROUTER_AUTH_KEY` set.
+- **Sensitive.** Keys are literal strings, like the provider `token:` fields — no format checks, no length limits. Keep the config at `chmod 600`; the router never logs a key. Never commit a literal key.
+
+### Migrating from 009
+
+The retired `ROUTER_AUTH_KEY` environment variable must be removed from the launchd wrapper `~/.local/bin/claude-code-router.sh`, which currently injects it from TeamVault. No env var replaces it: the registry values live in the `chmod 600` config file like the provider tokens, read via `allowedApiKeys` rather than injected at startup. An operator who forgets to remove it gets the fail-closed startup error — the binary refuses to start while `ROUTER_AUTH_KEY` is still set. Completing the migration: remove the `ROUTER_AUTH_KEY` injection from the wrapper, configure `allowedApiKeys` in the config, then SIGHUP (or restart) the router.
 
 ## Trace
 
@@ -172,7 +160,7 @@ The `trace:` flag is a top-level boolean. When `true`, every `/v1/*` request pro
 
 When `false` (or absent), no trace files are written and no trace middleware is on the request hot path.
 
-The `Authorization`, `x-api-key`, and `x-router-key` request headers are redacted to `***` in every trace file, regardless of header case. All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk.
+The `Authorization` and `x-api-key` request headers are redacted to `***` in every trace file, regardless of header case. All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk.
 
 The flag is read once at config load; changing it requires a router restart (see ## Reload).
 
@@ -206,10 +194,7 @@ The legacy `trace: true` config flag still works as an always-on opt-in (trace m
 router:
   default_provider: anthropic-subscription
 
-# Optional: require non-loopback /v1/* callers to present this key.
-# Omit or leave empty to disable inbound auth.
-auth:
-  key: "<YOUR_ROUTER_KEY>"
+# allowedApiKeys:            # optional; uncomment + list keys to enable non-loopback auth and key routing
 
 providers:
 

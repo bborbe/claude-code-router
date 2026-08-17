@@ -32,11 +32,8 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
    router:
      default_provider: anthropic-subscription
 
-   # auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
-   #   key: "<YOUR_ROUTER_KEY>"
-
-   # allowedApiKeys:              # optional; registry of API keys authenticating non-loopback /v1/* requests (see docs/config.md ## Allowed API keys)
-   #   - "<YOUR_API_KEY>"
+   # allowedApiKeys:            # optional; uncomment + list caller keys to require x-api-key auth on /v1/*
+   #   - "<CALLER_API_KEY>"     # and to route those callers to a provider (see docs/config.md ## Routing by API key)
 
    providers:
      anthropic-subscription:
