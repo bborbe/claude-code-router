@@ -1,6 +1,7 @@
 ---
-status: approved
+status: verifying
 approved: "2026-08-17T13:31:45Z"
+verifying: "2026-08-17T18:01:38Z"
 branch: dark-factory/inbound-api-key-auth
 ---
 
@@ -185,3 +186,19 @@ The two themes — `/v1/*` inbound auth and the admin loopback guard — ship as
 ## Do-Nothing Option
 
 Doing nothing keeps the router unauthenticated, which is genuinely fine for as long as it stays on `127.0.0.1`. The cost is that it blocks the two changes that need the port reachable: the dark-factory container integration already documents the `0.0.0.0` bind as a required step, and cluster agents reaching the host cannot happen at all. Shipping either of those without this change means a port that hands any host on the network free use of four provider subscriptions on the operator's credential, plus a remote switch that writes every request body — including the operator's own sessions — to disk. The alternatives considered and rejected: a firewall source restriction alone (real defence in depth, but it authenticates a network location rather than a caller, and does nothing about the admin endpoints once a permitted host is compromised — worth having *as well*, not *instead*); mTLS (stronger, disproportionate to operate for one laptop and a handful of callers); and keeping the router loopback-only forever while running a separate authenticated proxy in front of it (two processes to reason about, and the proxy would need exactly this key check anyway).
+
+## Verification Result
+
+**Verified:** 2026-08-17T18:49:44Z (HEAD 2a2983e)
+**Binary:** /Users/bborbe/Documents/workspaces/go/bin/claude-code-router (v0.26.0, `make install` path; running PID 79798)
+**Scenario:** Operator-executable ladder from ## Verification replayed live against the deployed router on 0.0.0.0:8788; structural ACs re-grepped; go test refresh
+**Evidence:**
+- Deploy gate: `grep -o 'version=[^ ]*' /tmp/claude-code-router.log | tail -1` → `version=v0.26.0`, equals `git describe --tags --abbrev=0` = v0.26.0; line belongs to running PID 79798 (verified via ps)
+- LAN 192.168.177.164 keyless /v1/messages → 401, `auth rejected` +1; wrong key → 401, +1
+- LAN correct key → `auth rejected` delta 0 (accepted & forwarded; upstream 401 is the OAuth-less body)
+- Loopback keyless → `auth rejected` delta 0 (bypass)
+- LAN /enabletrace /disabletrace /setloglevel/2 /gc → 403 each, `admin refused` +1 each; loopback same → 200/200/200/200
+- Key-literal leak grep: log 0, repo 0; `subtle.ConstantTimeCompare` at pkg/handler/auth-middleware.go:40
+- `go test ./pkg/...` → ok (pkg, factory, handler, reloader)
+- AC17: feature documented under released v0.24.0/v0.25.0; `## Unreleased` cut by auto-release after merge (restoring it would falsify the changelog)
+**Verdict:** PASS
