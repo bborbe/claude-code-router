@@ -163,3 +163,17 @@ Rationale: prompt 1 lands the config surface and validation that prompts 2 and 3
 ## Do-Nothing Option
 
 Doing nothing keeps the router unable to split the same model across quotas: all deepseek traffic stays on the single `seibert-vllm` key, the dark-factory quota is unusable for deepseek models, and dark-factory containers share the operator's general quota — no separation between interactive and batch workloads, and no way to grant a bounded quota to a third consumer (e.g. cluster agents) without sharing the general key. The cost is not correctness but operability: one shared quota, no per-caller revocation, no way to add a consumer with a bounded key. The auth surface would additionally stay split across `x-router-key` (auth) and whatever the operator bolts on for routing, instead of the single standard `ANTHROPIC_API_KEY` surface this spec provides. The work is small (one config surface, one auth evolution, one routing rule) and reuses the 009 seam, so the cost of doing it now is bounded.
+
+## Verification Result
+
+**Verified:** 2026-08-17T22:35:32Z (HEAD 0d7c87a)
+**Binary:** v0.30.1 — /Users/bborbe/Documents/workspaces/go/bin/claude-code-router (pid 36074, launched 22:17:06; log version=v0.30.1 == git describe v0.30.1)
+**Scenario:** live replay at loglevel 4 (set 22:18:42) against deployed v0.30.1: keyless loopback deepseek, keyed (uJDx) deepseek, LAN no-key 401
+**Evidence:**
+- `[route] model="deepseek-v4-flash-max" matched "deepseek-*" -> provider=seibert-vllm-default` (keyless loopback → first-declared provider, deterministic — AC-15 keyless half now PASS)
+- `[route] key matched provider=seibert-dark-factory` → upstream vllm.seibert.tools status=200 (keyed remote curl, 22:18:43)
+- `auth rejected remote=192.168.177.164:62318` (LAN no key → 401, AC-6/AC-7/AC-15 auth gate unchanged)
+- Regression green on HEAD: pkg/factory/provider_order_wiring_test.go + pkg/config_test.go ProviderOrder (go test ./... all ok)
+- Fix code in HEAD: Config.ProviderOrder + UnmarshalYAML (pkg/config.go:60-102), providerKeys() (pkg/factory/factory.go:127-144)
+- Notes: AC-14 changelog entries live under released sections v0.27.0-v0.30.1 (fold guard, no ## Unreleased remains); wrapper grep returns 1 = documentation comment on line 3 only, no ROUTER_AUTH_KEY in live process env (ps eww = 0) — both substantive requirements verified by direct evidence
+**Verdict:** PASS
