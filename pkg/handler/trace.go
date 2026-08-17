@@ -113,7 +113,9 @@ func NewTraceMiddleware(
 		// lower-cased name regardless of stored key case.
 		reqHeaders := make(map[string]string, len(r.Header))
 		for name, vals := range r.Header {
-			if strings.ToLower(name) == "authorization" || strings.ToLower(name) == "x-api-key" {
+			if strings.ToLower(name) == "authorization" ||
+				strings.ToLower(name) == "x-api-key" ||
+				strings.ToLower(name) == "x-router-key" {
 				reqHeaders[name] = "***"
 			} else {
 				reqHeaders[name] = strings.Join(vals, ", ")

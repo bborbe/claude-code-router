@@ -134,6 +134,26 @@ var _ = Describe("LoggingRoundTripper", func() {
 				Expect(out).NotTo(ContainSubstring("leak-canary-v3"))
 			},
 		)
+
+		It(
+			"canary: x-router-key value does not appear in V(3) log output (redacted via router-key)",
+			func() {
+				_ = flag.Set("v", "3")
+				rt := makeRT()
+				req := httptest.NewRequest(
+					http.MethodPost,
+					"https://api.example.com/v1/messages",
+					nil,
+				)
+				req.Header.Set("X-Router-Key", "leak-canary-router-key")
+				out := captureStderr(func() {
+					_, _ = rt.RoundTrip(req)
+				})
+				Expect(out).To(ContainSubstring("[upstream.headers]"))
+				Expect(out).To(ContainSubstring("<redacted"))
+				Expect(out).NotTo(ContainSubstring("leak-canary-router-key"))
+			},
+		)
 	})
 
 	Context("V(4) body sample logging", func() {

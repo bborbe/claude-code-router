@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [009-inbound-api-key-auth]
+summary: Wired optional inbound auth middleware (NewAuthMiddleware) into the /v1/* chain inside trace, with loopback bypass, constant-time key compare, x-router-key strip-before-forward, trace/V(3)-log redaction, and full unit + integration + SIGHUP-reload test coverage.
+execution_id: claude-code-router-exec-027-spec-009-auth-middleware
+dark-factory-version: dev
 created: "2026-08-17"
 queued: "2026-08-17T16:13:22Z"
+started: "2026-08-17T16:33:47Z"
+completed: "2026-08-17T16:47:35Z"
 ---
 
 # Inbound auth middleware on /v1/* + trace redaction of x-router-key

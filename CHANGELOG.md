@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.22.0
+
+- feat: enforce optional inbound auth on `/v1/*` when `auth.key` is configured. `handler.NewAuthMiddleware` (`pkg/handler/auth-middleware.go`) rejects non-loopback requests that do not present the matching key in the `x-router-key` header with 401 (constant-time compare via `crypto/subtle`), bypasses the check for loopback requests, and strips the header from a cloned request before it reaches any upstream, so a key carried via `ANTHROPIC_CUSTOM_HEADERS` never leaks to a provider. Auth-less configs pass through byte-for-byte (the constructor returns `next` unchanged, zero hot-path effect). The header is redacted to `***` in trace files (alongside `Authorization` / `x-api-key`) and to `<redacted len=N>` in V(3) `[upstream.headers]` logs. A rejection emits exactly one `auth rejected remote=<addr>` line that never contains the presented or configured key. SIGHUP reloads pick up `auth.key` changes because the whole mux is rebuilt via `CreateRouterFromConfig`.
+
 ## v0.21.0
 
 - feat: add the optional top-level `auth:` config block with a single `key` field (`Config.Auth` / `AuthConfig.IsEnabled()` in `pkg/config.go`). Absent, `null`, and an empty `key` all mean inbound authentication is disabled and the router behaves byte-for-byte as today; `Config.Validate` rejects nothing. Also add `handler.IsLoopbackRemoteAddr` (`pkg/handler/loopback.go`), which classifies both IPv4 (`127.0.0.0/8`) and IPv6 (`::1`) loopback from a connection-supplied `http.Request.RemoteAddr` — the remote address is never taken from `X-Forwarded-For`. This lands the seam the inbound-auth middleware and admin-route guard prompts consume; no request-path behavior changes yet.

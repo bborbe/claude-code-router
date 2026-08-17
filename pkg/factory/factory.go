@@ -189,16 +189,23 @@ func CreateRouterFromConfig(
 		libtime.NewCurrentDateTime(),
 	)
 
-	mux := buildMux(modelRouter, cfg.Trace)
+	authKey := ""
+	if cfg.Auth.IsEnabled() {
+		authKey = cfg.Auth.Key
+	}
+	mux := buildMux(modelRouter, cfg.Trace, authKey)
 	return mux, nil
 }
 
 // buildMux wires the operator-local admin handlers and the model router
 // into a ServeMux. Admin endpoints are: /healthz, /readiness, /metrics,
 // /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, and the
-// catch-all 404 logger. The model router is wrapped in the trace
-// middleware when cfg.Trace is true.
-func buildMux(modelRouter http.Handler, trace bool) *http.ServeMux {
+// catch-all 404 logger. The model router is wrapped in the auth middleware
+// when authKey is non-empty, and in the trace middleware when trace is
+// true. Auth sits INSIDE trace so the trace middleware still observes
+// x-router-key (redacted) and still captures requests auth rejects, while
+// the header is gone before the request reaches the model router.
+func buildMux(modelRouter http.Handler, trace bool, authKey string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
@@ -213,6 +220,7 @@ func buildMux(modelRouter http.Handler, trace bool) *http.ServeMux {
 	mux.Handle("/disabletrace", handler.NewDisableTraceHandler())
 	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	v1Handler := http.Handler(modelRouter)
+	v1Handler = handler.NewAuthMiddleware(v1Handler, authKey)
 	if trace {
 		glog.V(2).Infof("trace enabled via config")
 	}
