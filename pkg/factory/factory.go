@@ -215,10 +215,40 @@ func buildMux(modelRouter http.Handler, trace bool, authKey string) *http.ServeM
 	// series — useful for spotting GC pressure / memory growth on a
 	// long-running router daemon.
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/setloglevel/", handler.NewSetLoglevelHandler())
-	mux.Handle("/enabletrace", handler.NewEnableTraceHandler())
-	mux.Handle("/disabletrace", handler.NewDisableTraceHandler())
-	mux.Handle("/gc", libhttp.NewGarbageCollectorHandler())
+	// The four state-changing admin routes are loopback-only: a non-loopback
+	// caller gets HTTP 403 before any handler logic runs, so a remote attacker
+	// can never toggle tracing, force GC, or change log levels even when they
+	// are the only other caller. Read-only endpoints (/healthz, /readiness,
+	// /metrics, HEAD /{$}) stay open to remote callers so health probes keep
+	// working.
+	mux.Handle(
+		"/setloglevel/",
+		handler.NewAdminLoopbackGuard(
+			handler.NewSetLoglevelHandler(),
+			handler.IsLoopbackRemoteAddr,
+		),
+	)
+	mux.Handle(
+		"/enabletrace",
+		handler.NewAdminLoopbackGuard(
+			handler.NewEnableTraceHandler(),
+			handler.IsLoopbackRemoteAddr,
+		),
+	)
+	mux.Handle(
+		"/disabletrace",
+		handler.NewAdminLoopbackGuard(
+			handler.NewDisableTraceHandler(),
+			handler.IsLoopbackRemoteAddr,
+		),
+	)
+	mux.Handle(
+		"/gc",
+		handler.NewAdminLoopbackGuard(
+			libhttp.NewGarbageCollectorHandler(),
+			handler.IsLoopbackRemoteAddr,
+		),
+	)
 	v1Handler := http.Handler(modelRouter)
 	v1Handler = handler.NewAuthMiddleware(v1Handler, authKey)
 	if trace {

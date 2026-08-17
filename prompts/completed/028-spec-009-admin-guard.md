@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [009-inbound-api-key-auth]
+summary: Added unconditional loopback guard (NewAdminLoopbackGuard) in front of the four state-changing admin routes (/setloglevel/, /enabletrace, /disabletrace, /gc) in buildMux, refusing non-loopback callers with 403 before handler logic; read-only endpoints stay open. Unit + real-mux integration Ginkgo tests cover bypass, remote refusal, spoof rejection, state-gating, refusal log line, and /gc side-effect gate.
+execution_id: claude-code-router-exec-028-spec-009-admin-guard
+dark-factory-version: dev
 created: "2026-08-17"
 queued: "2026-08-17T16:13:22Z"
+started: "2026-08-17T16:47:40Z"
+completed: "2026-08-17T16:57:03Z"
 ---
 
 # Unconditional loopback guard for state-changing admin endpoints

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.23.0
+
+- feat: enforce loopback-only access on the four state-changing admin endpoints (`/setloglevel/`, `/enabletrace`, `/disabletrace`, `/gc`) via `handler.NewAdminLoopbackGuard` (`pkg/handler/admin_loopback_guard.go`), wired at the `buildMux` registration site in `pkg/factory/factory.go`. Any non-loopback request is refused with HTTP 403 (`admin endpoint loopback-only`) before handler logic runs, so a remote caller can never toggle tracing (body capture), force GC, or change log levels even when they are the only other caller once the listener moves to `0.0.0.0:8788`. The guard is unconditional (no config knob to disable it), reads the remote address only from the connection (`r.RemoteAddr`, never `X-Forwarded-For` / `X-Real-IP`), and emits exactly one `admin refused path=<method+path> remote=<addr>` line per refusal. The inner handlers are wrapped, not modified; read-only endpoints (`/healthz`, `/readiness`, `/metrics`, `HEAD /`) stay open to remote callers so health probes keep working.
+
 ## v0.22.0
 
 - feat: enforce optional inbound auth on `/v1/*` when `auth.key` is configured. `handler.NewAuthMiddleware` (`pkg/handler/auth-middleware.go`) rejects non-loopback requests that do not present the matching key in the `x-router-key` header with 401 (constant-time compare via `crypto/subtle`), bypasses the check for loopback requests, and strips the header from a cloned request before it reaches any upstream, so a key carried via `ANTHROPIC_CUSTOM_HEADERS` never leaks to a provider. Auth-less configs pass through byte-for-byte (the constructor returns `next` unchanged, zero hot-path effect). The header is redacted to `***` in trace files (alongside `Authorization` / `x-api-key`) and to `<redacted len=N>` in V(3) `[upstream.headers]` logs. A rejection emits exactly one `auth rejected remote=<addr>` line that never contains the presented or configured key. SIGHUP reloads pick up `auth.key` changes because the whole mux is rebuilt via `CreateRouterFromConfig`.
