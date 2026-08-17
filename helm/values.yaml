@@ -79,3 +79,12 @@ service:
   # admin/port is derived from `listen` so Service port, admin annotation and
   # containerPort can never drift.
   adminPath: ""
+
+# Optional Traefik Ingress exposing the router over TLS (e.g. so the laptop can
+# reach it as ANTHROPIC_BASE_URL from outside the cluster). Disabled by default.
+# Per-cluster values set host + tlsSecret (tls-quant in the target namespace).
+ingress:
+  enabled: false
+  host: ""
+  # TLS secret (e.g. tls-quant). Empty = no tls block (plain HTTP ingress).
+  tlsSecret: ""

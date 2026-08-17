@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add optional Traefik Ingress template (gated on `ingress.enabled`) so the router can be reached over TLS from outside the cluster (e.g. laptop `ANTHROPIC_BASE_URL` → `https://claude-code-router.quant.benjamin-borbe.de`). Per-cluster values set host + tlsSecret (tls-quant). Chart bumped 0.1.0 → 0.2.0.
+
 ## v0.29.0
 
 - feat: route by the presented `x-api-key` (top-level `allowedApiKeys` registry + per-provider `allowedApiKeys` override, `Config.AllowedApiKeys` / `Provider.AllowedApiKeys` / `Config.AllowedApiKeySet()` in `pkg/config.go`): a key claimed by a provider's list dispatches the request to that provider (its outbound token) before model-glob selection, overriding globs (`pkg/handler/model-router.go`); a valid-but-unclaimed key routes by globs exactly like a keyless request, which is unchanged. The non-loopback auth gate (`pkg/handler/auth-middleware.go`) now validates `x-api-key` against the registry (constant-time comparison, loopback exempt, the header still stripped outbound), and trace files redact `x-api-key` alongside `Authorization`. The spec-009 `x-router-key` / `auth.key` / `ROUTER_AUTH_KEY` auth path is removed with fail-closed migration guards — a config still carrying `auth:` fails to load (`Config.Validate`) and the binary refuses to start with `ROUTER_AUTH_KEY` set (`pkg/factory/factory.go`). Registry changes apply on SIGHUP without a restart.

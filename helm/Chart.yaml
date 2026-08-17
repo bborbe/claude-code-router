@@ -6,7 +6,7 @@ description: >-
   (or a pre-existing Secret), tokens from an existingSecret. Used as the
   fleet-facing router in the agent clusters (burn relay + GLM/MiniMax fallback).
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "v0.20.0"
 home: https://github.com/bborbe/claude-code-router
 sources:
