@@ -47,6 +47,14 @@ type Config struct {
 	// and an empty key all mean authentication is disabled and the
 	// router behaves exactly as it does today.
 	Auth *AuthConfig `yaml:"auth,omitempty"`
+	// AllowedApiKeys is the top-level registry of API keys that authenticate
+	// non-loopback /v1/* requests. It is also the single rotation point: a
+	// key that appears here (or in any provider's list) authenticates the
+	// caller, and a per-provider claim pins routing. Absent, null, and empty
+	// are equivalent and all mean: no key enforcement and no key routing —
+	// the /v1/* path behaves exactly as it does today. Keys are literal
+	// strings, like provider token: fields.
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
 }
 
 // Router holds router-wide settings.
@@ -103,6 +111,15 @@ type Provider struct {
 	// Absent, nil, and empty are equivalent and all mean "never
 	// transform anything for this provider".
 	RequiresLeadingSystem []string `yaml:"requiresLeadingSystem,omitempty"`
+	// AllowedApiKeys is this provider's routing pin: a request whose
+	// presented x-api-key is in this list is dispatched to this provider
+	// (its outbound token), overriding model-glob selection. A key may
+	// appear in both the top-level registry and a provider's list — the
+	// registry is the auth superset, the provider claim is the routing pin.
+	// A key must NOT be claimed by more than one provider (validation
+	// error, see Config.Validate). Absent, null, and empty all mean: this
+	// provider claims no keys, so it is only reachable via glob routing.
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
 }
 
 // Load reads, parses, and validates the config at path. Tilde-prefix
@@ -163,7 +180,57 @@ func (c *Config) Validate(ctx context.Context) error {
 			}
 		}
 	}
+	if err := c.validateAllowedApiKeyClaims(ctx); err != nil {
+		return errors.Wrapf(ctx, err, "validate allowedApiKeys")
+	}
 	return c.validateAliases(ctx)
+}
+
+func (c *Config) validateAllowedApiKeyClaims(ctx context.Context) error {
+	// A key may be claimed by at most one provider. A key appearing in both
+	// the top-level registry and a provider's list is fine (the registry is
+	// the auth superset, the provider claim is the routing pin); only
+	// cross-provider claims are ambiguous. A single provider listing a key
+	// twice in its own list is not a duplicate either — one provider owning
+	// a key is not ambiguous. Iteration order over c.Providers is a Go map
+	// and therefore random; the error names both providers regardless of
+	// which is encountered first.
+	claims := make(map[string]string)
+	for name, prov := range c.Providers {
+		for _, key := range prov.AllowedApiKeys {
+			if first, ok := claims[key]; ok && first != name {
+				return errors.Errorf(ctx,
+					"allowedApiKeys key %q claimed by providers %q and %q",
+					key, first, name,
+				)
+			}
+			claims[key] = name
+		}
+	}
+	return nil
+}
+
+// AllowedApiKeySet returns the set of keys that authenticate
+// non-loopback /v1/* requests: the top-level registry when non-empty,
+// else the union of every provider's allowedApiKeys. The empty set
+// means auth is disabled and no key routing applies. This is the single
+// definition the auth middleware (prompt 2) and the key router (prompt 3)
+// consume — do not recompute the union elsewhere.
+func (c *Config) AllowedApiKeySet() map[string]struct{} {
+	if len(c.AllowedApiKeys) > 0 {
+		set := make(map[string]struct{}, len(c.AllowedApiKeys))
+		for _, key := range c.AllowedApiKeys {
+			set[key] = struct{}{}
+		}
+		return set
+	}
+	set := make(map[string]struct{})
+	for _, prov := range c.Providers {
+		for _, key := range prov.AllowedApiKeys {
+			set[key] = struct{}{}
+		}
+	}
+	return set
 }
 
 func (c *Config) validateAliases(ctx context.Context) error {

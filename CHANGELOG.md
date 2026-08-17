@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.27.0
+
+- feat: add the optional top-level `allowedApiKeys` registry and per-provider `allowedApiKeys` list (`Config.AllowedApiKeys` / `Provider.AllowedApiKeys` / `Config.AllowedApiKeySet()` in `pkg/config.go`). The top-level registry is the auth superset and single rotation point for non-loopback `/v1/*` callers; a per-provider list pins key-routing to that provider. The valid inbound key set is the top-level registry when non-empty, else the union of all providers' lists. `Config.Validate` rejects a key claimed by two providers with an error naming the key and both providers; a key in both the top-level registry and a provider's list, or repeated within one provider's own list, is not a duplicate. Absent, `null`, and empty everywhere mean no key enforcement and no key routing — existing configs behave byte-for-byte as today.
+
 ## v0.26.0
 
 - feat: add container packaging — Dockerfile (scratch, multi-stage) + Makefile.docker `buca` block for building and pushing `bborbe/claude-code-router` images. Follows `go-dockerfile-guide.md` (ca-certs + zoneinfo, `-mod=vendor` via `check-go-mod`, registry-parameterized). Local dev `make build` renamed to `build-local`.

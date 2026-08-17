@@ -14,6 +14,11 @@ trace: false
 # auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
 #   key: "<YOUR_ROUTER_KEY>"    # ROUTER_AUTH_KEY env var wins over this when set; launchd wrapper injects it from TeamVault (see docs/config.md ## Inbound auth)
 
+# allowedApiKeys:              # optional; registry of API keys that authenticate non-loopback /v1/* requests.
+#   - "<YOUR_API_KEY>"         #   The valid key set is this registry when non-empty, else the union of all
+#                              #   providers' lists. Absent/null/empty = no key enforcement, no key routing.
+#                              #   (see docs/config.md ## Allowed API keys)
+
 providers:
 
   anthropic-subscription:
@@ -45,6 +50,9 @@ providers:
     # block for matching models. Omit or leave empty for no transform.
     requiresLeadingSystem:
       - "qwen3.8*"
+    # allowedApiKeys:          # optional; routing pin — a request presenting one of these keys is
+    #   - "<YOUR_API_KEY>"     #   dispatched to this provider, overriding model globs. A key must not
+    #                          #   be claimed by more than one provider. (see docs/config.md ## Allowed API keys)
 
 # Short names that map to full model identifiers.
 # Operator-facing only — the upstream always sees the resolved full name.

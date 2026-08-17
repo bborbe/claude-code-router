@@ -405,6 +405,226 @@ auth: null
 		})
 	})
 
+	Context("allowedApiKeys", func() {
+		It("loads with no allowedApiKeys anywhere — feature off by default", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+  minimax:
+    upstream: https://api.minimax.io/anthropic
+    token: "minimax-token"
+    models: ["MiniMax-*"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(BeEmpty())
+			Expect(cfg.AllowedApiKeys).To(BeNil())
+			Expect(cfg.Providers["anthropic"].AllowedApiKeys).To(BeNil())
+			Expect(cfg.Providers["minimax"].AllowedApiKeys).To(BeNil())
+		})
+
+		It("treats an explicit null top-level registry as absent", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+allowedApiKeys: null
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(BeEmpty())
+		})
+
+		It("treats an explicit empty top-level list as absent", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+allowedApiKeys: []
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(BeEmpty())
+		})
+
+		It("loads a populated top-level registry", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+allowedApiKeys: ["alpha", "beta"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeys).To(Equal([]string{"alpha", "beta"}))
+			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{
+				"alpha": {},
+				"beta":  {},
+			}))
+		})
+
+		It("uses the union of provider lists when the top-level registry is absent", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+  minimax:
+    upstream: https://api.minimax.io/anthropic
+    token: "minimax-token"
+    models: ["MiniMax-*"]
+    allowedApiKeys: ["dark-factory-key"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{
+				"dark-factory-key": {},
+			}))
+		})
+
+		It("prefers the top-level registry wholesale over provider lists", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+  minimax:
+    upstream: https://api.minimax.io/anthropic
+    token: "minimax-token"
+    models: ["MiniMax-*"]
+    allowedApiKeys: ["dark-factory-key"]
+allowedApiKeys: ["alpha", "beta"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{
+				"alpha": {},
+				"beta":  {},
+			}))
+		})
+
+		It("unions provider lists across multiple providers", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+    allowedApiKeys: ["alpha"]
+  minimax:
+    upstream: https://api.minimax.io/anthropic
+    token: "minimax-token"
+    models: ["MiniMax-*"]
+    allowedApiKeys: ["beta"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{
+				"alpha": {},
+				"beta":  {},
+			}))
+		})
+
+		It("rejects a key claimed by two providers, naming both and the key", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+    allowedApiKeys: ["k"]
+  minimax:
+    upstream: https://api.minimax.io/anthropic
+    token: "minimax-token"
+    models: ["MiniMax-*"]
+    allowedApiKeys: ["k"]
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`allowedApiKeys key "k" claimed`))
+			Expect(err.Error()).To(ContainSubstring("anthropic"))
+			Expect(err.Error()).To(ContainSubstring("minimax"))
+		})
+
+		It("names both providers regardless of which is encountered first", func() {
+			// Inverted fixture: a different key claimed by a different pair of
+			// providers. Map iteration order over c.Providers is random, so
+			// whichever provider claims first in a given run, the error must
+			// still name both — assert only that both names are present, never
+			// a positional "first wins" string.
+			p := write(`
+router:
+  default_provider: ollama-local
+providers:
+  ollama-local:
+    upstream: http://localhost:11434
+    token: ollama
+    models: ["qwen*"]
+    allowedApiKeys: ["shared"]
+  seibert-vllm:
+    upstream: https://vllm.example.com
+    token: "vllm-token"
+    models: ["deepseek-*"]
+    allowedApiKeys: ["shared"]
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`allowedApiKeys key "shared" claimed`))
+			Expect(err.Error()).To(ContainSubstring("ollama-local"))
+			Expect(err.Error()).To(ContainSubstring("seibert-vllm"))
+		})
+
+		It("allows a key in both the top-level registry and a provider list", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+    allowedApiKeys: ["k"]
+allowedApiKeys: ["k"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{"k": {}}))
+		})
+
+		It("allows a provider to list the same key twice in its own list", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+    allowedApiKeys: ["k", "k"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{"k": {}}))
+		})
+	})
+
 	Context("AuthConfig.IsEnabled", func() {
 		DescribeTable("reports enabled only for a non-empty key",
 			func(auth *pkgcfg.AuthConfig, enabled bool) {
