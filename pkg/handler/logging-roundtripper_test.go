@@ -136,7 +136,7 @@ var _ = Describe("LoggingRoundTripper", func() {
 		)
 
 		It(
-			"canary: x-router-key value does not appear in V(3) log output (redacted via router-key)",
+			"canary: x-api-key value does not appear in V(3) log output (redacted via api-key)",
 			func() {
 				_ = flag.Set("v", "3")
 				rt := makeRT()
@@ -145,13 +145,13 @@ var _ = Describe("LoggingRoundTripper", func() {
 					"https://api.example.com/v1/messages",
 					nil,
 				)
-				req.Header.Set("X-Router-Key", "leak-canary-router-key")
+				req.Header.Set("X-Api-Key", "leak-canary-api-key")
 				out := captureStderr(func() {
 					_, _ = rt.RoundTrip(req)
 				})
 				Expect(out).To(ContainSubstring("[upstream.headers]"))
 				Expect(out).To(ContainSubstring("<redacted"))
-				Expect(out).NotTo(ContainSubstring("leak-canary-router-key"))
+				Expect(out).NotTo(ContainSubstring("leak-canary-api-key"))
 			},
 		)
 	})

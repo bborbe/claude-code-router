@@ -33,13 +33,6 @@ var _ = Describe("RedactHeadersForLog", func() {
 		Expect(result["X-Api-Key"]).To(Equal(fmt.Sprintf("<redacted len=%d>", len("secret123"))))
 	})
 
-	It("redacts X-Router-Key (case-insensitive substring match on header name)", func() {
-		val := "shared-secret-value"
-		h := http.Header{"X-Router-Key": []string{val}}
-		result := handler.RedactHeadersForLog(h)
-		Expect(result["X-Router-Key"]).To(Equal(fmt.Sprintf("<redacted len=%d>", len(val))))
-	})
-
 	It("redacts Cookie value", func() {
 		val := "session=abc; theme=dark"
 		h := http.Header{"Cookie": []string{val}}

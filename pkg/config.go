@@ -42,10 +42,12 @@ type Config struct {
 	// is allocated on the request hot path. Read once at Load; a
 	// restart applies it.
 	Trace bool `yaml:"trace,omitempty"`
-	// Auth, when enabled, requires every non-loopback /v1/* request to
-	// present the shared key in the x-router-key header. Absent, null,
-	// and an empty key all mean authentication is disabled and the
-	// router behaves exactly as it does today.
+	// Auth is the legacy spec-009 auth block. It is retained ONLY as a
+	// load-failing detection probe: yaml.Unmarshal populates it from a
+	// legacy `auth:` block, and Config.Validate rejects any non-nil value so
+	// a config still carrying the removed auth path fails closed instead of
+	// silently degrading to unauthenticated. Configure allowedApiKeys
+	// instead. Absent and null both leave it nil and pass validation.
 	Auth *AuthConfig `yaml:"auth,omitempty"`
 	// AllowedApiKeys is the top-level registry of API keys that authenticate
 	// non-loopback /v1/* requests. It is also the single rotation point: a
@@ -64,23 +66,15 @@ type Router struct {
 	DefaultProvider string `yaml:"default_provider"`
 }
 
-// AuthConfig holds the shared key that gates non-loopback /v1/* requests.
-// It is a pointer on Config so that an absent `auth:` block loads as nil,
-// distinct from an explicitly empty key — both mean disabled.
+// AuthConfig parses the legacy spec-009 `auth:` block shape. It is a pointer
+// on Config and exists only so yaml.Unmarshal can recognise a legacy block
+// and trip the Config.Validate rejection — the parsed Key is never read for
+// authentication.
 type AuthConfig struct {
-	// Key is the shared secret a non-loopback caller must present in the
-	// x-router-key header. Empty means authentication is disabled. A
-	// whitespace-only or accidentally-quoted value is treated as a literal
-	// key, never rejected at load time — the symptom is a 401 at request
-	// time, not a start-up failure.
+	// Key is the legacy shared secret field. Kept solely so a legacy `auth:`
+	// block still parses and is rejected at load; a non-nil AuthConfig makes
+	// Config.Validate fail the config (fail-closed migration guard).
 	Key string `yaml:"key"`
-}
-
-// IsEnabled reports whether inbound authentication is active: true iff the
-// receiver is non-nil and Key is non-empty. Nil and empty string both mean
-// disabled. This is the single check the auth middleware uses.
-func (a *AuthConfig) IsEnabled() bool {
-	return a != nil && a.Key != ""
 }
 
 // Provider describes one upstream LLM API.
@@ -145,6 +139,12 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 
 // Validate checks that the parsed config is internally consistent.
 func (c *Config) Validate(ctx context.Context) error {
+	if c.Auth != nil {
+		return errors.New(
+			ctx,
+			"auth: legacy auth block is no longer supported; remove `auth:` and configure `allowedApiKeys` instead",
+		)
+	}
 	if len(c.Providers) == 0 {
 		return errors.New(ctx, "no providers defined")
 	}

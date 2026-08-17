@@ -38,7 +38,7 @@ func RedactBearerTokensInBody(b []byte) []byte {
 // must be redacted before logging. Matching is case-insensitive and covers:
 //   - Exact names: Authorization, Cookie, Set-Cookie
 //   - Any name whose lower-cased form contains one of: api-key, auth-token,
-//     secret, password, bearer, router-key
+//     secret, password, bearer
 func isCredentialHeader(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
@@ -46,7 +46,7 @@ func isCredentialHeader(name string) bool {
 		return true
 	}
 	for _, sub := range []string{
-		"api-key", "auth-token", "secret", "password", "bearer", "router-key",
+		"api-key", "auth-token", "secret", "password", "bearer",
 	} {
 		if strings.Contains(lower, sub) {
 			return true

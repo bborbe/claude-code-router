@@ -1,8 +1,13 @@
 ---
-status: approved
+status: committing
 spec: ["010"]
+summary: 'Replaced the single-key x-router-key auth gate with a set-based x-api-key middleware, added the PresentedApiKeyFromContext/ContextWithPresentedApiKey context seam, migrated factory wiring and redaction to x-api-key, and added fail-closed migration guards (legacy auth: fails load, ROUTER_AUTH_KEY refuses startup) with full unit/integration/SIGHUP/guard test coverage.'
+execution_id: claude-code-router-exec-032-spec-010-auth-gate
+dark-factory-version: dev
 created: "2026-08-17T19:12:47Z"
 queued: "2026-08-17T19:50:37Z"
+started: "2026-08-17T19:59:35Z"
+completed: "2026-08-17T20:11:22Z"
 ---
 
 # Auth gate evolution: x-api-key set-based auth + supersession of x-router-key

@@ -49,6 +49,12 @@ func WithMetricsRegisterer(reg prometheus.Registerer) RouterOption {
 // + per-provider proxies, and returns a run.Func that starts the HTTP
 // listener with graceful shutdown on ctx cancel.
 func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, error) {
+	if os.Getenv("ROUTER_AUTH_KEY") != "" {
+		return nil, errors.New(
+			ctx,
+			"ROUTER_AUTH_KEY is no longer supported: remove it from the environment and configure allowedApiKeys in the config instead",
+		)
+	}
 	cfg, err := pkg.Load(ctx, configPath)
 	if err != nil {
 		return nil, errors.Wrapf(ctx, err, "load config")
@@ -189,16 +195,12 @@ func CreateRouterFromConfig(
 		libtime.NewCurrentDateTime(),
 	)
 
-	// The inbound auth key resolves env-first: a non-empty ROUTER_AUTH_KEY
-	// (injected by the launchd wrapper from TeamVault) always wins, so the
-	// raw secret never has to live in the config file. Only when the env var
-	// is empty does the config's auth.key literal apply — existing configs
-	// keep working unchanged.
-	authKey := os.Getenv("ROUTER_AUTH_KEY")
-	if authKey == "" && cfg.Auth.IsEnabled() {
-		authKey = cfg.Auth.Key
-	}
-	mux := buildMux(modelRouter, cfg.Trace, authKey)
+	// The inbound key set is the single auth registry resolved from the
+	// config: the top-level allowedApiKeys when non-empty, else the union of
+	// every provider's allowedApiKeys. The auth middleware (empty set ⇒ no-op)
+	// and the model router (key routing, prompt 3) both consume this set.
+	authKeys := cfg.AllowedApiKeySet()
+	mux := buildMux(modelRouter, cfg.Trace, authKeys)
 	return mux, nil
 }
 
@@ -206,11 +208,15 @@ func CreateRouterFromConfig(
 // into a ServeMux. Admin endpoints are: /healthz, /readiness, /metrics,
 // /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, and the
 // catch-all 404 logger. The model router is wrapped in the auth middleware
-// when authKey is non-empty, and in the trace middleware when trace is
+// when allowedKeys is non-empty, and in the trace middleware when trace is
 // true. Auth sits INSIDE trace so the trace middleware still observes
-// x-router-key (redacted) and still captures requests auth rejects, while
+// x-api-key (redacted) and still captures requests auth rejects, while
 // the header is gone before the request reaches the model router.
-func buildMux(modelRouter http.Handler, trace bool, authKey string) *http.ServeMux {
+func buildMux(
+	modelRouter http.Handler,
+	trace bool,
+	allowedKeys map[string]struct{},
+) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
@@ -255,7 +261,7 @@ func buildMux(modelRouter http.Handler, trace bool, authKey string) *http.ServeM
 		),
 	)
 	v1Handler := http.Handler(modelRouter)
-	v1Handler = handler.NewAuthMiddleware(v1Handler, authKey)
+	v1Handler = handler.NewAuthMiddleware(v1Handler, allowedKeys)
 	if trace {
 		glog.V(2).Infof("trace enabled via config")
 	}

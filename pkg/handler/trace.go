@@ -114,8 +114,7 @@ func NewTraceMiddleware(
 		reqHeaders := make(map[string]string, len(r.Header))
 		for name, vals := range r.Header {
 			if strings.ToLower(name) == "authorization" ||
-				strings.ToLower(name) == "x-api-key" ||
-				strings.ToLower(name) == "x-router-key" {
+				strings.ToLower(name) == "x-api-key" {
 				reqHeaders[name] = "***"
 			} else {
 				reqHeaders[name] = strings.Join(vals, ", ")
