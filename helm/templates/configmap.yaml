@@ -1,0 +1,39 @@
+{{- if and .Values.existingConfigSecret .Values.config -}}
+{{- fail "existingConfigSecret and config are mutually exclusive — set exactly one" -}}
+{{- end -}}
+{{- if and (not .Values.existingConfigSecret) .Values.config -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-config" .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "claude-code-router.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- if .Values.config.router }}
+    router:
+      default_provider: {{ .Values.config.router.default_provider | quote }}
+    {{- end }}
+    {{- if .Values.config.trace }}
+    trace: true
+    {{- end }}
+    providers:
+    {{- range $name, $provider := .Values.config.providers }}
+      {{ $name }}:
+        upstream: {{ $provider.upstream | quote }}
+        {{- if $provider.token }}
+        token: {{ $provider.token | quote }}
+        {{- end }}
+        models:
+        {{- range $provider.models }}
+          - {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.config.aliases }}
+    aliases:
+    {{- range $alias, $target := .Values.config.aliases }}
+      {{ $alias }}: {{ $target | quote }}
+    {{- end }}
+    {{- end }}
+{{- end }}

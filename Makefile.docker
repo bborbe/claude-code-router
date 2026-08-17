@@ -1,0 +1,67 @@
+# Docker build/upload/buca targets — canonical block, see
+# ~/Documents/workspaces/coding/docs/go-dockerfile-guide.md
+# SERVICE must be set by the including Makefile.
+
+DOCKER_REGISTRY ?= docker.io
+
+ifeq ($(VERSION),)
+	VERSION := $(shell git describe --tags `git rev-list --tags --max-count=1`)
+endif
+
+.PHONY: build
+build: check-go-mod
+	@if [ -z "$(VERSION)" ]; then echo "ERROR: no VERSION set and no git tag found — set VERSION=vX.Y.Z or create a tag" >&2; exit 1; fi
+	DOCKER_BUILDKIT=1 \
+	docker build \
+	--pull \
+	--no-cache \
+	--rm=true \
+	--platform=linux/amd64 \
+	--build-arg DOCKER_REGISTRY=$(DOCKER_REGISTRY) \
+	--build-arg BUILD_GIT_VERSION=$$(git describe --tags --always --dirty) \
+	--build-arg BUILD_GIT_COMMIT=$$(git rev-parse --short HEAD) \
+	--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+	-t $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION) \
+	-f Dockerfile .
+
+.PHONY: check-go-mod
+check-go-mod:
+	@if [ -f "go.mod" ]; then \
+		echo "go.mod found, running go mod vendor..."; \
+		go mod vendor; \
+	else \
+		echo "go.mod not found, skipping go mod vendor."; \
+	fi
+
+.PHONY: upload
+upload:
+	docker push $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION)
+
+.PHONY: clean
+clean:
+	docker rmi $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION) || true
+	docker image prune -f || true
+	rm -rf vendor
+
+# Publish-only: no k8s in this repo. Deployment manifests live in the
+# quant repo (per the go-dockerfile-guide). apply is a no-op placeholder.
+.PHONY: apply
+apply:
+	@echo "skip apply — publish-only"
+
+.PHONY: buca
+buca: build upload clean apply
+
+# Package + publish the Helm chart in helm/ to OCI. Chart version comes from
+# helm/Chart.yaml (independent of the binary VERSION). Requires a prior
+# `helm registry login registry-1.docker.io`. Native Helm 3.8+ OCI push.
+# Same pattern as git-rest and recurring-task-creator.
+CHART_OCI ?= oci://registry-1.docker.io/bborbe
+.PHONY: helm-publish
+helm-publish:
+	@helm lint helm/
+	@if ! helm template smoke helm/ --set config.router.default_provider=smoke --set config.providers.smoke.upstream=http://localhost:1 --set-string 'config.providers.smoke.models={smoke-*}' >/dev/null; then \
+		echo "helm template smoke failed" >&2; exit 1; \
+	fi
+	@helm package helm/ -d /tmp
+	@helm push /tmp/claude-code-router-$$(awk '/^version:/{print $$2; exit}' helm/Chart.yaml).tgz $(CHART_OCI)

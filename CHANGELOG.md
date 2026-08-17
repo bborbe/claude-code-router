@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add container packaging — Dockerfile (scratch, multi-stage) + Makefile.docker `buca` block for building and pushing `bborbe/claude-code-router` images. Follows `go-dockerfile-guide.md` (ca-certs + zoneinfo, `-mod=vendor` via `check-go-mod`, registry-parameterized). Local dev `make build` renamed to `build-local`.
+- feat: add Helm chart (`helm/`) — Deployment + Service + ConfigMap (config.yaml) + Secret (existingSecret/secretEnv), published via `make helm-publish` to `oci://registry-1.docker.io/bborbe/claude-code-router`. Git-rest chart pattern; config mounts at `CONFIG_PATH`, LISTEN from env, probes + prometheus annotations on the same port. For the fleet-facing cluster router (burn relay + GLM/MiniMax fallback).
+
 ## v0.25.0
 
 - feat: Resolve the inbound auth key env-first from the `ROUTER_AUTH_KEY` environment variable in `CreateRouterFromConfig` (`pkg/factory/factory.go`) — a non-empty value wins over the config's `auth.key` (so a config with no `auth:` block still enables auth, and a launchd wrapper can inject the TeamVault secret without the raw key ever appearing in the config file); when the env var is empty the config's `auth.key` literal applies unchanged, so existing configs keep working

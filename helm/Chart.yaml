@@ -1,0 +1,17 @@
+apiVersion: v2
+name: claude-code-router
+description: >-
+  claude-code-router is a model-routing reverse proxy for Claude Code. This chart
+  deploys one instance as a Deployment + Service, config loaded from a ConfigMap
+  (or a pre-existing Secret), tokens from an existingSecret. Used as the
+  fleet-facing router in the agent clusters (burn relay + GLM/MiniMax fallback).
+type: application
+version: 0.1.0
+appVersion: "v0.20.0"
+home: https://github.com/bborbe/claude-code-router
+sources:
+  - https://github.com/bborbe/claude-code-router
+maintainers:
+  - name: Benjamin Borbe
+annotations:
+  artifacthub.io/prerelease: "false"
