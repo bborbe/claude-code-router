@@ -48,6 +48,16 @@ type ModelRoute struct {
 	// dispatching. Nil or empty (the default for every route built
 	// from a config that omits the field) means: never transform.
 	RequiresLeadingSystem []string
+	// AllowedApiKeys carries this route's provider's `allowedApiKeys`
+	// config list. When the request's presented x-api-key (from the auth
+	// middleware's context) is in one of these lists, the router dispatches
+	// to that provider directly — the key is an explicit override that wins
+	// over model-glob matching. Because Config.Validate rejects a key
+	// claimed by more than one provider, at most one route ever matches a
+	// presented key. Nil or empty (the default for every route built from a
+	// config that omits the field) means: this provider claims no keys, so
+	// it is only reachable via glob routing.
+	AllowedApiKeys []string
 }
 
 // NewModelRouter returns an HTTP handler that body-parses each request's
@@ -85,7 +95,7 @@ type ModelRoute struct {
 // log-event shape ever needs the same data, introduce a `requestLogger`
 // struct holding `sampler` + `metrics` then.
 //
-//nolint:gocognit,funlen // single-pass request flow: read body → resolve alias →
+//nolint:gocognit,funlen,maintidx // single-pass request flow: read body → resolve alias →
 func NewModelRouter(
 	routes []ModelRoute,
 	defaultProviderName string,
@@ -209,7 +219,30 @@ func NewModelRouter(
 				break
 			}
 		}
+		// Key routing runs BEFORE the glob walk: a presented x-api-key that
+		// some provider claims pins the dispatch to that provider, and the
+		// glob walk is skipped wholesale. Plain string membership is correct
+		// here — the auth middleware already validated the key in constant
+		// time, so no timing boundary remains (AC 10 is scoped to
+		// auth-middleware.go). The key itself is never logged or written to
+		// the request body; the `[route]` line names the provider only.
+		matchedByKey := false
+		if presentedKey := PresentedApiKeyFromContext(r.Context()); presentedKey != "" {
+			for _, route := range routes {
+				if containsString(route.AllowedApiKeys, presentedKey) {
+					providerName = route.ProviderName
+					target = route.Handler
+					requiresLeadingSystem = route.RequiresLeadingSystem
+					glog.V(2).Infof("[route] key matched provider=%s", providerName)
+					matchedByKey = true
+					break
+				}
+			}
+		}
 		for _, route := range routes {
+			if matchedByKey {
+				break
+			}
 			ok, _ := path.Match(route.Pattern, model)
 			if ok {
 				providerName = route.ProviderName
@@ -387,4 +420,17 @@ func recordTokenDirection(metrics *Metrics, provider, model, direction, raw stri
 		return
 	}
 	metrics.ObserveTokens(provider, model, direction, n)
+}
+
+// containsString reports whether s is in list. It is a plain linear scan
+// over the tiny per-provider key list; plain string comparison is correct
+// because the auth gate already validated the presented key in constant
+// time, so no timing boundary remains.
+func containsString(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }

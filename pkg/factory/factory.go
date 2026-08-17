@@ -166,6 +166,7 @@ func CreateRouterFromConfig(
 				ProviderName:          name,
 				Handler:               proxy,
 				RequiresLeadingSystem: prov.RequiresLeadingSystem,
+				AllowedApiKeys:        prov.AllowedApiKeys,
 			})
 		}
 	}

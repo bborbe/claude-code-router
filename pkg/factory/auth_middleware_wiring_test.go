@@ -448,3 +448,165 @@ var _ = Describe("CreateServer ROUTER_AUTH_KEY migration guard", func() {
 		Expect(err.Error()).To(ContainSubstring("ROUTER_AUTH_KEY"))
 	})
 })
+
+var _ = Describe("CreateRouterFromConfig key routing wiring", func() {
+	var (
+		srvA   *httptest.Server
+		srvB   *httptest.Server
+		countA int
+		countB int
+		bodyA  []byte
+		bodyB  []byte
+		hdrsA  http.Header
+		authB  string
+	)
+
+	BeforeEach(func() {
+		countA = 0
+		countB = 0
+		bodyA = nil
+		bodyB = nil
+		hdrsA = nil
+		authB = ""
+		Expect(os.Unsetenv("ROUTER_AUTH_KEY")).To(Succeed())
+		srvA = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			countA++
+			bodyA, _ = io.ReadAll(r.Body)
+			hdrsA = r.Header.Clone()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		srvB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			countB++
+			bodyB, _ = io.ReadAll(r.Body)
+			authB = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+	})
+
+	AfterEach(func() {
+		srvA.Close()
+		srvB.Close()
+	})
+
+	// keyRoutingConfig builds the two-provider config for AC 3/4/5. Both
+	// providers live in the deepseek namespace; provider A's `deepseek-*`
+	// glob is the one a `deepseek-v4-pro` request glob-routes to, while
+	// provider B carries its own outbound token and claims dark-factory-key
+	// under a narrower glob. This keeps every assertion deterministic: the
+	// factory ranges over the providers map (order not guaranteed), so if
+	// both providers matched the AC 3/4/5 model, the glob-selected provider
+	// would be random and AC 4/5's "arrives at provider A / never reaches B"
+	// could not be asserted reliably. The "two providers sharing one glob,
+	// key overrides the competing glob" semantics ARE covered deterministically
+	// in the unit tests (pkg/handler/model-router_test.go), where route order
+	// is a fixed slice.
+	//
+	// The top-level registry is the auth superset: it accepts both
+	// dark-factory-key and the unclaimed registry-only-key (spec DB 2),
+	// while only B claims the first.
+	makeConfig := func() *pkg.Config {
+		return &pkg.Config{
+			Router:         pkg.Router{DefaultProvider: "provider-a"},
+			AllowedApiKeys: []string{"dark-factory-key", "registry-only-key"},
+			Providers: map[string]pkg.Provider{
+				"provider-a": {Upstream: srvA.URL, Models: []string{"deepseek-*"}},
+				"provider-b": {
+					Upstream:       srvB.URL,
+					Models:         []string{"deepseek-dark-factory-*"},
+					Token:          "b-token",
+					AllowedApiKeys: []string{"dark-factory-key"},
+				},
+			},
+		}
+	}
+
+	newV1Request := func(remoteAddr, apiKey, body string) *http.Request {
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/messages",
+			strings.NewReader(body),
+		)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("X-Api-Key", apiKey)
+		}
+		return req
+	}
+
+	It(
+		"AC 3: a claimed key dispatches only to the key-holding provider, with its outbound token and body intact",
+		func() {
+			handler, err := factory.CreateRouterFromConfig(
+				context.Background(),
+				makeConfig(),
+				isolatedRegistry(),
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			body := `{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, newV1Request("10.0.0.1:12345", "dark-factory-key", body))
+
+			// Key routing pins to B regardless of glob order — deterministic.
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(countB).To(Equal(1), "key-matched request must reach provider B")
+			Expect(countA).To(Equal(0), "key-matched request must never reach provider A")
+			Expect(string(bodyB)).To(Equal(body))
+			Expect(authB).To(Equal("Bearer b-token"))
+		},
+	)
+
+	It(
+		"AC 4: a registry-accepted but unclaimed key routes by glob to provider A with the body intact",
+		func() {
+			handler, err := factory.CreateRouterFromConfig(
+				context.Background(),
+				makeConfig(),
+				isolatedRegistry(),
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			body := `{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, newV1Request("10.0.0.1:12345", "registry-only-key", body))
+
+			// The auth gate accepted the unclaimed key (200), but the key is
+			// claimed by no provider so routing falls to the glob path — the
+			// same as the keyless case (spec DB 3). Provider A is the only
+			// glob match for deepseek-v4-pro.
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(countA).To(Equal(1), "glob-selected request must reach provider A")
+			Expect(countB).To(Equal(0), "unclaimed key must never pin to provider B")
+			Expect(string(bodyA)).To(Equal(body))
+		},
+	)
+
+	It(
+		"AC 5: a keyless loopback request routes by glob with identical body and no x-api-key forwarded",
+		func() {
+			handler, err := factory.CreateRouterFromConfig(
+				context.Background(),
+				makeConfig(),
+				isolatedRegistry(),
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			body := `{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, newV1Request("127.0.0.1:54321", "", body))
+
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(countA).To(Equal(1), "glob-selected request must reach provider A")
+			Expect(countB).To(Equal(0), "keyless request must never reach provider B")
+			Expect(string(bodyA)).To(Equal(body))
+			// The auth strip runs on the loopback bypass path too: the header
+			// map the upstream saw, lower-cased, carries no x-api-key entry.
+			Expect(lowerCaseKeys(hdrsA)).NotTo(HaveKey("x-api-key"))
+		},
+	)
+})

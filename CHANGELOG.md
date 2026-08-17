@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.28.0
+
+- feat: route by presented API key before model-glob matching in the model router (`pkg/handler/model-router.go`). When a request's authenticated `x-api-key` is claimed by a provider's `allowedApiKeys` list, the router dispatches to that provider directly (its outbound token), overriding model-glob selection — the glob walk is skipped wholesale (key wins over globs). A key present in the auth registry but claimed by no provider routes by glob exactly like the keyless case, and keyless requests are byte-for-byte unchanged (glob match then `default_provider`). The key travels from the auth middleware to the router via request context and is never logged or written to the body; the V(2)-gated `[route] key matched provider=<name>` detail line names the provider only. `pkg/factory/factory.go` populates the new `handler.ModelRoute.AllowedApiKeys` field from each provider's config list, so a key claimed by a provider pins routing for any of that provider's model globs.
+
 ## v0.27.0
 
 - feat: add the optional top-level `allowedApiKeys` registry and per-provider `allowedApiKeys` list (`Config.AllowedApiKeys` / `Provider.AllowedApiKeys` / `Config.AllowedApiKeySet()` in `pkg/config.go`). The top-level registry is the auth superset and single rotation point for non-loopback `/v1/*` callers; a per-provider list pins key-routing to that provider. The valid inbound key set is the top-level registry when non-empty, else the union of all providers' lists. `Config.Validate` rejects a key claimed by two providers with an error naming the key and both providers; a key in both the top-level registry and a provider's list, or repeated within one provider's own list, is not a duplicate. Absent, `null`, and empty everywhere mean no key enforcement and no key routing — existing configs behave byte-for-byte as today.
