@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-08-17T19:06:09Z"
 generating: "2026-08-17T19:32:57Z"
 prompted: "2026-08-17T19:32:57Z"
+verifying: "2026-08-17T20:48:58Z"
 branch: dark-factory/routing-by-api-key
 ---
 
