@@ -7,12 +7,12 @@ router:
 
 # Per-request trace logging for /v1/* traffic.
 # When true, writes one JSON file per request to ~/.claude-code-router/trace/
-# (Authorization + x-api-key headers redacted to ***; bodies verbatim).
+# (Authorization + x-api-key + x-router-key headers redacted to ***; bodies verbatim).
 # Default false — omit or set false for no trace files.
 trace: false
 
 # auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
-#   key: "<YOUR_ROUTER_KEY>"
+#   key: "<YOUR_ROUTER_KEY>"    # ROUTER_AUTH_KEY env var wins over this when set; launchd wrapper injects it from TeamVault (see docs/config.md ## Inbound auth)
 
 providers:
 

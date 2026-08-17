@@ -75,6 +75,10 @@ var _ = Describe("CreateRouterFromConfig auth middleware wiring", func() {
 		receivedBody = nil
 		receivedHdrs = nil
 		requestCount = 0
+		// ROUTER_AUTH_KEY is process-global; clear any value leaked from the
+		// env-resolution tests (or the operator's shell) so this suite's
+		// config-literal keys stay authoritative.
+		Expect(os.Unsetenv("ROUTER_AUTH_KEY")).To(Succeed())
 		srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestCount++
 			receivedPath = r.URL.Path
@@ -260,6 +264,9 @@ var _ = Describe("AuthMiddleware SIGHUP reload toggle", func() {
 	var srv *httptest.Server
 
 	BeforeEach(func() {
+		// ROUTER_AUTH_KEY is process-global; clear any leaked value so the
+		// config-literal keys this suite reloads stay authoritative.
+		Expect(os.Unsetenv("ROUTER_AUTH_KEY")).To(Succeed())
 		srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -353,5 +360,106 @@ var _ = Describe("AuthMiddleware SIGHUP reload toggle", func() {
 		Expect(rel.Reload(context.Background())).To(Succeed())
 		Expect(rel.ConfigSnapshot().Auth.IsEnabled()).To(BeFalse())
 		Expect(send()).To(Equal(http.StatusOK))
+	})
+})
+
+var _ = Describe("CreateRouterFromConfig ROUTER_AUTH_KEY env resolution", func() {
+	var srv *httptest.Server
+
+	BeforeEach(func() {
+		srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		// ROUTER_AUTH_KEY is process-global; every test starts with it empty.
+		Expect(os.Unsetenv("ROUTER_AUTH_KEY")).To(Succeed())
+	})
+
+	AfterEach(func() {
+		srv.Close()
+	})
+
+	// makeConfig builds a single-provider config against the test upstream;
+	// an empty authKey leaves the auth block absent entirely.
+	makeConfig := func(authKey string) *pkg.Config {
+		cfg := &pkg.Config{
+			Router: pkg.Router{DefaultProvider: "test"},
+			Providers: map[string]pkg.Provider{
+				"test": {Upstream: srv.URL, Models: []string{"*"}},
+			},
+		}
+		if authKey != "" {
+			cfg.Auth = &pkg.AuthConfig{Key: authKey}
+		}
+		return cfg
+	}
+
+	buildRouter := func(cfg *pkg.Config) http.Handler {
+		h, err := factory.CreateRouterFromConfig(
+			context.Background(),
+			cfg,
+			isolatedRegistry(),
+		)
+		Expect(err).NotTo(HaveOccurred())
+		return h
+	}
+
+	// requestNonLoopback returns the status code a non-loopback /v1/messages
+	// request carrying the given x-router-key (none when empty) gets from h.
+	requestNonLoopback := func(h http.Handler, routerKey string) int {
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/v1/messages",
+			strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hi"}]}`),
+		)
+		req.RemoteAddr = "10.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		if routerKey != "" {
+			req.Header.Set("x-router-key", routerKey)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	Context("ROUTER_AUTH_KEY set + config auth.key set", func() {
+		It("requires the env value; the config literal is rejected", func() {
+			Expect(os.Setenv("ROUTER_AUTH_KEY", "env-secret")).To(Succeed())
+			DeferCleanup(os.Unsetenv, "ROUTER_AUTH_KEY")
+
+			handler := buildRouter(makeConfig("config-secret"))
+
+			Expect(requestNonLoopback(handler, "env-secret")).To(Equal(http.StatusOK))
+			Expect(requestNonLoopback(handler, "config-secret")).To(Equal(http.StatusUnauthorized))
+		})
+	})
+
+	Context("ROUTER_AUTH_KEY empty + config auth.key set", func() {
+		It("falls back to the config value", func() {
+			handler := buildRouter(makeConfig("config-secret"))
+
+			Expect(requestNonLoopback(handler, "config-secret")).To(Equal(http.StatusOK))
+			Expect(requestNonLoopback(handler, "env-secret")).To(Equal(http.StatusUnauthorized))
+		})
+	})
+
+	Context("ROUTER_AUTH_KEY set + config has NO auth block", func() {
+		It("enables auth with the env value", func() {
+			Expect(os.Setenv("ROUTER_AUTH_KEY", "env-secret")).To(Succeed())
+			DeferCleanup(os.Unsetenv, "ROUTER_AUTH_KEY")
+
+			handler := buildRouter(makeConfig(""))
+
+			Expect(requestNonLoopback(handler, "env-secret")).To(Equal(http.StatusOK))
+			Expect(requestNonLoopback(handler, "")).To(Equal(http.StatusUnauthorized))
+		})
+	})
+
+	Context("ROUTER_AUTH_KEY empty + no config auth", func() {
+		It("auth is disabled — a keyless non-loopback request passes through", func() {
+			handler := buildRouter(makeConfig(""))
+
+			Expect(requestNonLoopback(handler, "")).To(Equal(http.StatusOK))
+		})
 	})
 })

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.25.0
+
+- feat: Resolve the inbound auth key env-first from the `ROUTER_AUTH_KEY` environment variable in `CreateRouterFromConfig` (`pkg/factory/factory.go`) — a non-empty value wins over the config's `auth.key` (so a config with no `auth:` block still enables auth, and a launchd wrapper can inject the TeamVault secret without the raw key ever appearing in the config file); when the env var is empty the config's `auth.key` literal applies unchanged, so existing configs keep working
+
 ## v0.24.0
 
 - feat: Add optional inbound auth on `/v1/*` for non-loopback callers via the `x-router-key` header, configurable as `auth.key` (absent or empty ⇒ disabled; loopback exempt; SIGHUP applies the change)

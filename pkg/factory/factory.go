@@ -189,8 +189,13 @@ func CreateRouterFromConfig(
 		libtime.NewCurrentDateTime(),
 	)
 
-	authKey := ""
-	if cfg.Auth.IsEnabled() {
+	// The inbound auth key resolves env-first: a non-empty ROUTER_AUTH_KEY
+	// (injected by the launchd wrapper from TeamVault) always wins, so the
+	// raw secret never has to live in the config file. Only when the env var
+	// is empty does the config's auth.key literal apply — existing configs
+	// keep working unchanged.
+	authKey := os.Getenv("ROUTER_AUTH_KEY")
+	if authKey == "" && cfg.Auth.IsEnabled() {
 		authKey = cfg.Auth.Key
 	}
 	mux := buildMux(modelRouter, cfg.Trace, authKey)

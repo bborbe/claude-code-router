@@ -1,11 +1,12 @@
 ---
-status: approved
+status: cancelled
 spec: [009-inbound-api-key-auth]
 execution_id: claude-code-router-exec-029-spec-009-docs-changelog
 dark-factory-version: dev
 created: "2026-08-17"
 queued: "2026-08-17T16:13:22Z"
-started: "2026-08-17T16:57:08Z"
+started: "2026-08-17T17:06:15Z"
+cancelled: "2026-08-17T17:06:44Z"
 ---
 
 # Docs + changelog for inbound router auth
