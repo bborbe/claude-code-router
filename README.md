@@ -32,12 +32,8 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
    router:
      default_provider: anthropic-subscription
 
-   # Inbound authentication for /v1/* requests.
-   # With a non-empty key, non-loopback callers must present it in the
-   # x-router-key header; loopback (the operator's own host) stays keyless.
-   # Omit this block entirely, or leave the key empty, to disable the check.
-   auth:
-     key: "<YOUR_ROUTER_KEY>"
+   # auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
+   #   key: "<YOUR_ROUTER_KEY>"
 
    providers:
      anthropic-subscription:
@@ -85,7 +81,7 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
    # log shows: config reloaded old_providers=N new_providers=M
    ```
 
-   A malformed config is rejected and the old config stays active. See [docs/config.md](docs/config.md#reload) for the full reload + failure behavior. A full restart (`launchctl kickstart -k` / `systemctl --user restart`) is only needed for binary upgrades or `--listen` address changes.
+   A malformed config is rejected and the old config stays active. See [docs/config.md](docs/config.md#reload) for the full reload + failure behavior. A full restart is only needed for binary upgrades or `--listen` address changes. On macOS, edit the plist, then `launchctl bootout gui/$(id -u)/de.bborbe.claude-code-router` followed by `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.bborbe.claude-code-router.plist` — `launchctl kickstart -k` keeps the cached args and will not reload the plist. On Linux, `systemctl --user restart` re-reads the unit file and is fine as-is.
 
 3. Run it continuously in the background — pick your platform:
 

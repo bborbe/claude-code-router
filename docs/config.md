@@ -125,15 +125,18 @@ The router never stores or logs token values; trace files inherit the same invar
 
 ## Inbound auth
 
-The optional top-level `auth:` block configures a shared key that gates the `/v1/*` inference path.
+The optional top-level `auth:` block configures a shared key that gates the `/v1/*` inference path for non-loopback callers.
 
 ```yaml
-auth:
-  key: <string>   # optional; shared key for inbound auth
+# auth:                        # omit (or set key: "") to disable inbound auth on /v1/*; required when the listener binds beyond 127.0.0.1
+#   key: "<YOUR_ROUTER_KEY>"
 ```
 
 - **Disabled by default.** Absent, `null`, and an empty `key` are equivalent and all mean the router behaves exactly as it does today — no caller is challenged. This is the only mode for existing single-user localhost setups, so upgrading is not a behavior change.
-- **Non-empty key ⇒ the check is on.** With `auth.key` set, inbound authentication is enforced for non-loopback `/v1/*` callers; loopback requests are exempt. Validation deliberately rejects nothing here — a whitespace-only or accidentally-quoted value is treated as a literal key, and the failure mode is a 401 at request time, never a start-up error.
+- **Non-empty key ⇒ the check is on.** With `auth.key` set, every non-loopback `/v1/*` request must present the matching key in the `x-router-key` header; a missing or wrong key is refused with `401 Unauthorized` (constant-time comparison via `crypto/subtle`; neither the presented nor the configured key is ever logged). Loopback requests are exempt, so the operator's own Claude Code on the host keeps working keyless.
+- **The key never reaches an upstream.** A presented `x-router-key` is stripped from a cloned request before it is forwarded, so a key carried via `ANTHROPIC_CUSTOM_HEADERS` never leaks to a provider.
+- **SIGHUP applies changes.** `auth.key` lives in the same config that hot-reloads on SIGHUP — edit the file, `kill -HUP $(pgrep claude-code-router)`, and the new key (or its removal) is live without a restart.
+- **Caller side.** A remote caller (e.g. a dark-factory YOLO container) presents the key by having Claude Code send it: set `ANTHROPIC_CUSTOM_HEADERS` to carry `x-router-key: <value>` alongside `ANTHROPIC_BASE_URL`. Without this, an operator can enable auth but has no way to configure a caller.
 - **Sensitive.** The value is a shared secret, like the provider `token:` fields. Keep the config at `chmod 600`; the router never logs the key.
 
 ## Trace
@@ -142,7 +145,7 @@ The `trace:` flag is a top-level boolean. When `true`, every `/v1/*` request pro
 
 When `false` (or absent), no trace files are written and no trace middleware is on the request hot path.
 
-The `Authorization` and `x-api-key` request headers are redacted to `***` in every trace file, regardless of header case. All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk.
+The `Authorization`, `x-api-key`, and `x-router-key` request headers are redacted to `***` in every trace file, regardless of header case. All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk.
 
 The flag is read once at config load; changing it requires a router restart (see ## Reload).
 
@@ -155,7 +158,7 @@ Two operator-local HTTP endpoints toggle trace logging at runtime without a rout
 - `POST /enabletrace` — turns tracing on for a bounded 5-minute window that auto-disables on expiry. Repeated calls reset the window (each cancels the prior timer and starts a fresh 5-minute window).
 - `POST /disabletrace` — turns tracing off immediately and cancels the pending TTL timer.
 
-Both endpoints are registered on the operator-local listener (`127.0.0.1:8788`) with no authentication — the same trust model as `/setloglevel`. Example:
+Both endpoints are registered on the operator-local listener (`127.0.0.1:8788`) and, like `/setloglevel` and `/gc`, are guarded by an unconditional loopback-only check: a non-loopback request is refused with `403 Forbidden` before handler logic runs. The guard is always on (no config knob to disable it) and is the protection once the listener binds beyond `127.0.0.1` — a remote caller can never toggle tracing (body capture), force GC, or change log levels. Example:
 
 ```bash
 curl -X POST http://127.0.0.1:8788/enabletrace   # trace enabled
@@ -241,7 +244,7 @@ On success the router logs one line at `config reloaded old_providers=N new_prov
 
 A full process restart is still needed to change the `--listen` address or TLS material — those are not hot-reloadable.
 
-`launchctl kickstart -k` / `systemctl --user restart` still work for a hard restart (binary upgrade, listener-address change), but are no longer required for config edits.
+`launchctl kickstart -k` still works for a hard restart after a binary upgrade, and `systemctl --user restart` re-reads the unit file on Linux; neither is required for config edits. On macOS, a `--listen` change is NOT picked up by `kickstart -k` (it restarts with the cached args) — edit the plist, then `launchctl bootout gui/$(id -u)/de.bborbe.claude-code-router` followed by `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.bborbe.claude-code-router.plist`.
 
 ## Related
 

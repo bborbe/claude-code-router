@@ -1,11 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [009-inbound-api-key-auth]
+summary: 'Landed all inbound-router-auth documentation changes: expanded the ## Inbound auth section (x-router-key, 401, SIGHUP, ANTHROPIC_CUSTOM_HEADERS caller side, matching example), corrected the stale admin-endpoint trust-model and kickstart/--listen claims across config.md, README.md, launchd-service.md and debug.md, added the three-header redaction list, converted the example config auth block to the commented form, and added the CHANGELOG ## Unreleased entry.'
 execution_id: claude-code-router-exec-029-spec-009-docs-changelog
 dark-factory-version: dev
 created: "2026-08-17"
 queued: "2026-08-17T16:13:22Z"
 started: "2026-08-17T16:57:08Z"
+completed: "2026-08-17T17:06:10Z"
 ---
 
 # Docs + changelog for inbound router auth

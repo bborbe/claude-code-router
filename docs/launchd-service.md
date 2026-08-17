@@ -139,7 +139,11 @@ To pick up a config edit without restarting the process (in-flight requests are 
 kill -HUP $(pgrep claude-code-router)
 ```
 
-The router logs `config reloaded old_providers=N new_providers=M` on success. A malformed config is rejected and the previous config stays active. Use `launchctl kickstart -k` (above) only for binary upgrades or `--listen` address changes — not for config edits.
+The router logs `config reloaded old_providers=N new_providers=M` on success. A malformed config is rejected and the previous config stays active.
+
+`launchctl kickstart -k` (above) is only for binary upgrades — it restarts with the cached args and will NOT reload the plist file.
+
+For a `--listen` address change, edit the plist first, then apply it with `launchctl bootout gui/$(id -u)/de.bborbe.claude-code-router` followed by `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.bborbe.claude-code-router.plist` — the same bind-step procedure as [dark-factory-integration.md](dark-factory-integration.md) step 1.
 
 ## 6. Local hotfix flow (unpushed change → running router)
 

@@ -68,13 +68,13 @@ Each `/v1/*` request writes exactly one JSON file:
 }
 ```
 
-`Authorization` and `x-api-key` request headers are redacted to `***` (case-insensitive). All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk. See [config.md#trace](config.md) for the config-flag variant (always-on, deprecated in favor of the `/enabletrace` runtime toggle).
+`Authorization`, `x-api-key`, and `x-router-key` request headers are redacted to `***` (case-insensitive). All other headers and the entire request/response bodies are logged verbatim — operator's data, operator's disk. See [config.md#trace](config.md) for the config-flag variant (always-on, deprecated in favor of the `/enabletrace` runtime toggle).
 
 ## Config changes vs binary upgrades
 
 - **Config edits** (providers, aliases, tokens): edit `~/.claude-code-router/config.yaml`, then `kill -HUP $(pgrep claude-code-router)` — hot reload, no restart, in-flight requests preserved. See [Update Claude Code Router Config](../../65%20Runbooks/Update%20Claude%20Code%20Router%20Config.md).
-- **Binary upgrades / `--listen` changes**: `launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router` — full restart (drops in-flight connections).
+- **Binary upgrades / `--listen` changes**: `launchctl kickstart -k gui/$(id -u)/de.bborbe.claude-code-router` — full restart (drops in-flight connections). On macOS, a `--listen` change additionally requires editing the plist and re-applying via `launchctl bootout gui/$(id -u)/de.bborbe.claude-code-router` + `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.bborbe.claude-code-router.plist` — `kickstart -k` uses the cached args and will not reload the plist.
 
 ## Trust model
 
-The router listens on `127.0.0.1:8788` only. The debug endpoints (`/setloglevel/`, `/enabletrace`, `/disabletrace`) have no auth — any local process can reach them. Same trust model as the existing `/setloglevel`. Don't bind the router to a public interface.
+`/setloglevel/`, `/enabletrace`, `/disabletrace` and `/gc` are guarded by an unconditional loopback-only check: a non-loopback request is refused with `403 Forbidden` before handler logic runs, and the remote address is read only from the connection (never `X-Forwarded-For` / `X-Real-IP`). The guard is always on — there is no config knob to disable it — and it is the protection once the listener binds beyond `127.0.0.1`. Binding `0.0.0.0:8788` (e.g. for dark-factory containers) is legitimate; the admin endpoints stay loopback-only. `/v1/*` traffic, by contrast, is protected by the optional `auth.key` check: with a key set, non-loopback callers must present it in the `x-router-key` header or receive a 401. See [config.md § Inbound auth](config.md#inbound-auth) for the full model.

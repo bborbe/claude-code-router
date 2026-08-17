@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.24.0
+
+- feat: Add optional inbound auth on `/v1/*` for non-loopback callers via the `x-router-key` header, configurable as `auth.key` (absent or empty ⇒ disabled; loopback exempt; SIGHUP applies the change)
+- feat: Enforce an unconditional loopback-only guard on `/setloglevel`, `/enabletrace`, `/disabletrace` and `/gc` (403 for non-loopback), protecting the admin endpoints once the listener binds beyond `127.0.0.1`
+
 ## v0.23.0
 
 - feat: enforce loopback-only access on the four state-changing admin endpoints (`/setloglevel/`, `/enabletrace`, `/disabletrace`, `/gc`) via `handler.NewAdminLoopbackGuard` (`pkg/handler/admin_loopback_guard.go`), wired at the `buildMux` registration site in `pkg/factory/factory.go`. Any non-loopback request is refused with HTTP 403 (`admin endpoint loopback-only`) before handler logic runs, so a remote caller can never toggle tracing (body capture), force GC, or change log levels even when they are the only other caller once the listener moves to `0.0.0.0:8788`. The guard is unconditional (no config knob to disable it), reads the remote address only from the connection (`r.RemoteAddr`, never `X-Forwarded-For` / `X-Real-IP`), and emits exactly one `admin refused path=<method+path> remote=<addr>` line per refusal. The inner handlers are wrapped, not modified; read-only endpoints (`/healthz`, `/readiness`, `/metrics`, `HEAD /`) stay open to remote callers so health probes keep working.
