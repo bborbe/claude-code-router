@@ -1,4 +1,5 @@
 {{- if .Values.ingress.enabled }}
+{{- $host := required "ingress.host must be set when ingress.enabled is true" .Values.ingress.host }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -12,7 +13,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    - host: {{ $host | quote }}
       http:
         paths:
           - path: /
@@ -26,6 +27,6 @@ spec:
   tls:
     - secretName: {{ . | quote }}
       hosts:
-        - {{ $.Values.ingress.host | quote }}
+        - {{ $host | quote }}
   {{- end }}
 {{- end }}
