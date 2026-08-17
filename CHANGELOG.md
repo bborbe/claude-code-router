@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.30.0
 
 - feat: add optional Traefik Ingress template (gated on `ingress.enabled`) so the router can be reached over TLS from outside the cluster (e.g. laptop `ANTHROPIC_BASE_URL` → `https://claude-code-router.quant.benjamin-borbe.de`). Per-cluster values set host + tlsSecret (tls-quant). Chart bumped 0.1.0 → 0.2.0.
 
