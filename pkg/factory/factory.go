@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -123,6 +124,25 @@ func streamingServerTimeouts(o *libhttp.ServerOptions) {
 	o.WriteTimeout = 10 * time.Minute
 }
 
+// providerKeys returns the provider names in YAML declaration order when the
+// config was loaded from YAML (Config.ProviderOrder populated by
+// UnmarshalYAML), else sorted for determinism (programmatically built configs
+// and tests). The router's "first glob match wins" routing depends on this
+// order when two providers share a model glob — the first-declared provider
+// owns the keyless traffic, a later one is reached only by an allowedApiKeys
+// pin (spec 010).
+func providerKeys(cfg *pkg.Config) []string {
+	if len(cfg.ProviderOrder) > 0 {
+		return cfg.ProviderOrder
+	}
+	keys := make([]string, 0, len(cfg.Providers))
+	for k := range cfg.Providers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
 // config: per-provider reverse-proxies with token-swap transports, a
 // model-name dispatcher on /v1/, and the canonical admin endpoints
@@ -142,7 +162,8 @@ func CreateRouterFromConfig(
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
-	for name, prov := range cfg.Providers {
+	for _, name := range providerKeys(cfg) {
+		prov := cfg.Providers[name]
 		upstream, err := url.Parse(prov.Upstream)
 		if err != nil {
 			return nil, errors.Wrapf(

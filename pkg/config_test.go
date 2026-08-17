@@ -59,6 +59,23 @@ providers:
 			Expect(cfg.Providers["anthropic-subscription"].Token).To(BeEmpty())
 		})
 
+		It("records provider declaration order for route building", func() {
+			p := write(`
+router:
+  default_provider: alpha
+providers:
+  alpha:
+    upstream: https://a.example
+    models: ["shared-*"]
+  beta:
+    upstream: https://b.example
+    models: ["shared-*"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ProviderOrder).To(Equal([]string{"alpha", "beta"}))
+		})
+
 		It("errors when default_provider is missing from providers", func() {
 			p := write(`
 router:

@@ -57,6 +57,48 @@ type Config struct {
 	// the /v1/* path behaves exactly as it does today. Keys are literal
 	// strings, like provider token: fields.
 	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
+	// ProviderOrder records the provider keys in YAML declaration order,
+	// captured during unmarshal. Go maps cannot preserve iteration order, but
+	// the router's "walk providers in declaration order, first glob match
+	// wins" semantics depend on it once two providers share a model glob
+	// (e.g. two seibert-vllm entries serving deepseek-* on separate quotas).
+	// Populated only when the config was loaded from YAML; programmatically
+	// built configs leave it empty and route-building falls back to sorted
+	// order.
+	ProviderOrder []string `yaml:"-"`
+}
+
+// UnmarshalYAML decodes the config normally and additionally records the
+// order in which providers are declared. Without this, CreateRouterFromConfig
+// would build its route list in random Go map-iteration order and, with two
+// providers sharing a model glob, the keyless path would be a per-restart
+// coin flip instead of deterministic declaration order (spec 010).
+func (c *Config) UnmarshalYAML(value *yaml.Node) error {
+	type plain Config // avoids recursive UnmarshalYAML
+	if err := value.Decode((*plain)(c)); err != nil {
+		return err
+	}
+	doc := value
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		doc = doc.Content[0]
+	}
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if doc.Content[i].Value != "providers" {
+			continue
+		}
+		provNode := doc.Content[i+1]
+		if provNode.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(provNode.Content); j += 2 {
+			c.ProviderOrder = append(c.ProviderOrder, provNode.Content[j].Value)
+		}
+		return nil
+	}
+	return nil
 }
 
 // Router holds router-wide settings.

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: preserve provider declaration order when building routes (`Config.ProviderOrder` captured during YAML unmarshal, used by `CreateRouterFromConfig`), so "first glob match wins" is deterministic when two providers share a model glob — without it the keyless path was a per-restart coin flip over Go map iteration order, which could route all deepseek traffic to the wrong quota (spec 010).
+
 ## v0.30.0
 
 - feat: add optional Traefik Ingress template (gated on `ingress.enabled`) so the router can be reached over TLS from outside the cluster (e.g. laptop `ANTHROPIC_BASE_URL` → `https://claude-code-router.quant.benjamin-borbe.de`). Per-cluster values set host + tlsSecret (tls-quant). Chart bumped 0.1.0 → 0.2.0.
