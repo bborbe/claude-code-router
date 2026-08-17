@@ -32,6 +32,13 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
    router:
      default_provider: anthropic-subscription
 
+   # Inbound authentication for /v1/* requests.
+   # With a non-empty key, non-loopback callers must present it in the
+   # x-router-key header; loopback (the operator's own host) stays keyless.
+   # Omit this block entirely, or leave the key empty, to disable the check.
+   auth:
+     key: "<YOUR_ROUTER_KEY>"
+
    providers:
      anthropic-subscription:
        upstream: https://api.anthropic.com

@@ -16,6 +16,9 @@ Override with `--config-path` or `CONFIG_PATH` env var — an explicit value alw
 router:
   default_provider: <provider-key>     # required; must match a key under providers:
 
+auth:
+  key: <string>                        # optional; shared key gating non-loopback /v1/* requests (see ## Inbound auth). Absent or empty disables the check.
+
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
 providers:
@@ -120,6 +123,19 @@ ollama's system-position restriction is a property of each MODEL's chat template
 
 The router never stores or logs token values; trace files inherit the same invariant — see ## Trace.
 
+## Inbound auth
+
+The optional top-level `auth:` block configures a shared key that gates the `/v1/*` inference path.
+
+```yaml
+auth:
+  key: <string>   # optional; shared key for inbound auth
+```
+
+- **Disabled by default.** Absent, `null`, and an empty `key` are equivalent and all mean the router behaves exactly as it does today — no caller is challenged. This is the only mode for existing single-user localhost setups, so upgrading is not a behavior change.
+- **Non-empty key ⇒ the check is on.** With `auth.key` set, inbound authentication is enforced for non-loopback `/v1/*` callers; loopback requests are exempt. Validation deliberately rejects nothing here — a whitespace-only or accidentally-quoted value is treated as a literal key, and the failure mode is a 401 at request time, never a start-up error.
+- **Sensitive.** The value is a shared secret, like the provider `token:` fields. Keep the config at `chmod 600`; the router never logs the key.
+
 ## Trace
 
 The `trace:` flag is a top-level boolean. When `true`, every `/v1/*` request produces exactly one JSON file at `~/.claude-code-router/trace/<timestamp>-<request-id>.json` containing the complete request (method, path, headers, body) and complete response (status, headers, body).
@@ -159,6 +175,11 @@ The legacy `trace: true` config flag still works as an always-on opt-in (trace m
 ```yaml
 router:
   default_provider: anthropic-subscription
+
+# Optional: require non-loopback /v1/* callers to present this key.
+# Omit or leave empty to disable inbound auth.
+auth:
+  key: "<YOUR_ROUTER_KEY>"
 
 providers:
 

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.21.0
+
+- feat: add the optional top-level `auth:` config block with a single `key` field (`Config.Auth` / `AuthConfig.IsEnabled()` in `pkg/config.go`). Absent, `null`, and an empty `key` all mean inbound authentication is disabled and the router behaves byte-for-byte as today; `Config.Validate` rejects nothing. Also add `handler.IsLoopbackRemoteAddr` (`pkg/handler/loopback.go`), which classifies both IPv4 (`127.0.0.0/8`) and IPv6 (`::1`) loopback from a connection-supplied `http.Request.RemoteAddr` — the remote address is never taken from `X-Forwarded-For`. This lands the seam the inbound-auth middleware and admin-route guard prompts consume; no request-path behavior changes yet.
+
 ## v0.20.0
 
 - feat: add the optional per-provider `requiresLeadingSystem` config field — glob patterns naming models whose chat template rejects a `system`-role message that is not the conversation's first entry. For a matching model the router lifts misplaced system messages into the top-level `system` block, preserving order, and logs `[system-lift] model=<model> moved=<n>` at V(2). Fixes qwen3.8 through ollama, which returned `HTTP 500 system message must be at the beginning` on every Claude Code request. Scoped per model rather than per provider, since the restriction lives in each model's chat template — qwen3.6 and qwen3.8 disagree behind one provider. Absent or empty means byte-identical forwarding, so existing configs are unaffected; an uninterpretable body is forwarded unchanged with one warning rather than failing the request.

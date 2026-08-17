@@ -42,6 +42,11 @@ type Config struct {
 	// is allocated on the request hot path. Read once at Load; a
 	// restart applies it.
 	Trace bool `yaml:"trace,omitempty"`
+	// Auth, when enabled, requires every non-loopback /v1/* request to
+	// present the shared key in the x-router-key header. Absent, null,
+	// and an empty key all mean authentication is disabled and the
+	// router behaves exactly as it does today.
+	Auth *AuthConfig `yaml:"auth,omitempty"`
 }
 
 // Router holds router-wide settings.
@@ -49,6 +54,25 @@ type Router struct {
 	// DefaultProvider is the provider key used when no model glob matches.
 	// Must reference a key in Providers; validated on Load.
 	DefaultProvider string `yaml:"default_provider"`
+}
+
+// AuthConfig holds the shared key that gates non-loopback /v1/* requests.
+// It is a pointer on Config so that an absent `auth:` block loads as nil,
+// distinct from an explicitly empty key — both mean disabled.
+type AuthConfig struct {
+	// Key is the shared secret a non-loopback caller must present in the
+	// x-router-key header. Empty means authentication is disabled. A
+	// whitespace-only or accidentally-quoted value is treated as a literal
+	// key, never rejected at load time — the symptom is a 401 at request
+	// time, not a start-up failure.
+	Key string `yaml:"key"`
+}
+
+// IsEnabled reports whether inbound authentication is active: true iff the
+// receiver is non-nil and Key is non-empty. Nil and empty string both mean
+// disabled. This is the single check the auth middleware uses.
+func (a *AuthConfig) IsEnabled() bool {
+	return a != nil && a.Key != ""
 }
 
 // Provider describes one upstream LLM API.

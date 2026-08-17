@@ -337,4 +337,83 @@ providers:
 			Expect(err.Error()).NotTo(ContainSubstring("requiresLeadingSystem"))
 		})
 	})
+
+	Context("auth", func() {
+		It("parses auth.key and enables inbound auth", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+auth:
+  key: "s3cret"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Auth).NotTo(BeNil())
+			Expect(cfg.Auth.Key).To(Equal("s3cret"))
+			Expect(cfg.Auth.IsEnabled()).To(BeTrue())
+		})
+
+		It("loads a config without auth: — auth disabled", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Auth).To(BeNil())
+			Expect(cfg.Auth.IsEnabled()).To(BeFalse())
+		})
+
+		It("treats an empty auth.key as auth disabled", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+auth:
+  key: ""
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Auth.IsEnabled()).To(BeFalse())
+		})
+
+		It("treats an explicit null auth: block as auth disabled", func() {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+auth: null
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Auth).To(BeNil())
+			Expect(cfg.Auth.IsEnabled()).To(BeFalse())
+		})
+	})
+
+	Context("AuthConfig.IsEnabled", func() {
+		DescribeTable("reports enabled only for a non-empty key",
+			func(auth *pkgcfg.AuthConfig, enabled bool) {
+				Expect(auth.IsEnabled()).To(Equal(enabled))
+			},
+			Entry("nil receiver", (*pkgcfg.AuthConfig)(nil), false),
+			Entry("empty struct", &pkgcfg.AuthConfig{}, false),
+			Entry("empty key", &pkgcfg.AuthConfig{Key: ""}, false),
+			Entry("non-empty key", &pkgcfg.AuthConfig{Key: "x"}, true),
+		)
+	})
 })
