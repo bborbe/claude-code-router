@@ -1,7 +1,8 @@
 ---
-status: verifying
+status: completed
 approved: "2026-08-17T13:31:45Z"
 verifying: "2026-08-17T18:01:38Z"
+completed: "2026-08-17T18:50:25Z"
 branch: dark-factory/inbound-api-key-auth
 ---
 
