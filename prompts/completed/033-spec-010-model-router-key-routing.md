@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["010"]
+spec: [010-routing-by-api-key]
 summary: 'Implemented key-routing in the model router: a presented x-api-key claimed by a provider''s allowedApiKeys now dispatches to that provider before model-glob selection, with factory wiring, unit + integration tests, and CHANGELOG entry.'
 execution_id: claude-code-router-exec-033-spec-010-model-router-key-routing
 dark-factory-version: dev

@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["010"]
+spec: [010-routing-by-api-key]
 summary: 'Documented the allowedApiKeys surface and spec-009 supersession across docs/config.md, config.example.yaml, README, dark-factory-integration.md, debug.md, launchd-service.md, and added the ## Unreleased CHANGELOG entry; all AC 14 greps pass and make precommit exits 0'
 execution_id: claude-code-router-exec-034-spec-010-docs-changelog
 dark-factory-version: dev

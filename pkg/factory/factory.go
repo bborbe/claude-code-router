@@ -228,8 +228,8 @@ func CreateRouterFromConfig(
 
 // buildMux wires the operator-local admin handlers and the model router
 // into a ServeMux. Admin endpoints are: /healthz, /readiness, /metrics,
-// /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, and the
-// catch-all 404 logger. The model router is wrapped in the auth middleware
+// /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, /api/hello,
+// and the catch-all 404 logger. The model router is wrapped in the auth middleware
 // when allowedKeys is non-empty, and in the trace middleware when trace is
 // true. Auth sits INSIDE trace so the trace middleware still observes
 // x-api-key (redacted) and still captures requests auth rejects, while
@@ -300,6 +300,13 @@ func buildMux(
 	// every real request. The method-qualified pattern wins over "/" in
 	// the Go 1.22+ ServeMux for HEAD requests to the root.
 	mux.Handle("HEAD /{$}", handler.NewRootLivenessHandler())
+	// /api/hello -> 200: Claude Code HEAD-probes this path as a
+	// connectivity check. Without this handler every probe (roughly one
+	// per second per running session) hits the catch-all and logs
+	// `[404] HEAD /api/hello`, burying the unknown-path signals the
+	// logger exists to surface. Path-only pattern (any method) wins over
+	// the "/" catch-all in the Go 1.22+ ServeMux.
+	mux.Handle("/api/hello", handler.NewHelloHandler())
 	// Catch-all 404 logger — registered at "/" matches any path not
 	// covered by a more specific pattern above. Logs at V(1) so unknown-
 	// path probes (`/foo/bar`, typos like `/messages` without /v1) show

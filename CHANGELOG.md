@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: answer Claude Code's `{ANTHROPIC_BASE_URL}/api/hello` connectivity probe with a bare 200 (`handler.NewHelloHandler`, registered in `buildMux` ahead of the `/` catch-all) so the per-session HEAD probes stop flooding the unknown-path 404 log — the logger keeps surfacing every other unmatched route.
+
 ## v0.30.1
 
 - fix: preserve provider declaration order when building routes (`Config.ProviderOrder` captured during YAML unmarshal, used by `CreateRouterFromConfig`), so "first glob match wins" is deterministic when two providers share a model glob — without it the keyless path was a per-restart coin flip over Go map iteration order, which could route all deepseek traffic to the wrong quota (spec 010).
