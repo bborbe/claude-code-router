@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [011-max-concurrent-requests]
+summary: 'Documented maxConcurrentRequests/maxConcurrentWaitSeconds in docs/config.md (schema block + new ## Concurrency limit section), added commented optional fields to docs/config.example.yaml, and created ## Unreleased with a feat entry in CHANGELOG.md'
+execution_id: claude-code-router-max-concurrent-exec-037-spec-011-max-concurrent-requests-docs-changelog
+dark-factory-version: dev
 created: "2026-08-18T20:06:00Z"
 queued: "2026-08-18T20:18:51Z"
+started: "2026-08-18T20:27:19Z"
+completed: "2026-08-18T20:29:36Z"
 ---
 
 # Docs + changelog: maxConcurrentRequests / maxConcurrentWaitSeconds

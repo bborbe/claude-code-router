@@ -47,6 +47,11 @@ providers:
     # block for matching models. Omit or leave empty for no transform.
     requiresLeadingSystem:
       - "qwen3.8*"
+    # Concurrency cap for this provider (optional; see docs/config.md ## Concurrency limit).
+    # Example use: stay under a shared vllm.seibert.tools per-user ceiling of 8 by setting
+    # maxConcurrentRequests: 8 on each seibert vllm provider that points at it.
+    # maxConcurrentRequests: 8     # optional; cap concurrent /v1/* requests to this provider. Absent or 0 or negative = unlimited.
+    # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
 
 # Short names that map to full model identifiers.
 # Operator-facing only — the upstream always sees the resolved full name.
