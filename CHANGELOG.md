@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.32.0
 
 - refactor: add `ctx.Done()` cancellation checks to the config/factory validation and wiring loops (`Validate`, `validateAliases`, `CreateRouterFromConfig`), and rename `RouterOption` to `RouterOptionFunc` per the function-type naming convention — clears recurring pr-review bot findings
 
