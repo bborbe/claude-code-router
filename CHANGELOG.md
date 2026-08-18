@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.31.0
 
 - feat: add optional per-provider concurrency limits — `maxConcurrentRequests` and `maxConcurrentWaitSeconds` (`Provider.MaxConcurrentRequests` / `Provider.MaxConcurrentWaitSeconds` in `pkg/config.go`). A provider with a positive `maxConcurrentRequests` caps how many `/v1/*` requests reach its upstream at once: excess requests queue in a per-provider semaphore (`handler.NewConcurrencyLimiter` in `pkg/handler/concurrency-limiter.go`) and are forwarded unchanged when a slot frees within `maxConcurrentWaitSeconds` (default 30 when absent, 0, or negative, resolved by `pkg/factory/factory.go`); a request still waiting when the wait elapses is answered HTTP 429 with an Anthropic-shaped `rate_limit_error` JSON body so the client's own backoff retries cleanly, never a 5xx. The slot is held for the full request including streaming SSE responses; a client that disconnects while queued never holds a slot. Caps are per-provider and independent even when two providers share one upstream; validation is lenient (absent/0/negative `maxConcurrentRequests` = unlimited, negative wait = 30s default — the config always loads); SIGHUP reload applies changed values without a restart. Absent or non-positive values leave today's behavior byte-for-byte unchanged.
 
