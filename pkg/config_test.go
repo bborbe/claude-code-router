@@ -621,4 +621,76 @@ providers:
 			Expect(cfg.AllowedApiKeySet()).To(Equal(map[string]struct{}{"k": {}}))
 		})
 	})
+
+	Context("maxConcurrentRequests", func() {
+		loadProvider := func(extra string) (*pkgcfg.Config, error) {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+` + extra)
+			return pkgcfg.Load(context.Background(), p)
+		}
+
+		It(
+			"loads both fields when a provider sets maxConcurrentRequests and maxConcurrentWaitSeconds",
+			func() {
+				cfg, err := loadProvider(`
+    maxConcurrentRequests: 8
+    maxConcurrentWaitSeconds: 30
+`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Providers["anthropic"].MaxConcurrentRequests).To(Equal(8))
+				Expect(cfg.Providers["anthropic"].MaxConcurrentWaitSeconds).To(Equal(30))
+			},
+		)
+
+		It("leaves both fields 0 when a provider sets neither — identical to today", func() {
+			cfg, err := loadProvider(``)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic"].MaxConcurrentRequests).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].MaxConcurrentWaitSeconds).To(Equal(0))
+		})
+
+		It("loads only maxConcurrentRequests, leaving maxConcurrentWaitSeconds 0", func() {
+			cfg, err := loadProvider(`
+    maxConcurrentRequests: 8
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic"].MaxConcurrentRequests).To(Equal(8))
+			// 0 resolves to the 30s default at wiring, not at load.
+			Expect(cfg.Providers["anthropic"].MaxConcurrentWaitSeconds).To(Equal(0))
+		})
+
+		It("loads a negative maxConcurrentRequests with no error", func() {
+			cfg, err := loadProvider(`
+    maxConcurrentRequests: -1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			// The factory resolves <= 0 to unlimited at wiring.
+			Expect(cfg.Providers["anthropic"].MaxConcurrentRequests).To(Equal(-1))
+		})
+
+		It("loads a negative maxConcurrentWaitSeconds with no error", func() {
+			cfg, err := loadProvider(`
+    maxConcurrentWaitSeconds: -1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			// The factory resolves <= 0 to the 30s default at wiring.
+			Expect(cfg.Providers["anthropic"].MaxConcurrentWaitSeconds).To(Equal(-1))
+		})
+
+		It("loads explicit zeroes as valid — uncapped / default-resolved respectively", func() {
+			cfg, err := loadProvider(`
+    maxConcurrentRequests: 0
+    maxConcurrentWaitSeconds: 0
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic"].MaxConcurrentRequests).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].MaxConcurrentWaitSeconds).To(Equal(0))
+		})
+	})
 })
