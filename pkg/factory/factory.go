@@ -28,10 +28,10 @@ import (
 	"github.com/bborbe/claude-code-router/pkg/reloader"
 )
 
-// RouterOption configures CreateRouterFromConfig beyond the parsed Config.
+// RouterOptionFunc configures CreateRouterFromConfig beyond the parsed Config.
 // Options are test seams (e.g. an isolated Prometheus registry) that do
 // not belong on the YAML-deserialized Config struct.
-type RouterOption func(*routerOptions)
+type RouterOptionFunc func(*routerOptions)
 
 type routerOptions struct {
 	metricsRegisterer prometheus.Registerer
@@ -40,7 +40,7 @@ type routerOptions struct {
 // WithMetricsRegisterer overrides the Prometheus registerer used for
 // ccrouter_* metrics. Defaults to prometheus.DefaultRegisterer. Tests pass
 // an isolated registry to avoid racing on the process-global default.
-func WithMetricsRegisterer(reg prometheus.Registerer) RouterOption {
+func WithMetricsRegisterer(reg prometheus.Registerer) RouterOptionFunc {
 	return func(o *routerOptions) {
 		o.metricsRegisterer = reg
 	}
@@ -155,19 +155,31 @@ const defaultMaxConcurrentWaitSeconds = 30
 // router emits its own structured one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
+//
+//nolint:funlen // per-provider wiring with per-loop ctx cancellation checks
 func CreateRouterFromConfig(
 	ctx context.Context,
 	cfg *pkg.Config,
-	opts ...RouterOption,
+	opts ...RouterOptionFunc,
 ) (http.Handler, error) {
 	o := &routerOptions{metricsRegisterer: prometheus.DefaultRegisterer}
 	for _, opt := range opts {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		opt(o)
 	}
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
 	for _, name := range providerKeys(cfg) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		prov := cfg.Providers[name]
 		upstream, err := url.Parse(prov.Upstream)
 		if err != nil {
@@ -196,6 +208,11 @@ func CreateRouterFromConfig(
 		)
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
 			routes = append(routes, handler.ModelRoute{
 				Pattern:               pattern,
 				ProviderName:          name,

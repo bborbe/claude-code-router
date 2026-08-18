@@ -28,7 +28,7 @@ import (
 // isolatedRegistry returns a fresh Prometheus registry so the factory's
 // metrics.Register call doesn't race on the process-global DefaultRegisterer
 // used by other test suites in the same binary.
-func isolatedRegistry() factory.RouterOption {
+func isolatedRegistry() factory.RouterOptionFunc {
 	return factory.WithMetricsRegisterer(prometheus.NewRegistry())
 }
 

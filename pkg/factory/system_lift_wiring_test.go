@@ -47,7 +47,7 @@ var _ = Describe("CreateRouterFromConfig requiresLeadingSystem wiring", func() {
 		}
 	}
 
-	isolatedRegistry := func() factory.RouterOption {
+	isolatedRegistry := func() factory.RouterOptionFunc {
 		return factory.WithMetricsRegisterer(prometheus.NewRegistry())
 	}
 

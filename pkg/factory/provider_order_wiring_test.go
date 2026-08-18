@@ -40,7 +40,7 @@ var _ = Describe("CreateRouterFromConfig provider declaration order", func() {
 		_ = os.RemoveAll(dir)
 	})
 
-	isolatedRegistry := func() factory.RouterOption {
+	isolatedRegistry := func() factory.RouterOptionFunc {
 		return factory.WithMetricsRegisterer(prometheus.NewRegistry())
 	}
 
