@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.30.2
 
 - fix: answer Claude Code's `{ANTHROPIC_BASE_URL}/api/hello` connectivity probe with a bare 200 (`handler.NewHelloHandler`, registered in `buildMux` ahead of the `/` catch-all) so the per-session HEAD probes stop flooding the unknown-path 404 log — the logger keeps surfacing every other unmatched route.
 
