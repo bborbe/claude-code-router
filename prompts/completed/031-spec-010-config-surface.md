@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["010"]
+spec: [010-routing-by-api-key]
 summary: 'Landed the config surface for spec 010 prompt 1: top-level Config.AllowedApiKeys and per-provider Provider.AllowedApiKeys fields, the registry-wins-wholesale/else-union AllowedApiKeySet() helper, and a duplicate-claim check in Config.Validate (via a private validateAllowedApiKeyClaims method) that rejects a key claimed by two providers with an error naming both, with 11 new Ginkgo boundary tests, docs (config.md, config.example.yaml, README) and a CHANGELOG ## Unreleased feat entry'
 execution_id: claude-code-router-exec-031-spec-010-config-surface
 dark-factory-version: dev

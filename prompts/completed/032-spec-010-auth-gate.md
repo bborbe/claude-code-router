@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["010"]
+spec: [010-routing-by-api-key]
 summary: 'Replaced the single-key x-router-key auth gate with a set-based x-api-key middleware, added the PresentedApiKeyFromContext/ContextWithPresentedApiKey context seam, migrated factory wiring and redaction to x-api-key, and added fail-closed migration guards (legacy auth: fails load, ROUTER_AUTH_KEY refuses startup) with full unit/integration/SIGHUP/guard test coverage.'
 execution_id: claude-code-router-exec-032-spec-010-auth-gate
 dark-factory-version: dev
