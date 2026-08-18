@@ -68,7 +68,7 @@ var _ = Describe("CreateRouterFromConfig trace wiring", func() {
 	// isolatedRegistry returns a fresh Prometheus registry so the
 	// factory's metrics.Register call doesn't race on the process-global
 	// DefaultRegisterer used by other test suites in the same binary.
-	isolatedRegistry := func() factory.RouterOption {
+	isolatedRegistry := func() factory.RouterOptionFunc {
 		return factory.WithMetricsRegisterer(prometheus.NewRegistry())
 	}
 

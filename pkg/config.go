@@ -193,6 +193,8 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 }
 
 // Validate checks that the parsed config is internally consistent.
+//
+//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
 func (c *Config) Validate(ctx context.Context) error {
 	if c.Auth != nil {
 		return errors.New(
@@ -213,10 +215,20 @@ func (c *Config) Validate(ctx context.Context) error {
 		))
 	}
 	for name, prov := range c.Providers {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if prov.Upstream == "" {
 			return errors.New(ctx, fmt.Sprintf("provider %q: upstream is required", name))
 		}
 		for _, pattern := range prov.Models {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			// path.Match validates pattern syntax against a dummy string.
 			if _, err := path.Match(pattern, ""); err != nil {
 				return errors.Wrapf(ctx, err,
@@ -226,6 +238,11 @@ func (c *Config) Validate(ctx context.Context) error {
 			}
 		}
 		for _, pattern := range prov.RequiresLeadingSystem {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			// path.Match validates pattern syntax against a dummy string.
 			if _, err := path.Match(pattern, ""); err != nil {
 				return errors.Wrapf(ctx, err,
@@ -252,7 +269,17 @@ func (c *Config) validateAllowedApiKeyClaims(ctx context.Context) error {
 	// which is encountered first.
 	claims := make(map[string]string)
 	for name, prov := range c.Providers {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		for _, key := range prov.AllowedApiKeys {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			if first, ok := claims[key]; ok && first != name {
 				return errors.Errorf(ctx,
 					"allowedApiKeys key %q claimed by providers %q and %q",
@@ -288,8 +315,14 @@ func (c *Config) AllowedApiKeySet() map[string]struct{} {
 	return set
 }
 
+//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
 func (c *Config) validateAliases(ctx context.Context) error {
 	for aliasKey := range c.Aliases {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if _, collides := c.Providers[aliasKey]; collides {
 			return errors.New(ctx, fmt.Sprintf(
 				"alias key %q collides with provider name", aliasKey,
@@ -297,9 +330,24 @@ func (c *Config) validateAliases(ctx context.Context) error {
 		}
 	}
 	for aliasKey, target := range c.Aliases {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		matched := false
 		for _, prov := range c.Providers {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			for _, pattern := range prov.Models {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 				if ok, _ := path.Match(pattern, target); ok {
 					matched = true
 					break
