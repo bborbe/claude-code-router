@@ -143,6 +143,11 @@ func providerKeys(cfg *pkg.Config) []string {
 	return keys
 }
 
+// defaultMaxConcurrentWaitSeconds is the queue timeout applied when a
+// capped provider's maxConcurrentWaitSeconds is absent, 0, or negative
+// (spec DB 5).
+const defaultMaxConcurrentWaitSeconds = 30
+
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
 // config: per-provider reverse-proxies with token-swap transports, a
 // model-name dispatcher on /v1/, and the canonical admin endpoints
@@ -180,12 +185,21 @@ func CreateRouterFromConfig(
 			libtime.NewCurrentDateTime(),
 		)
 		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
-		providerHandlers[name] = proxy
+		waitSeconds := prov.MaxConcurrentWaitSeconds
+		if waitSeconds <= 0 {
+			waitSeconds = defaultMaxConcurrentWaitSeconds
+		}
+		providerHandler := handler.NewConcurrencyLimiter(
+			proxy,
+			prov.MaxConcurrentRequests,
+			time.Duration(waitSeconds)*time.Second,
+		)
+		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			routes = append(routes, handler.ModelRoute{
 				Pattern:               pattern,
 				ProviderName:          name,
-				Handler:               proxy,
+				Handler:               providerHandler,
 				RequiresLeadingSystem: prov.RequiresLeadingSystem,
 				AllowedApiKeys:        prov.AllowedApiKeys,
 			})

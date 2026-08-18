@@ -156,6 +156,19 @@ type Provider struct {
 	// error, see Config.Validate). Absent, null, and empty all mean: this
 	// provider claims no keys, so it is only reachable via glob routing.
 	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
+	// MaxConcurrentRequests, when > 0, caps how many /v1/* requests this
+	// provider forwards upstream at the same time. Requests beyond the cap
+	// queue for up to MaxConcurrentWaitSeconds; a request still waiting
+	// when the queue wait elapses is answered HTTP 429 with an
+	// Anthropic-shaped rate_limit_error body so the client's own backoff
+	// retries cleanly. Absent, 0, or negative means unlimited — no
+	// queueing, no router-issued 429, byte-for-byte current behavior.
+	MaxConcurrentRequests int `yaml:"maxConcurrentRequests,omitempty"`
+	// MaxConcurrentWaitSeconds is how long a queued request waits for a
+	// free slot before the router answers HTTP 429. Only consulted on a
+	// capped provider (MaxConcurrentRequests > 0); absent, 0, or negative
+	// resolves to the 30s default at wiring.
+	MaxConcurrentWaitSeconds int `yaml:"maxConcurrentWaitSeconds,omitempty"`
 }
 
 // Load reads, parses, and validates the config at path. Tilde-prefix

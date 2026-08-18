@@ -32,6 +32,8 @@ providers:
       - "<pattern>"
       - ...
     # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
+    # maxConcurrentRequests: 8   # optional; cap concurrent /v1/* requests to THIS provider (see ## Concurrency limit). Absent or 0 or negative = unlimited.
+    # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
 ```
 
 ## Routing
@@ -114,6 +116,28 @@ ollama's system-position restriction is a property of each MODEL's chat template
 |---|---|
 | Malformed glob pattern (e.g. `[`) | Config load fails with `provider "<name>": invalid requiresLeadingSystem glob "["`; router refuses to start |
 | Well-formed pattern that matches no model the operator actually uses | Not an error; no warning. The symptom is that no `[system-lift]` line ever appears while the upstream keeps returning 500, and the fix is to widen the pattern. |
+
+## Concurrency limit
+
+Two optional per-provider fields cap how many `/v1/*` requests the router forwards to a provider's upstream at the same time:
+
+```yaml
+providers:
+  <provider-key>:
+    upstream: <URL>
+    maxConcurrentRequests: 8        # optional; cap concurrent /v1/* requests to this provider. Absent or 0 or negative = unlimited.
+    maxConcurrentWaitSeconds: 30    # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+```
+
+- **Feature-off by default.** `maxConcurrentRequests` absent, `0`, or negative means unlimited — no queueing, no router-issued 429, byte-for-byte today's behavior. Existing configs are unaffected.
+- **What happens at the cap.** Excess requests queue in a per-provider semaphore. A queued request that frees a slot within `maxConcurrentWaitSeconds` is forwarded to the upstream normally and unchanged — the client cannot tell it queued. A request still waiting when the wait elapses is answered HTTP 429 with an Anthropic-shaped `rate_limit_error` JSON body (`{"type":"error","error":{"type":"rate_limit_error",...}}`), never a 5xx, so the client's own backoff retries cleanly.
+- **The 30s default wait.** `maxConcurrentWaitSeconds` defaults to 30 when absent, `0`, or negative on a capped provider (a provider with `maxConcurrentRequests > 0`). It is only consulted on a capped provider.
+- **The slot is held for the whole request.** The concurrency slot is held from dispatch until the upstream round-trip returns, including streaming SSE responses that run for minutes. A client that disconnects while still queued never acquires a slot, so no concurrency is lost to dead connections.
+- **Per-provider caps are independent.** Two providers that share one upstream each apply their own cap. The seibert case: `seibert-vllm-default` and `seibert-dark-factory` each cap at their own N, so combined concurrency to the shared `vllm.seibert.tools` upstream can reach 2N — accepted by design, each provider's queue is its own.
+- **Validation is lenient.** A negative `maxConcurrentRequests` is treated as unlimited and a negative `maxConcurrentWaitSeconds` as the 30s default — the config always loads, never fail-closed.
+- **SIGHUP applies changes.** Both fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider limiters, so a changed cap (or its removal) is live without a restart.
+- **Observability is unchanged.** No new metrics. A router-issued 429 appears in the existing `[req] ... status=429` log line and the existing `4xx_rate_limited` class of `ccrouter_requests_total` — the same class as an upstream's own 429.
+- **Suggested use.** `vllm.seibert.tools` enforces its own per-user ceiling of 8 concurrent requests. Set `maxConcurrentRequests: 8` on both seibert vllm providers (`seibert-vllm-default` and `seibert-dark-factory`) so the router queues instead of the upstream rejecting.
 
 ## Auth
 
