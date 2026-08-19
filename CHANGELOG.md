@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update dependencies
+
 ## v0.38.1
 
 - fix: add `display:"length"` redaction tags to every secret config field (`Token`, both `AllowedApiKeys`, `AuthConfig.Key`, `Upstream.Token`) so bearer tokens and API keys are never printed in startup logs; thread context cancellation through the upstream-pool and model-pool selection loops (`pinSlot`, `leastLoaded`, `overflowTarget`, `providerKeys`, pool constructors) and wrap the bare `normalizeUpstreams` error; decompose the model-pool table build into `buildModelPools` / `buildPoolMember` / `sumInFlight` / `providerSaturated` so the factory stays under the maintidx/gocognit gates. These are the PR-review fixes landed after v0.38.0 was cut on the feature branch.
