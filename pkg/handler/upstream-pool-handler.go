@@ -125,9 +125,14 @@ func (p *upstreamPoolHandler) memberEligible(i int) bool {
 }
 
 // eligibleIndices returns the indices of members eligible right now.
-func (p *upstreamPoolHandler) eligibleIndices() []int {
+func (p *upstreamPoolHandler) eligibleIndices(ctx context.Context) []int {
 	idx := make([]int, 0, len(p.members))
 	for i := range p.members {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		if p.memberEligible(i) {
 			idx = append(idx, i)
 		}
@@ -140,7 +145,10 @@ func (p *upstreamPoolHandler) eligibleIndices() []int {
 // false is ineligible for the dispatch and the model router falls
 // through to the next provider / default_provider.
 func (p *upstreamPoolHandler) HasEligibleMember() bool {
-	return len(p.eligibleIndices()) > 0
+	// HasEligibleMember is the WindowEligible interface method (no ctx in the
+	// signature); the eligible-subset scan is a bounded config-sized query, so
+	// a background context is safe here.
+	return len(p.eligibleIndices(context.Background())) > 0
 }
 
 // pinSlot returns the member index that the weighted ring hash of
@@ -154,7 +162,7 @@ func (p *upstreamPoolHandler) HasEligibleMember() bool {
 // session pinned to it re-resolves to an eligible member on the next
 // request (spec 014).
 func (p *upstreamPoolHandler) pinSlot(ctx context.Context, sessionID string) int {
-	idx := p.eligibleIndices()
+	idx := p.eligibleIndices(ctx)
 	if len(idx) == 0 {
 		return 0
 	}
@@ -189,7 +197,7 @@ func (p *upstreamPoolHandler) pinSlot(ctx context.Context, sessionID string) int
 // keyless traffic instead of stacking on the first-declared one. Members
 // whose window excludes "now" are not considered (spec 014).
 func (p *upstreamPoolHandler) leastLoaded(ctx context.Context) int {
-	idx := p.eligibleIndices()
+	idx := p.eligibleIndices(ctx)
 	if len(idx) == 0 {
 		return 0
 	}

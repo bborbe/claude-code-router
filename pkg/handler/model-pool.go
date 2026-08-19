@@ -99,9 +99,14 @@ func (p *ModelPool) memberEligible(i int) bool {
 
 // eligibleIndices returns the indices of members whose provider is
 // eligible right now.
-func (p *ModelPool) eligibleIndices() []int {
+func (p *ModelPool) eligibleIndices(ctx context.Context) []int {
 	idx := make([]int, 0, len(p.members))
 	for i := range p.members {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		if p.memberEligible(i) {
 			idx = append(idx, i)
 		}
@@ -119,7 +124,7 @@ func (p *ModelPool) eligibleIndices() []int {
 // ring, so a session pinned to it re-resolves to an eligible member on
 // the next request (spec 014).
 func (p *ModelPool) pinSlot(ctx context.Context, sessionID string) int {
-	idx := p.eligibleIndices()
+	idx := p.eligibleIndices(ctx)
 	if len(idx) == 0 {
 		return 0
 	}
@@ -157,7 +162,7 @@ func (p *ModelPool) pinSlot(ctx context.Context, sessionID string) int {
 // whose provider pool has no eligible upstream member are not considered
 // (spec 014).
 func (p *ModelPool) leastLoaded(ctx context.Context) int {
-	idx := p.eligibleIndices()
+	idx := p.eligibleIndices(ctx)
 	if len(idx) == 0 {
 		return 0
 	}
@@ -198,7 +203,7 @@ func (p *ModelPool) leastLoaded(ctx context.Context) int {
 func (p *ModelPool) overflowTarget(ctx context.Context, excluded int) int {
 	minIdx := excluded
 	minLoad := 0
-	for _, mi := range p.eligibleIndices() {
+	for _, mi := range p.eligibleIndices(ctx) {
 		select {
 		case <-ctx.Done():
 			return excluded

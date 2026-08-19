@@ -58,7 +58,7 @@ type ModelRoute struct {
 	// presented key. Nil or empty (the default for every route built from a
 	// config that omits the field) means: this provider claims no keys, so
 	// it is only reachable via glob routing.
-	AllowedApiKeys []string
+	AllowedApiKeys []string `display:"length"`
 }
 
 // NewModelRouter returns an HTTP handler that body-parses each request's
