@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [012-session-pinning-pools]
+summary: 'Added session identity and per-request upstream selection to the handler layer: x-session-id context plumbing + outbound header strip (session-id.go, session-middleware.go), stateless weighted FNV-1a ring-hash pinning and least-loaded keyless dispatch with round-robin tie-breaking (upstream-pool-handler.go), full Ginkgo test coverage of all ACs, and a feat: CHANGELOG entry; make precommit green'
+execution_id: claude-code-router-session-pinning-exec-039-spec-012-session-pinning-selection
+dark-factory-version: dev
 created: "2026-08-19T17:11:00Z"
 queued: "2026-08-19T15:50:36Z"
+started: "2026-08-19T15:54:31Z"
+completed: "2026-08-19T16:00:58Z"
 ---
 
 # Session pinning + keyless selection: `x-session-id` → ring hash / least-loaded

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.34.0
+
+- feat: add per-session upstream pinning and keyless least-loaded dispatch at the handler layer — every /v1/* request's `x-session-id` header is stripped outbound and carried on the request context (`handler.ContextWithSessionID` / `handler.SessionIDFromContext` in `pkg/handler/session-id.go`, `handler.NewSessionMiddleware` in `pkg/handler/session-middleware.go`), and `handler.NewUpstreamPoolHandler` (`pkg/handler/upstream-pool-handler.go`) dispatches each request to exactly one `UpstreamMember`: a non-empty session id is pinned to the same member on every request via a stateless weighted FNV-1a ring hash of the id (no session→member map, recomputable across restarts, so the session's prompt cache stays warm on one server), while a keyless request goes to the least-loaded member with round-robin tie-breaking so anonymous floods spread instead of stacking on the first-declared member; each dispatch emits a `[route] session=<id> upstream=<url>` glog V(2) detail line. Handler layer only — the middleware and pool handler are not yet wired into the route tree.
+
 ## v0.33.0
 
 - feat: add the `Provider.upstreams:` pool schema and `Upstream` type (`pkg/config.go`) — a provider can declare a list of servers, each with its own `upstream`, `token`, `weight`, and per-server `maxConcurrentRequests`/`maxConcurrentWaitSeconds`; the legacy single `upstream:` form loads unchanged as a one-entry pool with weight 1 whose caps are the provider-level values (`Config.Validate` normalizes via `normalizeUpstreams`, exposed as `Provider.UpstreamList()`). Declaring both `upstream:` and `upstreams:` is rejected at load, a negative `weight` is rejected, and `weight: 0` or an absent key resolves to the default 1. Config contract only — routing behavior is unchanged.
