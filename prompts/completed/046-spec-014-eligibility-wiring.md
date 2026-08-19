@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [014-time-windowed-upstreams]
+summary: 'Wired the spec-014 time-window eligibility filter into pool selection: pkg.Window.Contains, per-request eligible-subset pinning/least-loaded in the upstream pool handler and model pool, provider fall-through with window=closed logging in the model router, WithCurrentDateTime factory option wiring member windows + clock (SIGHUP-rebuild enforces edited windows), and fixed-clock tests through the real dispatch path'
+execution_id: claude-code-router-time-window-exec-046-spec-014-eligibility-wiring
+dark-factory-version: dev
 created: "2026-08-19T20:26:00Z"
 queued: "2026-08-19T20:42:15Z"
+started: "2026-08-19T20:58:19Z"
+completed: "2026-08-19T21:12:40Z"
 ---
 
 # Eligibility filter: `window.Contains(now)` in pool selection + provider fall-through + fixed-clock tests

@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	stdtime "time"
 
 	"github.com/bborbe/errors"
 	libtime "github.com/bborbe/time"
@@ -206,6 +207,32 @@ type Provider struct {
 type Window struct {
 	From  libtime.TimeOfDay `yaml:"from"`
 	Until libtime.TimeOfDay `yaml:"until"`
+}
+
+// Contains reports whether now falls inside the window. Eligibility is
+// half-open: [From, Until). From > Until wraps overnight (e.g. 22:00 ->
+// 06:00 covers 02:00 and excludes 14:00). From == Until is an empty
+// window — no time is eligible. now is evaluated in the window's
+// attached location (From.Location, else Until.Location, else UTC), so
+// the boundary is the IANA wall clock of the config value, never the
+// router host's local time (spec DB 2, AC 5).
+func (w *Window) Contains(now libtime.DateTime) bool {
+	loc := w.From.Location
+	if loc == nil {
+		loc = w.Until.Location
+	}
+	if loc == nil {
+		loc = stdtime.UTC
+	}
+	tod := libtime.TimeOfDayFromTime(now.Time().In(loc))
+	switch {
+	case w.From.Equal(w.Until):
+		return false
+	case w.From.Before(w.Until):
+		return (tod.Equal(w.From) || tod.After(w.From)) && tod.Before(w.Until)
+	default:
+		return tod.Equal(w.From) || tod.After(w.From) || tod.Before(w.Until)
+	}
 }
 
 // Upstream is one server in a provider's pool. When a provider

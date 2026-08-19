@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	stdtime "time"
 
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
@@ -18,6 +19,25 @@ import (
 
 	pkgcfg "github.com/bborbe/claude-code-router/pkg"
 )
+
+// berlinLoc is the fixed IANA location used by the Window.Contains table
+// (spec 014 AC 5) — the boundary is the value's attached location, never
+// the host's local time.
+var berlinLoc, _ = stdtime.LoadLocation("Europe/Berlin")
+
+// mustTOD parses a "HH:MM <location>" time-of-day string, failing the test
+// on a malformed value.
+func mustTOD(s string) libtime.TimeOfDay {
+	v, err := libtime.ParseTimeOfDay(context.Background(), s)
+	Expect(err).NotTo(HaveOccurred())
+	return *v
+}
+
+// nowAt returns a fixed-clock DateTime for the given hour/minute in loc on
+// a fixed date, so window tests never depend on the wall clock.
+func nowAt(h, min int, loc *stdtime.Location) libtime.DateTime {
+	return libtime.DateTime(stdtime.Date(2026, 8, 19, h, min, 0, 0, loc))
+}
 
 var _ = Describe("Config", func() {
 	var dir string
@@ -1273,5 +1293,90 @@ providers:
 			prov := pkgcfg.Provider{Upstream: "https://a.example"}
 			Expect(prov.UpstreamList()[0].Window).To(BeNil())
 		})
+
+		DescribeTable(
+			"Contains",
+			func(from, until string, now libtime.DateTime, expected bool) {
+				w := &pkgcfg.Window{From: mustTOD(from), Until: mustTOD(until)}
+				Expect(w.Contains(now)).To(Equal(expected))
+			},
+			Entry(
+				"day window: 10:00 Berlin is inside",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(10, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"day window: 08:00 Berlin is inside (inclusive From)",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(8, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"day window: 18:00 Berlin is outside (exclusive Until)",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(18, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"day window: 07:59 Berlin is outside",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(7, 59, berlinLoc),
+				false,
+			),
+			Entry(
+				"overnight window: 02:00 Berlin is inside",
+				"22:00 Europe/Berlin",
+				"06:00 Europe/Berlin",
+				nowAt(2, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"overnight window: 14:00 Berlin is outside",
+				"22:00 Europe/Berlin",
+				"06:00 Europe/Berlin",
+				nowAt(14, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"overnight window: 22:00 Berlin is inside (inclusive From)",
+				"22:00 Europe/Berlin",
+				"06:00 Europe/Berlin",
+				nowAt(22, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"IANA: 15:30 UTC is 17:30 Berlin — inside",
+				"17:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(15, 30, stdtime.UTC),
+				true,
+			),
+			Entry(
+				"IANA: 17:30 UTC is 19:30 Berlin — outside",
+				"17:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(17, 30, stdtime.UTC),
+				false,
+			),
+			Entry(
+				"empty window: From == Until excludes every now",
+				"08:00 Europe/Berlin",
+				"08:00 Europe/Berlin",
+				nowAt(10, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"empty window: From == Until excludes every now (02:00)",
+				"08:00 Europe/Berlin",
+				"08:00 Europe/Berlin",
+				nowAt(2, 0, berlinLoc),
+				false,
+			),
+		)
 	})
 })
