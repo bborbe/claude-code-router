@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"context"
 	"hash/fnv"
 	"net/http"
 	"sync/atomic"
@@ -37,10 +38,15 @@ type UpstreamMember struct {
 // floods spread instead of stacking on the first-declared member. Each
 // chosen dispatch emits a [route] session=<id> upstream=<url> glog V(2)
 // detail line.
-func NewUpstreamPoolHandler(members []UpstreamMember) http.Handler {
+func NewUpstreamPoolHandler(ctx context.Context, members []UpstreamMember) http.Handler {
 	cumulative := make([]int, len(members))
 	total := 0
 	for i, m := range members {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		total += m.Weight
 		cumulative[i] = total
 	}
@@ -62,7 +68,7 @@ type upstreamPoolHandler struct {
 
 func (p *upstreamPoolHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sessionID := SessionIDFromContext(r.Context())
-	member := p.members[p.selectMember(sessionID)]
+	member := p.members[p.selectMember(r.Context(), sessionID)]
 	glog.V(2).Infof("[route] session=%s upstream=%s", sessionID, member.Upstream)
 	member.Handler.ServeHTTP(w, r)
 }
@@ -70,11 +76,11 @@ func (p *upstreamPoolHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 // selectMember returns the index of the member that serves a request: the
 // weighted ring-hash slot for a non-empty session id, or the least-loaded
 // member (round-robin among ties) for an empty one.
-func (p *upstreamPoolHandler) selectMember(sessionID string) int {
+func (p *upstreamPoolHandler) selectMember(ctx context.Context, sessionID string) int {
 	if sessionID != "" {
-		return p.pinSlot(sessionID)
+		return p.pinSlot(ctx, sessionID)
 	}
-	return p.leastLoaded()
+	return p.leastLoaded(ctx)
 }
 
 // pinSlot returns the member index that the weighted ring hash of
@@ -83,7 +89,7 @@ func (p *upstreamPoolHandler) selectMember(sessionID string) int {
 // session id always yields the same index — recomputable from the id, no
 // session→member map — so the session's upstream prompt cache stays warm
 // on that server across restarts.
-func (p *upstreamPoolHandler) pinSlot(sessionID string) int {
+func (p *upstreamPoolHandler) pinSlot(ctx context.Context, sessionID string) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(sessionID))
 	// #nosec G115 -- totalWeight and cumulative are sums of config-validated
@@ -91,6 +97,11 @@ func (p *upstreamPoolHandler) pinSlot(sessionID string) int {
 	// overflow-safe.
 	slot := h.Sum64() % uint64(p.totalWeight)
 	for i, c := range p.cumulative {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		// #nosec G115 -- see above: cumulative values are positive weight
 		// sums, overflow-safe when widened.
 		if uint64(c) > slot {
@@ -104,15 +115,25 @@ func (p *upstreamPoolHandler) pinSlot(sessionID string) int {
 // requests, breaking ties round-robin (the atomic rr counter, cycled by
 // the tie count) so equally-loaded members share keyless traffic instead
 // of stacking on the first-declared one.
-func (p *upstreamPoolHandler) leastLoaded() int {
+func (p *upstreamPoolHandler) leastLoaded(ctx context.Context) int {
 	min := p.inFlight(0)
 	for i := 1; i < len(p.members); i++ {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		if load := p.inFlight(i); load < min {
 			min = load
 		}
 	}
 	ties := make([]int, 0, len(p.members))
 	for i := range p.members {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		if p.inFlight(i) == min {
 			ties = append(ties, i)
 		}

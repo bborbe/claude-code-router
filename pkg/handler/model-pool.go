@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"context"
 	"hash/fnv"
 	"net/http"
 	"sync/atomic"
@@ -46,11 +47,19 @@ type ModelPool struct {
 // NewModelPool returns a pool over members. Config validation (spec 013
 // prompt 1) guarantees members is non-empty and every weight is
 // positive; like the upstream pool handler (spec 012), no defensive
-// validation is repeated here.
-func NewModelPool(members []ModelPoolMember) *ModelPool {
+// validation is repeated here. The concrete *ModelPool return is
+// deliberate: selection is pure logic over config-validated state,
+// exercised through the real type in handler tests — no mock seam is
+// needed, so no ModelPooler interface is introduced.
+func NewModelPool(ctx context.Context, members []ModelPoolMember) *ModelPool {
 	cumulative := make([]int, len(members))
 	total := 0
 	for i, m := range members {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		total += m.Weight
 		cumulative[i] = total
 	}
@@ -76,14 +85,14 @@ func NewModelPool(members []ModelPoolMember) *ModelPool {
 // availability wins over cache warmth; otherwise the pinned member is
 // served and its provider's own concurrency semantics apply (spec 013
 // DB 4/5).
-func (p *ModelPool) Resolve(sessionID string) ModelPoolMember {
+func (p *ModelPool) Resolve(ctx context.Context, sessionID string) ModelPoolMember {
 	if sessionID == "" {
-		return p.members[p.leastLoaded()]
+		return p.members[p.leastLoaded(ctx)]
 	}
-	pinned := p.pinSlot(sessionID)
+	pinned := p.pinSlot(ctx, sessionID)
 	member := p.members[pinned]
 	if member.Overflow && member.Saturated != nil && member.Saturated() {
-		return p.members[p.overflowTarget(pinned)]
+		return p.members[p.overflowTarget(ctx, pinned)]
 	}
 	return member
 }
@@ -93,7 +102,7 @@ func (p *ModelPool) Resolve(sessionID string) ModelPoolMember {
 // the first member whose cumulative weight exceeds the slot. The same
 // mechanism the upstream pool handler uses (spec 012), so a fixed
 // session id over a fixed pool is stable across requests and restarts.
-func (p *ModelPool) pinSlot(sessionID string) int {
+func (p *ModelPool) pinSlot(ctx context.Context, sessionID string) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(sessionID))
 	// #nosec G115 -- totalWeight and cumulative are sums of config-validated
@@ -101,6 +110,11 @@ func (p *ModelPool) pinSlot(sessionID string) int {
 	// overflow-safe.
 	slot := h.Sum64() % uint64(p.totalWeight)
 	for i, c := range p.cumulative {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		// #nosec G115 -- see above: cumulative values are positive weight
 		// sums, overflow-safe when widened.
 		if uint64(c) > slot {
@@ -114,15 +128,25 @@ func (p *ModelPool) pinSlot(sessionID string) int {
 // requests, breaking ties round-robin (the atomic rr counter, cycled by
 // the tie count) so equally-loaded members share idless traffic instead
 // of stacking on the first-declared one.
-func (p *ModelPool) leastLoaded() int {
+func (p *ModelPool) leastLoaded(ctx context.Context) int {
 	min := p.load(0)
 	for i := 1; i < len(p.members); i++ {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		if load := p.load(i); load < min {
 			min = load
 		}
 	}
 	ties := make([]int, 0, len(p.members))
 	for i := range p.members {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		if p.load(i) == min {
 			ties = append(ties, i)
 		}
@@ -137,10 +161,15 @@ func (p *ModelPool) leastLoaded() int {
 // no sibling (a single-member pool declaring overflow) there is nowhere
 // to overflow to, so the excluded member itself is returned and the
 // pinned member's own provider semantics apply.
-func (p *ModelPool) overflowTarget(excluded int) int {
+func (p *ModelPool) overflowTarget(ctx context.Context, excluded int) int {
 	minIdx := excluded
 	minLoad := 0
 	for i := range p.members {
+		select {
+		case <-ctx.Done():
+			return excluded
+		default:
+		}
 		if i == excluded {
 			continue
 		}

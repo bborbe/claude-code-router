@@ -226,7 +226,7 @@ func newModelRouter(
 		//nolint:nestif // single pool-resolve branch with its own rewrite-failure path
 		if modelPools != nil {
 			if pool, ok := modelPools[model]; ok {
-				member := pool.Resolve(SessionIDFromContext(r.Context()))
+				member := pool.Resolve(r.Context(), SessionIDFromContext(r.Context()))
 				rewritten, rerr := rewriteModelField(r.Context(), body, member.Model)
 				if rerr != nil {
 					glog.Errorf("[pool] rewrite failed for %q -> %q: %v", model, member.Model, rerr)

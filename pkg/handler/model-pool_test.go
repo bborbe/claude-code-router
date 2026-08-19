@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -146,7 +147,9 @@ var _ = Describe("ModelPool resolution", func() {
 			{Provider: "deepseek-pool", Model: "deepseek-v4-flash", Weight: 1, Handler: recA},
 			{Provider: "minimax-pool", Model: "MiniMax-2.7", Weight: 1, Handler: recB},
 		}
-		pools := map[string]*handler.ModelPool{"coding": handler.NewModelPool(members)}
+		pools := map[string]*handler.ModelPool{
+			"coding": handler.NewModelPool(context.Background(), members),
+		}
 		mux := buildPoolMux(pools)
 		_ = flag.Set("logtostderr", "true")
 		_ = flag.Set("v", "2")
@@ -196,10 +199,14 @@ var _ = Describe("ModelPool resolution", func() {
 			// the same member — proving the selection is recomputable from the id,
 			// with no in-memory session→member map.
 			mux1 := buildPoolMux(
-				map[string]*handler.ModelPool{"coding": handler.NewModelPool(members)},
+				map[string]*handler.ModelPool{
+					"coding": handler.NewModelPool(context.Background(), members),
+				},
 			)
 			mux2 := buildPoolMux(
-				map[string]*handler.ModelPool{"coding": handler.NewModelPool(members)},
+				map[string]*handler.ModelPool{
+					"coding": handler.NewModelPool(context.Background(), members),
+				},
 			)
 
 			id := sessionPinnedTo(members, 0)
@@ -223,7 +230,7 @@ var _ = Describe("ModelPool resolution", func() {
 			a := &countingHandler{}
 			b := &countingHandler{}
 			pools := map[string]*handler.ModelPool{
-				"coding": handler.NewModelPool([]handler.ModelPoolMember{
+				"coding": handler.NewModelPool(context.Background(), []handler.ModelPoolMember{
 					{Provider: "deepseek-pool", Model: "deepseek-v4-flash", Weight: 2, Handler: a},
 					{Provider: "minimax-pool", Model: "MiniMax-2.7", Weight: 1, Handler: b},
 				}),
@@ -246,7 +253,7 @@ var _ = Describe("ModelPool resolution", func() {
 		a := &countingHandler{}
 		b := &countingHandler{}
 		pools := map[string]*handler.ModelPool{
-			"coding": handler.NewModelPool([]handler.ModelPoolMember{
+			"coding": handler.NewModelPool(context.Background(), []handler.ModelPoolMember{
 				{
 					Provider: "deepseek-pool",
 					Model:    "deepseek-v4-flash",
@@ -273,7 +280,7 @@ var _ = Describe("ModelPool resolution", func() {
 		a := &countingHandler{}
 		b := &countingHandler{}
 		pools := map[string]*handler.ModelPool{
-			"coding": handler.NewModelPool([]handler.ModelPoolMember{
+			"coding": handler.NewModelPool(context.Background(), []handler.ModelPoolMember{
 				{
 					Provider: "deepseek-pool",
 					Model:    "deepseek-v4-flash",
@@ -300,7 +307,7 @@ var _ = Describe("ModelPool resolution", func() {
 		a := &countingHandler{}
 		b := &countingHandler{}
 		pools := map[string]*handler.ModelPool{
-			"coding": handler.NewModelPool([]handler.ModelPoolMember{
+			"coding": handler.NewModelPool(context.Background(), []handler.ModelPoolMember{
 				{
 					Provider: "deepseek-pool",
 					Model:    "deepseek-v4-flash",
@@ -353,7 +360,9 @@ var _ = Describe("ModelPool resolution", func() {
 				},
 				{Provider: "minimax-pool", Model: "MiniMax-2.7", Weight: 1, Handler: recB},
 			}
-			pools := map[string]*handler.ModelPool{"coding": handler.NewModelPool(members)}
+			pools := map[string]*handler.ModelPool{
+				"coding": handler.NewModelPool(context.Background(), members),
+			}
 			mux := buildPoolMux(pools)
 			_ = flag.Set("logtostderr", "true")
 			_ = flag.Set("v", "2")
@@ -382,7 +391,9 @@ var _ = Describe("ModelPool resolution", func() {
 			},
 			{Provider: "minimax-pool", Model: "MiniMax-2.7", Weight: 1, Handler: recB},
 		}
-		pools := map[string]*handler.ModelPool{"coding": handler.NewModelPool(members)}
+		pools := map[string]*handler.ModelPool{
+			"coding": handler.NewModelPool(context.Background(), members),
+		}
 		mux := buildPoolMux(pools)
 		idA := sessionPinnedTo(members, 0)
 		mux.ServeHTTP(rec, postWithSession(idA, `{"model":"coding"}`))
@@ -405,7 +416,9 @@ var _ = Describe("ModelPool resolution", func() {
 					Handler:   recA,
 				},
 			}
-			pools := map[string]*handler.ModelPool{"coding": handler.NewModelPool(members)}
+			pools := map[string]*handler.ModelPool{
+				"coding": handler.NewModelPool(context.Background(), members),
+			}
 			mux := buildPoolMux(pools)
 			idA := sessionPinnedTo(members, 0)
 			mux.ServeHTTP(rec, postWithSession(idA, `{"model":"coding"}`))
@@ -417,7 +430,7 @@ var _ = Describe("ModelPool resolution", func() {
 		// The pool table has no "coding" pool, so a request for a model that
 		// glob-routes (claude-opus-4-7) is served exactly as today.
 		pools := map[string]*handler.ModelPool{
-			"other-pool": handler.NewModelPool([]handler.ModelPoolMember{
+			"other-pool": handler.NewModelPool(context.Background(), []handler.ModelPoolMember{
 				{
 					Provider: "deepseek-pool",
 					Model:    "deepseek-v4-flash",

@@ -64,7 +64,7 @@ type Config struct {
 	// are equivalent and all mean: no key enforcement and no key routing —
 	// the /v1/* path behaves exactly as it does today. Keys are literal
 	// strings, like provider token: fields.
-	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty" display:"length"`
 	// ProviderOrder records the provider keys in YAML declaration order,
 	// captured during unmarshal. Go maps cannot preserve iteration order, but
 	// the router's "walk providers in declaration order, first glob match
@@ -134,7 +134,7 @@ type Provider struct {
 	// Token, if set, replaces the client's Authorization header with
 	// "Bearer <Token>". If empty, the client's Authorization is
 	// forwarded verbatim — used for the subscription-OAuth case.
-	Token string `yaml:"token,omitempty"`
+	Token string `yaml:"token,omitempty"                    display:"length"`
 	// Models is the list of glob patterns (filepath.Match syntax) the
 	// router uses to match request body's `model` field. Examples:
 	// "claude-opus-*", "MiniMax-*", "qwen*".
@@ -163,7 +163,7 @@ type Provider struct {
 	// A key must NOT be claimed by more than one provider (validation
 	// error, see Config.Validate). Absent, null, and empty all mean: this
 	// provider claims no keys, so it is only reachable via glob routing.
-	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"           display:"length"`
 	// MaxConcurrentRequests, when > 0, caps how many /v1/* requests this
 	// provider forwards upstream at the same time. Requests beyond the cap
 	// queue for up to MaxConcurrentWaitSeconds; a request still waiting
@@ -243,7 +243,7 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 //nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
 func (c *Config) Validate(ctx context.Context) error {
 	if err := c.normalizeUpstreams(ctx); err != nil {
-		return err
+		return errors.Wrapf(ctx, err, "normalize upstreams")
 	}
 	if c.Auth != nil {
 		return errors.New(

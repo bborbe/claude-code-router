@@ -131,12 +131,17 @@ func streamingServerTimeouts(o *libhttp.ServerOptions) {
 // order when two providers share a model glob — the first-declared provider
 // owns the keyless traffic, a later one is reached only by an allowedApiKeys
 // pin (spec 010).
-func providerKeys(cfg *pkg.Config) []string {
+func providerKeys(ctx context.Context, cfg *pkg.Config) []string {
 	if len(cfg.ProviderOrder) > 0 {
 		return cfg.ProviderOrder
 	}
 	keys := make([]string, 0, len(cfg.Providers))
 	for k := range cfg.Providers {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -182,7 +187,7 @@ func CreateRouterFromConfig(
 	upInFlight := make(map[string][]func() int, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
-	for _, name := range providerKeys(cfg) {
+	for _, name := range providerKeys(ctx, cfg) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -242,7 +247,10 @@ func CreateRouterFromConfig(
 		}
 		upCaps[name] = caps
 		upInFlight[name] = inflights
-		providerHandler := handler.NewUpstreamPoolHandler(members)
+		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
+		if providerHandler == nil {
+			return nil, ctx.Err()
+		}
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			select {
@@ -281,58 +289,9 @@ func CreateRouterFromConfig(
 	// guarantees the provider exists; the lookup failure is a defensive
 	// safety net for direct CreateRouterFromConfig callers that bypass
 	// Load.
-	modelPools := make(map[string]*handler.ModelPool, len(cfg.ModelPools))
-	for name, cfgMembers := range cfg.ModelPools {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-		members := make([]handler.ModelPoolMember, 0, len(cfgMembers))
-		for _, m := range cfgMembers {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-			providerHandler, ok := providerHandlers[m.Provider]
-			if !ok {
-				return nil, errors.New(ctx, fmt.Sprintf(
-					"model pool %q: provider %q has no handler",
-					name, m.Provider,
-				))
-			}
-			caps := upCaps[m.Provider]
-			inflights := upInFlight[m.Provider]
-			members = append(members, handler.ModelPoolMember{
-				Provider: m.Provider,
-				Model:    m.Model,
-				Weight:   m.Weight,
-				Overflow: m.Overflow,
-				Handler:  providerHandler,
-				InFlight: func() int {
-					total := 0
-					for _, fn := range inflights {
-						if fn != nil {
-							total += fn()
-						}
-					}
-					return total
-				},
-				Saturated: func() bool {
-					if len(caps) == 0 {
-						return false
-					}
-					for i, cap := range caps {
-						if cap <= 0 || inflights[i] == nil || inflights[i]() < cap {
-							return false
-						}
-					}
-					return true
-				},
-			})
-		}
-		modelPools[name] = handler.NewModelPool(members)
+	modelPools, err := buildModelPools(ctx, cfg.ModelPools, providerHandlers, upCaps, upInFlight)
+	if err != nil {
+		return nil, err
 	}
 
 	metrics := handler.NewMetrics(cfg.Aliases)
@@ -357,6 +316,113 @@ func CreateRouterFromConfig(
 	authKeys := cfg.AllowedApiKeySet()
 	mux := buildMux(modelRouter, cfg.Trace, authKeys)
 	return mux, nil
+}
+
+// buildModelPools builds the runtime model-pool table from config: for each
+// pool name it resolves every member's provider handler (defensive —
+// Config.Validate guarantees existence) and wires the InFlight/Saturated
+// closures from the provider's per-upstream caps and in-flight counters, so
+// overflow and least-loaded selection read real production load. Extracted
+// from CreateRouterFromConfig to keep that function's complexity under the
+// maintidx gate.
+func buildModelPools(
+	ctx context.Context,
+	cfgModelPools map[string][]pkg.ModelPoolMember,
+	providerHandlers map[string]http.Handler,
+	upCaps map[string][]int,
+	upInFlight map[string][]func() int,
+) (map[string]*handler.ModelPool, error) {
+	modelPools := make(map[string]*handler.ModelPool, len(cfgModelPools))
+	for name, cfgMembers := range cfgModelPools {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		members := make([]handler.ModelPoolMember, 0, len(cfgMembers))
+		for _, m := range cfgMembers {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			member, err := buildPoolMember(ctx, name, m, providerHandlers, upCaps, upInFlight)
+			if err != nil {
+				return nil, err
+			}
+			members = append(members, member)
+		}
+		pool := handler.NewModelPool(ctx, members)
+		if pool == nil {
+			return nil, ctx.Err()
+		}
+		modelPools[name] = pool
+	}
+	return modelPools, nil
+}
+
+// buildPoolMember resolves one configured pool member to its runtime form:
+// the provider's request handler plus the InFlight/Saturated closures that
+// read the provider's per-upstream caps and in-flight counters, so overflow
+// and least-loaded selection see real production load. The provider lookup
+// is defensive — Config.Validate guarantees it exists.
+func buildPoolMember(
+	ctx context.Context,
+	poolName string,
+	m pkg.ModelPoolMember,
+	providerHandlers map[string]http.Handler,
+	upCaps map[string][]int,
+	upInFlight map[string][]func() int,
+) (handler.ModelPoolMember, error) {
+	providerHandler, ok := providerHandlers[m.Provider]
+	if !ok {
+		return handler.ModelPoolMember{}, errors.New(ctx, fmt.Sprintf(
+			"model pool %q: provider %q has no handler",
+			poolName, m.Provider,
+		))
+	}
+	caps := upCaps[m.Provider]
+	inflights := upInFlight[m.Provider]
+	return handler.ModelPoolMember{
+		Provider: m.Provider,
+		Model:    m.Model,
+		Weight:   m.Weight,
+		Overflow: m.Overflow,
+		Handler:  providerHandler,
+		InFlight: func() int {
+			return sumInFlight(inflights)
+		},
+		Saturated: func() bool {
+			return providerSaturated(caps, inflights)
+		},
+	}, nil
+}
+
+// sumInFlight totals a provider's per-upstream in-flight counters, treating
+// nil (an uncapped upstream) as 0.
+func sumInFlight(inflights []func() int) int {
+	total := 0
+	for _, fn := range inflights {
+		if fn != nil {
+			total += fn()
+		}
+	}
+	return total
+}
+
+// providerSaturated reports whether a provider is at capacity: every capped
+// upstream is at its cap, and a single uncapped upstream makes it never
+// saturated.
+func providerSaturated(caps []int, inflights []func() int) bool {
+	if len(caps) == 0 {
+		return false
+	}
+	for i, cap := range caps {
+		if cap <= 0 || inflights[i] == nil || inflights[i]() < cap {
+			return false
+		}
+	}
+	return true
 }
 
 // buildMux wires the operator-local admin handlers and the model router

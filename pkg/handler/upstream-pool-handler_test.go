@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -51,7 +52,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 			{Upstream: "https://a", Handler: a, Weight: 1},
 			{Upstream: "https://b", Handler: b, Weight: 1},
 		}
-		pool = handler.NewUpstreamPoolHandler(balanced)
+		pool = handler.NewUpstreamPoolHandler(context.Background(), balanced)
 	})
 
 	// pinnedRequest builds a request with sessionID injected into its
@@ -75,8 +76,8 @@ var _ = Describe("UpstreamPoolHandler", func() {
 			// A second, independent NewUpstreamPoolHandler over identical
 			// members must pick the same member — proving the selection is
 			// recomputable from the id, with no in-memory session→member map.
-			pool := handler.NewUpstreamPoolHandler(members)
-			pool2 := handler.NewUpstreamPoolHandler(members)
+			pool := handler.NewUpstreamPoolHandler(context.Background(), members)
+			pool2 := handler.NewUpstreamPoolHandler(context.Background(), members)
 
 			serve := func(p http.Handler) string {
 				rec := httptest.NewRecorder()
@@ -102,7 +103,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 				{Upstream: "https://a", Handler: labelA, Weight: 1},
 				{Upstream: "https://b", Handler: labelB, Weight: 1},
 			}
-			pool := handler.NewUpstreamPoolHandler(members)
+			pool := handler.NewUpstreamPoolHandler(context.Background(), members)
 
 			serve := func(sessionID string) string {
 				rec := httptest.NewRecorder()
@@ -142,7 +143,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 				{Upstream: "https://a", Handler: a, Weight: 2},
 				{Upstream: "https://b", Handler: b, Weight: 1},
 			}
-			pool = handler.NewUpstreamPoolHandler(weighted)
+			pool = handler.NewUpstreamPoolHandler(context.Background(), weighted)
 
 			for i := 0; i < 100; i++ {
 				rec := httptest.NewRecorder()
@@ -159,7 +160,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 	It(
 		"AC 3: a keyless request goes to the least-loaded member, never the first-declared one",
 		func() {
-			pool = handler.NewUpstreamPoolHandler([]handler.UpstreamMember{
+			pool = handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 				{Upstream: "https://a", Handler: a, Weight: 1, InFlight: func() int { return 1 }},
 				{Upstream: "https://b", Handler: b, Weight: 1, InFlight: func() int { return 0 }},
 			})
@@ -171,7 +172,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 	)
 
 	It("AC 3: a member with nil InFlight is treated as load 0 and never panics", func() {
-		pool = handler.NewUpstreamPoolHandler([]handler.UpstreamMember{
+		pool = handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 			{Upstream: "https://a", Handler: a, Weight: 1, InFlight: nil},
 			{Upstream: "https://b", Handler: b, Weight: 1, InFlight: func() int { return 5 }},
 		})
@@ -184,7 +185,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 	It(
 		"AC 3: idle keyless requests spread across members instead of stacking on the first",
 		func() {
-			pool = handler.NewUpstreamPoolHandler([]handler.UpstreamMember{
+			pool = handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 				{Upstream: "https://a", Handler: a, Weight: 1, InFlight: func() int { return 0 }},
 				{Upstream: "https://b", Handler: b, Weight: 1, InFlight: func() int { return 0 }},
 			})
@@ -208,7 +209,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 	It("[route] session= log line names the chosen member for pinned and keyless requests", func() {
 		// sess-0 pins to member a under FNV-1a 64 mod 2; member a is loaded,
 		// so a keyless request deterministically goes to the idle member b.
-		pool = handler.NewUpstreamPoolHandler([]handler.UpstreamMember{
+		pool = handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 			{Upstream: "https://a", Handler: a, Weight: 1, InFlight: func() int { return 1 }},
 			{Upstream: "https://b", Handler: b, Weight: 1, InFlight: func() int { return 0 }},
 		})
@@ -230,7 +231,7 @@ var _ = Describe("UpstreamPoolHandler", func() {
 
 	It("serves both pinned and keyless requests through a single-member pool", func() {
 		only := &countingHandler{}
-		pool = handler.NewUpstreamPoolHandler([]handler.UpstreamMember{
+		pool = handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 			{Upstream: "https://only", Handler: only, Weight: 1},
 		})
 		rec := httptest.NewRecorder()
