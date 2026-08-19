@@ -34,6 +34,12 @@ providers:
     # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
     # maxConcurrentRequests: 8   # optional; cap concurrent /v1/* requests to THIS provider (see ## Concurrency limit). Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # upstreams:                  # optional; alternative to `upstream:` — a pool of servers. Each entry carries upstream/token/weight/maxConcurrentRequests/maxConcurrentWaitSeconds (see ## Upstream pools). Mutually exclusive with `upstream:`.
+    #   - upstream: <URL>
+    #     token: <string>         # optional; per-member token (defaults to the provider token semantics: absent = pass client's Authorization through)
+    #     weight: 1               # optional; default 1. Relative share of pinned sessions this member receives.
+    #     maxConcurrentRequests: 8   # optional; per-member cap. Absent or 0 or negative = unlimited.
+    #     maxConcurrentWaitSeconds: 30 # optional; per-member queue wait before HTTP 429 (default 30)
 ```
 
 ## Routing
@@ -70,7 +76,7 @@ Then in any Claude Code session:
 - **Single-hop.** If `aliases: {a: b, b: c}` and the request uses `model: a`, the upstream receives `model: b` — NOT `c`. The router resolves once and forwards.
 - **Case-sensitive.** `aliases["Qwen"]` and `aliases["qwen"]` are distinct entries (same byte-exact match as provider glob keys).
 - **Optional.** Configs without an `aliases:` block route exactly as before. Backward-compatible.
-- **Log line.** On a hit, the router logs `[alias] qwen -> qwen3.6:35b-a3b-coding-nvfp4` at glog `V(1)` — visible in `/tmp/claude-code-router.log` when the router runs with `-v=1` or higher.
+- **Log line.** On a hit, the router logs `[alias] qwen -> qwen3.6:35b-a3b-coding-nvfp4` at glog `V(2)` — visible in `/tmp/claude-code-router.log` when the router runs with `-v=2` or higher (raise the level with `curl http://127.0.0.1:8788/setloglevel/2`).
 
 ### Validation
 
@@ -138,6 +144,50 @@ providers:
 - **SIGHUP applies changes.** Both fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider limiters, so a changed cap (or its removal) is live without a restart.
 - **Observability is unchanged.** No new metrics. A router-issued 429 appears in the existing `[req] ... status=429` log line and the existing `4xx_rate_limited` class of `ccrouter_requests_total` — the same class as an upstream's own 429.
 - **Suggested use.** `vllm.seibert.tools` enforces its own per-user ceiling of 8 concurrent requests. Set `maxConcurrentRequests: 8` on both seibert vllm providers (`seibert-vllm-default` and `seibert-dark-factory`) so the router queues instead of the upstream rejecting.
+
+## Upstream pools
+
+A provider with more than one server replaces the single `upstream:` field with an `upstreams:` list — a pool of servers the router spreads sessions and keyless traffic across. Each entry carries its own URL, optional token, weight, and per-server concurrency cap:
+
+```yaml
+providers:
+  <provider-key>:
+    upstreams:
+      - upstream: http://vllm-1:8000
+        token: "<key>"
+        weight: 2
+        maxConcurrentRequests: 8
+        maxConcurrentWaitSeconds: 30
+      - upstream: http://vllm-2:8000
+        weight: 1
+```
+
+- **Schema recap.** `upstreams:` is the alternative to `upstream:` for a provider with more than one server; the two are mutually exclusive, and a provider setting both fails to load. The legacy single `upstream:` / `token:` / provider-level `maxConcurrentRequests` / `maxConcurrentWaitSeconds` form loads unchanged as a one-entry pool with weight 1 — the provider-level caps become the single entry's caps, so nothing an operator has today needs editing.
+- **Per-entry fields.** `upstream` is required on every entry. `token` is per-member: absent means the client's `Authorization` header passes through, exactly like the provider-level token semantics. `weight` defaults to 1; a negative weight is rejected at config load, and `weight: 0` or an absent key resolves to 1. `maxConcurrentRequests` / `maxConcurrentWaitSeconds` are the per-member cap with the same spec-011 semantics as the provider-level fields (see ## Concurrency limit).
+- **Session pinning.** A client that sets an `x-session-id` header (e.g. `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<id>"}'` in Claude Code) is pinned to the same pool member on every request via a weighted ring hash of the id — deterministic and stateless (FNV-1a over the id, no session→member map), so the session's upstream prompt cache stays warm on that one server, including across restarts. The header is stripped before forwarding, so upstreams never see it, and it is used only for pinning, never for auth. An absent header means a keyless request.
+- **Keyless least-loaded.** A request without `x-session-id` is sent to the least-loaded member — the fewest in-flight requests by that member's concurrency semaphore — with round-robin tie-breaking among equally-loaded members, so keyless floods (e.g. dark-factory containers) spread across the pool instead of stacking on the first-declared server.
+- **Per-member caps are independent.** Each member enforces its own `maxConcurrentRequests` — two members each allowing 8 do not share one global cap of 8. A request that queues past `maxConcurrentWaitSeconds` is answered HTTP 429 with the same Anthropic-shaped `rate_limit_error` body as the provider-level cap (see ## Concurrency limit).
+- **Member down.** A member that fails answers with the existing sanitized 502 (unchanged behavior) — there is no probe-and-rotate. The operator removes or repairs the member and SIGHUPs, and the next `[route]` log line reflects the pool without it.
+- **Client disconnect while queued.** No slot is held — a slot is acquired only at dispatch — so a client that disconnects while queued never consumes concurrency, and the 429 write to the dead connection fails harmlessly (spec-011 semantics).
+- **Observability.** Each dispatch logs `[route] session=<id> upstream=<url>` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines — the operator evidence that a session is pinned and that keyless load is spreading. The `[req]` line is unchanged.
+- **SIGHUP applies changes.** A change to `upstreams:` (add/remove a member, change a weight or cap) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config.
+- **Suggested use.** Five DeepSeek vLLM instances under vllm's per-user ceiling of 8 concurrent requests: give each member `maxConcurrentRequests: 8` so the router queues instead of the upstream rejecting, and pin every Claude Code session to its own member so each session's prompt cache stays warm on one server:
+
+```yaml
+providers:
+  seibert-vllm-default:
+    upstreams:
+      - upstream: http://vllm-1:8000
+        weight: 1
+        maxConcurrentRequests: 8
+      - upstream: http://vllm-2:8000
+        weight: 1
+        maxConcurrentRequests: 8
+    models:
+      - "deepseek-v4-*"
+```
+
+With two Claude Code sessions (each set `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<unique id>"}'`), the `[route] session=<id> upstream=<url>` lines name a distinct member per session, and every request within one session names the same member — two sessions, two servers, warm caches on both.
 
 ## Auth
 

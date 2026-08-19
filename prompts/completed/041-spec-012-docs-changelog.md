@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [012-session-pinning-pools]
+summary: 'Documented the upstreams: pool schema, session pinning, keyless least-loaded dispatch, and per-upstream caps in docs/config.md (schema block + new ## Upstream pools section), added a commented two-member upstreams example to docs/config.example.yaml, fixed the stale [alias] V(1)->V(2) verbosity doc, and created ## Unreleased in CHANGELOG.md with a feat entry'
+execution_id: claude-code-router-session-pinning-exec-041-spec-012-docs-changelog
+dark-factory-version: dev
 created: "2026-08-19T17:13:00Z"
 queued: "2026-08-19T15:50:36Z"
+started: "2026-08-19T16:12:54Z"
+completed: "2026-08-19T16:15:39Z"
 ---
 
 # Docs + changelog: `upstreams:` pools, session pinning, per-upstream caps

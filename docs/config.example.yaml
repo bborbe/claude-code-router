@@ -52,6 +52,14 @@ providers:
     # maxConcurrentRequests: 8 on each seibert vllm provider that points at it.
     # maxConcurrentRequests: 8     # optional; cap concurrent /v1/* requests to this provider. Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # upstreams:                   # optional; alternative to `upstream:` — a pool of servers (see docs/config.md ## Upstream pools).
+    #   - upstream: http://localhost:11434
+    #     token: "ollama"
+    #     weight: 1
+    #     maxConcurrentRequests: 8
+    #     maxConcurrentWaitSeconds: 30
+    #   - upstream: http://localhost:11435
+    #     weight: 1
 
 # Short names that map to full model identifiers.
 # Operator-facing only — the upstream always sees the resolved full name.
