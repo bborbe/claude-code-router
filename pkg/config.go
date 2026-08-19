@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/bborbe/errors"
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	yaml "gopkg.in/yaml.v3"
 )
@@ -183,6 +184,28 @@ type Provider struct {
 	// synthesized into a one-entry pool by normalizeUpstreams, so after
 	// Load every provider has a non-empty Upstreams (spec 012).
 	Upstreams []Upstream `yaml:"upstreams,omitempty"`
+	// Window is the legacy single-upstream form's eligibility window
+	// (spec 014): when set, normalizeUpstreams copies it onto the
+	// synthesized single member (a one-member pool is still a pool).
+	// Providers that declare an upstreams: list carry windows per entry —
+	// setting a provider-level window AND upstreams: is rejected.
+	Window *Window `yaml:"window,omitempty"`
+}
+
+// Window is an optional per-upstream time-of-day eligibility window
+// (spec 014). A member is eligible for a dispatch only while "now" (the
+// router's injected clock, evaluated in the value's attached IANA
+// location) is inside [From, Until). From > Until wraps overnight (e.g.
+// 22:00 -> 06:00 covers 02:00 and excludes 14:00). A nil Window on an
+// Upstream means always eligible — today's behavior. Each value carries
+// its IANA location inline in the "HH:MM <location>" form (e.g. "18:00
+// Europe/Berlin"); libtime.ParseTimeOfDay handles it — there is no
+// separate timezone field and no default-location decision. Malformed
+// times and unknown locations fail at yaml parse; a Window missing
+// either boundary fails validation.
+type Window struct {
+	From  libtime.TimeOfDay `yaml:"from"`
+	Until libtime.TimeOfDay `yaml:"until"`
 }
 
 // Upstream is one server in a provider's pool. When a provider
@@ -197,10 +220,15 @@ type Provider struct {
 // caps are the provider-level values (spec 012).
 type Upstream struct {
 	Upstream                 string `yaml:"upstream"`
-	Token                    string `yaml:"token,omitempty" display:"length"`
+	Token                    string `yaml:"token,omitempty"                    display:"length"`
 	Weight                   int    `yaml:"weight,omitempty"`
 	MaxConcurrentRequests    int    `yaml:"maxConcurrentRequests,omitempty"`
 	MaxConcurrentWaitSeconds int    `yaml:"maxConcurrentWaitSeconds,omitempty"`
+	// Window, when set, restricts when this member is eligible: a member
+	// whose window does not contain "now" is excluded from session
+	// pinning and least-loaded selection (spec 014). Absent = always
+	// eligible, today's behavior.
+	Window *Window `yaml:"window,omitempty"`
 }
 
 // ModelPoolMember is one candidate of a model pool: the provider to
@@ -240,7 +268,7 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 
 // Validate checks that the parsed config is internally consistent.
 //
-//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
+//nolint:gocognit,funlen // flat per-loop validation with ctx cancellation checks; matches model-router.go precedent
 func (c *Config) Validate(ctx context.Context) error {
 	if err := c.normalizeUpstreams(ctx); err != nil {
 		return errors.Wrapf(ctx, err, "normalize upstreams")
@@ -283,6 +311,24 @@ func (c *Config) Validate(ctx context.Context) error {
 					"provider %q: upstream weight must be > 0 (got %d)",
 					name, up.Weight,
 				))
+			}
+			if up.Window != nil {
+				// The zero value test works because libtime.TimeOfDay is a
+				// comparable struct whose zero value has Location == nil,
+				// which only an ABSENT yaml key produces; a parsed "00:00
+				// UTC" carries Location = UTC (non-nil) and passes.
+				if up.Window.From == (libtime.TimeOfDay{}) {
+					return errors.New(
+						ctx,
+						fmt.Sprintf("provider %q: window.from is required", name),
+					)
+				}
+				if up.Window.Until == (libtime.TimeOfDay{}) {
+					return errors.New(
+						ctx,
+						fmt.Sprintf("provider %q: window.until is required", name),
+					)
+				}
 			}
 		}
 		for _, pattern := range prov.Models {
@@ -329,9 +375,11 @@ func (c *Config) Validate(ctx context.Context) error {
 //
 //   - A provider that sets both `upstream` and `upstreams` is rejected —
 //     the two forms are mutually exclusive (spec 012).
+//   - A provider-level window combined with an `upstreams:` list is rejected
+//     (spec 014) — windows live on pool members, not on the provider.
 //   - A provider with no `upstreams` is synthesized into a one-entry pool
-//     carrying its provider-level token and caps with Weight 1, written
-//     back into c.Providers.
+//     carrying its provider-level token, caps, and window with Weight 1,
+//     written back into c.Providers.
 //   - Every explicitly-declared entry with Weight 0 gets Weight 1 (with a
 //     plain int field yaml.v3 cannot distinguish `weight: 0` from an absent
 //     key, so 0 is the default, not a misconfiguration).
@@ -352,6 +400,12 @@ func (c *Config) normalizeUpstreams(ctx context.Context) error {
 				name,
 			))
 		}
+		if prov.Window != nil && len(prov.Upstreams) > 0 {
+			return errors.New(ctx, fmt.Sprintf(
+				"provider %q: window applies only to the legacy upstream form; set window on each upstreams entry instead",
+				name,
+			))
+		}
 		if len(prov.Upstreams) == 0 {
 			prov.Upstreams = []Upstream{{
 				Upstream:                 prov.Upstream,
@@ -359,6 +413,7 @@ func (c *Config) normalizeUpstreams(ctx context.Context) error {
 				Weight:                   1,
 				MaxConcurrentRequests:    prov.MaxConcurrentRequests,
 				MaxConcurrentWaitSeconds: prov.MaxConcurrentWaitSeconds,
+				Window:                   prov.Window,
 			}}
 		}
 		for i := range prov.Upstreams {
@@ -378,12 +433,12 @@ func (c *Config) normalizeUpstreams(ctx context.Context) error {
 
 // UpstreamList returns the pool of upstreams this provider routes to:
 // the configured Upstreams when present, else the legacy single
-// upstream synthesized as a one-entry pool with Weight 1 and the
-// provider-level caps. Config.Validate already normalizes Load-ed
-// configs, so this is always the configured list there; the fallback
-// keeps programmatically-built configs (tests and direct
-// CreateRouterFromConfig callers that bypass Load) working with the
-// legacy single-upstream form.
+// upstream synthesized as a one-entry pool with Weight 1, the
+// provider-level caps, and the provider-level window. Config.Validate
+// already normalizes Load-ed configs, so this is always the configured
+// list there; the fallback keeps programmatically-built configs (tests
+// and direct CreateRouterFromConfig callers that bypass Load) working
+// with the legacy single-upstream form.
 func (p Provider) UpstreamList() []Upstream {
 	if len(p.Upstreams) > 0 {
 		return p.Upstreams
@@ -394,6 +449,7 @@ func (p Provider) UpstreamList() []Upstream {
 		Weight:                   1,
 		MaxConcurrentRequests:    p.MaxConcurrentRequests,
 		MaxConcurrentWaitSeconds: p.MaxConcurrentWaitSeconds,
+		Window:                   p.Window,
 	}}
 }
 

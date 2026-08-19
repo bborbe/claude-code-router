@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.39.0
+
+- feat: add the optional `window:` eligibility block to the config contract (`pkg/config.go`, spec 014) — `Window{From, Until}` pairs of `libtime.TimeOfDay` values parsed from the `"HH:MM <location>"` form (e.g. `"18:00 Europe/Berlin"`), carried per `Upstream` member and on the legacy single-`upstream:` provider form (a provider-level window is copied onto the synthesized one-member pool by `normalizeUpstreams`, and onto the `Provider.UpstreamList()` fallback for programmatic configs); a provider-level window combined with an `upstreams:` list is rejected at load, malformed times and unknown IANA locations fail at yaml parse, a `window:` missing either `from` or `until` fails validation, and an overnight wrap (`from: "22:00"` `until: "06:00"`) loads cleanly; configs without any `window:` load byte-for-byte as before. Config contract only — the eligibility filter ships separately.
+
 ## v0.38.1
 
 - fix: add `display:"length"` redaction tags to every secret config field (`Token`, both `AllowedApiKeys`, `AuthConfig.Key`, `Upstream.Token`) so bearer tokens and API keys are never printed in startup logs; thread context cancellation through the upstream-pool and model-pool selection loops (`pinSlot`, `leastLoaded`, `overflowTarget`, `providerKeys`, pool constructors) and wrap the bare `normalizeUpstreams` error; decompose the model-pool table build into `buildModelPools` / `buildPoolMember` / `sumInFlight` / `providerSaturated` so the factory stays under the maintidx/gocognit gates. These are the PR-review fixes landed after v0.38.0 was cut on the feature branch.

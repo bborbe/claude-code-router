@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1060,6 +1061,217 @@ providers:
 				Upstream: "https://a.example",
 				Weight:   2,
 			}}))
+		})
+	})
+
+	Context("window", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave Window nil, so every fixture goes through Load, not struct
+		// literals. Providers use https://a.example style URLs.
+		It("parses a window: on an upstreams entry", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			window := cfg.Providers["x"].Upstreams[0].Window
+			Expect(window).NotTo(BeNil())
+			Expect(window.From.Hour).To(Equal(8))
+			Expect(window.From.Minute).To(Equal(0))
+			Expect(window.From.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(window.Until.Hour).To(Equal(18))
+			Expect(window.Until.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(cfg.Providers["x"].Upstreams[1].Window).To(BeNil())
+		})
+
+		It("normalizes a legacy single upstream window onto the synthesized member", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+    window:
+      from: "18:00 Europe/Berlin"
+      until: "08:00 Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			upstreams := cfg.Providers["x"].Upstreams
+			Expect(upstreams).To(HaveLen(1))
+			Expect(upstreams[0].Weight).To(Equal(1))
+			Expect(upstreams[0].Window).NotTo(BeNil())
+			Expect(upstreams[0].Window.From.Hour).To(Equal(18))
+			Expect(upstreams[0].Window.From.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(upstreams[0].Window.Until.Hour).To(Equal(8))
+			Expect(upstreams[0].Window.Until.Location.String()).To(Equal("Europe/Berlin"))
+		})
+
+		It("loads a config without any window: unchanged — backward compat", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["x"].Upstreams).To(HaveLen(2))
+			for _, up := range cfg.Providers["x"].Upstreams {
+				Expect(up.Window).To(BeNil())
+			}
+		})
+
+		It("rejects a malformed time in a window at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "25:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("25:00"))
+		})
+
+		It("rejects an unknown IANA location in a window at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Mars/Olympus"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("Mars/Olympus"))
+		})
+
+		It("accepts an overnight window that wraps past midnight", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "22:00 Europe/Berlin"
+          until: "06:00 Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			window := cfg.Providers["x"].Upstreams[0].Window
+			Expect(window).NotTo(BeNil())
+			Expect(window.From.Hour).To(Equal(22))
+			Expect(window.Until.Hour).To(Equal(6))
+		})
+
+		It("rejects a window with only from — window.until is required", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "08:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("window.until is required"))
+		})
+
+		It("rejects a window with only until — window.from is required", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          until: "18:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("window.from is required"))
+		})
+
+		It("rejects a provider-level window combined with an upstreams list", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+      - upstream: https://b.example
+    window:
+      from: "08:00 Europe/Berlin"
+      until: "18:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`provider "x"`))
+			Expect(
+				err.Error(),
+			).To(ContainSubstring("window applies only to the legacy upstream form"))
+		})
+
+		It("carries the provider window in UpstreamList for programmatic configs", func() {
+			from, err := libtime.ParseTimeOfDay(context.Background(), "08:00 Europe/Berlin")
+			Expect(err).NotTo(HaveOccurred())
+			until, err := libtime.ParseTimeOfDay(context.Background(), "18:00 Europe/Berlin")
+			Expect(err).NotTo(HaveOccurred())
+			prov := pkgcfg.Provider{
+				Upstream: "https://a.example",
+				Window: &pkgcfg.Window{
+					From:  *from,
+					Until: *until,
+				},
+			}
+			list := prov.UpstreamList()
+			Expect(list).To(HaveLen(1))
+			Expect(list[0].Window).NotTo(BeNil())
+			Expect(list[0].Window.From.Hour).To(Equal(8))
+			Expect(list[0].Window.Until.Hour).To(Equal(18))
+		})
+
+		It("leaves UpstreamList window nil for a window-less programmatic provider", func() {
+			prov := pkgcfg.Provider{Upstream: "https://a.example"}
+			Expect(prov.UpstreamList()[0].Window).To(BeNil())
 		})
 	})
 })
