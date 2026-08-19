@@ -1,8 +1,12 @@
 ---
-status: approved
+status: completed
 spec: [013-model-pools]
+execution_id: claude-code-router-session-pinning-exec-043-spec-013-resolution-wiring
+dark-factory-version: dev
 created: "2026-08-19T18:05:00Z"
 queued: "2026-08-19T15:50:36Z"
+started: "2026-08-19T16:20:36Z"
+completed: "2026-08-19T16:38:49Z"
 ---
 
 # Resolution + rewrite: session-pinned pool pre-step + factory wiring
