@@ -124,7 +124,7 @@ type AuthConfig struct {
 	// Key is the legacy shared secret field. Kept solely so a legacy `auth:`
 	// block still parses and is rejected at load; a non-nil AuthConfig makes
 	// Config.Validate fail the config (fail-closed migration guard).
-	Key string `yaml:"key"`
+	Key string `yaml:"key" display:"length"`
 }
 
 // Provider describes one upstream LLM API.
