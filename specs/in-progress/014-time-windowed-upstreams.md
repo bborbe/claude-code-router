@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-08-19T20:08:31Z"
 generating: "2026-08-19T20:41:25Z"
 prompted: "2026-08-19T20:41:25Z"
+verifying: "2026-08-19T21:15:23Z"
 branch: dark-factory/time-windowed-upstreams
 ---
 
