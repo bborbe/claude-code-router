@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [014-time-windowed-upstreams]
+summary: 'Documented the per-upstream window: time-of-day eligibility block in docs/config.md (new ## Time-of-day windows section + schema comments), docs/config.example.yaml (commented examples), and CHANGELOG.md (## Unreleased feat entry)'
+execution_id: claude-code-router-time-window-exec-047-spec-014-docs-changelog
+dark-factory-version: dev
 created: "2026-08-19T20:27:00Z"
 queued: "2026-08-19T20:42:15Z"
+started: "2026-08-19T21:12:44Z"
+completed: "2026-08-19T21:15:20Z"
 ---
 
 # Docs + changelog: per-upstream `window:` time-of-day eligibility
