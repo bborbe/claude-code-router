@@ -169,6 +169,30 @@ type Provider struct {
 	// capped provider (MaxConcurrentRequests > 0); absent, 0, or negative
 	// resolves to the 30s default at wiring.
 	MaxConcurrentWaitSeconds int `yaml:"maxConcurrentWaitSeconds,omitempty"`
+	// Upstreams is the pool of servers this provider routes to. When
+	// present it wins over the legacy single Upstream field; validation
+	// rejects a provider that sets both. Absent, the legacy form is
+	// synthesized into a one-entry pool by normalizeUpstreams, so after
+	// Load every provider has a non-empty Upstreams (spec 012).
+	Upstreams []Upstream `yaml:"upstreams,omitempty"`
+}
+
+// Upstream is one server in a provider's pool. When a provider
+// declares an `upstreams:` list, every /v1/* request for that
+// provider is dispatched to exactly one member: a request carrying an
+// x-session-id header is pinned to the same member every time
+// (weighted ring hash of the session id), a request without one goes
+// to the least-loaded member, and each member independently enforces
+// its own MaxConcurrentRequests cap. Weight defaults to 1 when absent
+// or 0; a negative weight is rejected at validation. The legacy single
+// `upstream:` form is sugar for a one-entry pool with Weight 1 whose
+// caps are the provider-level values (spec 012).
+type Upstream struct {
+	Upstream                 string `yaml:"upstream"`
+	Token                    string `yaml:"token,omitempty"`
+	Weight                   int    `yaml:"weight,omitempty"`
+	MaxConcurrentRequests    int    `yaml:"maxConcurrentRequests,omitempty"`
+	MaxConcurrentWaitSeconds int    `yaml:"maxConcurrentWaitSeconds,omitempty"`
 }
 
 // Load reads, parses, and validates the config at path. Tilde-prefix
@@ -196,6 +220,9 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 //
 //nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
 func (c *Config) Validate(ctx context.Context) error {
+	if err := c.normalizeUpstreams(ctx); err != nil {
+		return err
+	}
 	if c.Auth != nil {
 		return errors.New(
 			ctx,
@@ -220,8 +247,21 @@ func (c *Config) Validate(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		if prov.Upstream == "" {
-			return errors.New(ctx, fmt.Sprintf("provider %q: upstream is required", name))
+		for _, up := range prov.Upstreams {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if up.Upstream == "" {
+				return errors.New(ctx, fmt.Sprintf("provider %q: upstream is required", name))
+			}
+			if up.Weight < 0 {
+				return errors.New(ctx, fmt.Sprintf(
+					"provider %q: upstream weight must be > 0 (got %d)",
+					name, up.Weight,
+				))
+			}
 		}
 		for _, pattern := range prov.Models {
 			select {
@@ -256,6 +296,80 @@ func (c *Config) Validate(ctx context.Context) error {
 		return errors.Wrapf(ctx, err, "validate allowedApiKeys")
 	}
 	return c.validateAliases(ctx)
+}
+
+// normalizeUpstreams reconciles the legacy single-upstream form with the
+// upstreams pool, so the per-provider validation loop only ever sees
+// Upstreams entries. Contract:
+//
+//   - A provider that sets both `upstream` and `upstreams` is rejected —
+//     the two forms are mutually exclusive (spec 012).
+//   - A provider with no `upstreams` is synthesized into a one-entry pool
+//     carrying its provider-level token and caps with Weight 1, written
+//     back into c.Providers.
+//   - Every explicitly-declared entry with Weight 0 gets Weight 1 (with a
+//     plain int field yaml.v3 cannot distinguish `weight: 0` from an absent
+//     key, so 0 is the default, not a misconfiguration).
+//
+// After this step every provider in c.Providers has a non-empty Upstreams.
+//
+//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
+func (c *Config) normalizeUpstreams(ctx context.Context) error {
+	for name, prov := range c.Providers {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if prov.Upstream != "" && len(prov.Upstreams) > 0 {
+			return errors.New(ctx, fmt.Sprintf(
+				"provider %q: specify either `upstream` or `upstreams`, not both",
+				name,
+			))
+		}
+		if len(prov.Upstreams) == 0 {
+			prov.Upstreams = []Upstream{{
+				Upstream:                 prov.Upstream,
+				Token:                    prov.Token,
+				Weight:                   1,
+				MaxConcurrentRequests:    prov.MaxConcurrentRequests,
+				MaxConcurrentWaitSeconds: prov.MaxConcurrentWaitSeconds,
+			}}
+		}
+		for i := range prov.Upstreams {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if prov.Upstreams[i].Weight == 0 {
+				prov.Upstreams[i].Weight = 1
+			}
+		}
+		c.Providers[name] = prov
+	}
+	return nil
+}
+
+// UpstreamList returns the pool of upstreams this provider routes to:
+// the configured Upstreams when present, else the legacy single
+// upstream synthesized as a one-entry pool with Weight 1 and the
+// provider-level caps. Config.Validate already normalizes Load-ed
+// configs, so this is always the configured list there; the fallback
+// keeps programmatically-built configs (tests and direct
+// CreateRouterFromConfig callers that bypass Load) working with the
+// legacy single-upstream form.
+func (p Provider) UpstreamList() []Upstream {
+	if len(p.Upstreams) > 0 {
+		return p.Upstreams
+	}
+	return []Upstream{{
+		Upstream:                 p.Upstream,
+		Token:                    p.Token,
+		Weight:                   1,
+		MaxConcurrentRequests:    p.MaxConcurrentRequests,
+		MaxConcurrentWaitSeconds: p.MaxConcurrentWaitSeconds,
+	}}
 }
 
 func (c *Config) validateAllowedApiKeyClaims(ctx context.Context) error {

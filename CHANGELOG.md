@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## v0.33.0
+
+- feat: add the `Provider.upstreams:` pool schema and `Upstream` type (`pkg/config.go`) — a provider can declare a list of servers, each with its own `upstream`, `token`, `weight`, and per-server `maxConcurrentRequests`/`maxConcurrentWaitSeconds`; the legacy single `upstream:` form loads unchanged as a one-entry pool with weight 1 whose caps are the provider-level values (`Config.Validate` normalizes via `normalizeUpstreams`, exposed as `Provider.UpstreamList()`). Declaring both `upstream:` and `upstreams:` is rejected at load, a negative `weight` is rejected, and `weight: 0` or an absent key resolves to the default 1. Config contract only — routing behavior is unchanged.
+
 ## v0.32.0
 
 - refactor: add `ctx.Done()` cancellation checks to the config/factory validation and wiring loops (`Validate`, `validateAliases`, `CreateRouterFromConfig`), and rename `RouterOption` to `RouterOptionFunc` per the function-type naming convention — clears recurring pr-review bot findings

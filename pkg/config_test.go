@@ -693,4 +693,180 @@ providers:
 			Expect(cfg.Providers["anthropic"].MaxConcurrentWaitSeconds).To(Equal(0))
 		})
 	})
+
+	Context("upstreams", func() {
+		It("loads a legacy single upstream with provider caps as a one-entry pool", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    maxConcurrentRequests: 8
+    maxConcurrentWaitSeconds: 30
+    models: ["foo-*"]
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			upstreams := cfg.Providers["x"].Upstreams
+			Expect(upstreams).To(HaveLen(1))
+			Expect(upstreams[0].Upstream).To(Equal("https://a.example"))
+			Expect(upstreams[0].Weight).To(Equal(1))
+			Expect(upstreams[0].MaxConcurrentRequests).To(Equal(8))
+			Expect(upstreams[0].MaxConcurrentWaitSeconds).To(Equal(30))
+		})
+
+		It(
+			"loads a legacy single upstream with no provider caps as an uncapped one-entry pool",
+			func() {
+				p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+`)
+				cfg, err := pkgcfg.Load(context.Background(), p)
+				Expect(err).NotTo(HaveOccurred())
+				upstreams := cfg.Providers["x"].Upstreams
+				Expect(upstreams).To(HaveLen(1))
+				Expect(upstreams[0].Upstream).To(Equal("https://a.example"))
+				Expect(upstreams[0].Weight).To(Equal(1))
+				Expect(upstreams[0].MaxConcurrentRequests).To(Equal(0))
+				Expect(upstreams[0].MaxConcurrentWaitSeconds).To(Equal(0))
+			},
+		)
+
+		It("parses a two-member upstreams list into the right fields", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        token: token-a
+        weight: 2
+        maxConcurrentRequests: 4
+        maxConcurrentWaitSeconds: 10
+      - upstream: https://b.example
+        token: token-b
+        weight: 3
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			upstreams := cfg.Providers["x"].Upstreams
+			Expect(upstreams).To(HaveLen(2))
+			Expect(cfg.Providers["x"].Upstream).To(BeEmpty())
+			Expect(upstreams[0].Upstream).To(Equal("https://a.example"))
+			Expect(upstreams[0].Token).To(Equal("token-a"))
+			Expect(upstreams[0].Weight).To(Equal(2))
+			Expect(upstreams[0].MaxConcurrentRequests).To(Equal(4))
+			Expect(upstreams[0].MaxConcurrentWaitSeconds).To(Equal(10))
+			Expect(upstreams[1].Upstream).To(Equal("https://b.example"))
+			Expect(upstreams[1].Token).To(Equal("token-b"))
+			Expect(upstreams[1].Weight).To(Equal(3))
+			Expect(upstreams[1].MaxConcurrentRequests).To(Equal(0))
+			Expect(upstreams[1].MaxConcurrentWaitSeconds).To(Equal(0))
+		})
+
+		It("defaults an entry weight of 0 or an absent weight to 1", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        weight: 0
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			upstreams := cfg.Providers["x"].Upstreams
+			Expect(upstreams).To(HaveLen(2))
+			Expect(upstreams[0].Weight).To(Equal(1))
+			Expect(upstreams[1].Weight).To(Equal(1))
+		})
+
+		It("rejects a negative upstream weight, naming the provider", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        weight: -1
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`provider "x"`))
+			Expect(err.Error()).To(ContainSubstring("weight"))
+			Expect(err.Error()).To(ContainSubstring("-1"))
+		})
+
+		It("rejects a provider declaring both upstream and upstreams", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://b.example
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`provider "x"`))
+			Expect(err.Error()).To(ContainSubstring("not both"))
+		})
+
+		It("still fails a provider with neither form with upstream is required", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`provider "x"`))
+			Expect(err.Error()).To(ContainSubstring("upstream is required"))
+		})
+
+		It(
+			"synthesizes the legacy single upstream in UpstreamList for programmatic configs",
+			func() {
+				prov := pkgcfg.Provider{
+					Upstream:              "https://a.example",
+					MaxConcurrentRequests: 8,
+				}
+				Expect(prov.UpstreamList()).To(Equal([]pkgcfg.Upstream{{
+					Upstream:              "https://a.example",
+					Weight:                1,
+					MaxConcurrentRequests: 8,
+				}}))
+			},
+		)
+
+		It("returns the configured Upstreams from UpstreamList when present", func() {
+			prov := pkgcfg.Provider{
+				Upstreams: []pkgcfg.Upstream{{
+					Upstream: "https://a.example",
+					Weight:   2,
+				}},
+			}
+			Expect(prov.UpstreamList()).To(Equal([]pkgcfg.Upstream{{
+				Upstream: "https://a.example",
+				Weight:   2,
+			}}))
+		})
+	})
 })
