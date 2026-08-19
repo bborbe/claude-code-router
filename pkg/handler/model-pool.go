@@ -30,14 +30,14 @@ type ModelPoolMember struct {
 	Saturated func() bool
 }
 
-// ModelPool is a runtime model pool: an ordered list of members and the
-// precomputed cumulative-weight ring used to pin a session id to one
-// member. The only mutable state is the round-robin tie-break counter
-// for idless dispatch; session pinning itself is stateless.
+// ModelPool is a runtime model pool: an ordered list of members. The
+// only mutable state is the round-robin tie-break counter for idless
+// dispatch; session pinning itself is stateless. A member whose provider
+// pool has no eligible upstream member right now (spec 014) is excluded
+// from pinning, least-loaded, and overflow selection — the ring and the
+// load scans are recomputed over the eligible subset per request.
 type ModelPool struct {
-	members     []ModelPoolMember
-	cumulative  []int
-	totalWeight int
+	members []ModelPoolMember
 	// rr is the idless round-robin tie-break counter. It is the only
 	// mutable state in the pool; pinning is stateless and recomputable
 	// from the session id.
@@ -52,22 +52,14 @@ type ModelPool struct {
 // exercised through the real type in handler tests — no mock seam is
 // needed, so no ModelPooler interface is introduced.
 func NewModelPool(ctx context.Context, members []ModelPoolMember) *ModelPool {
-	cumulative := make([]int, len(members))
-	total := 0
-	for i, m := range members {
+	for range members {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
 		}
-		total += m.Weight
-		cumulative[i] = total
 	}
-	return &ModelPool{
-		members:     members,
-		cumulative:  cumulative,
-		totalWeight: total,
-	}
+	return &ModelPool{members: members}
 }
 
 // Resolve selects the member that serves one request for this pool.
@@ -84,7 +76,8 @@ func NewModelPool(ctx context.Context, members []ModelPoolMember) *ModelPool {
 // least-loaded sibling member (declaration-order tie-break) so
 // availability wins over cache warmth; otherwise the pinned member is
 // served and its provider's own concurrency semantics apply (spec 013
-// DB 4/5).
+// DB 4/5). A member whose provider pool has no eligible upstream member
+// is skipped by pinning, least-loaded, and overflow (spec 014).
 func (p *ModelPool) Resolve(ctx context.Context, sessionID string) ModelPoolMember {
 	if sessionID == "" {
 		return p.members[p.leastLoaded(ctx)]
@@ -97,19 +90,57 @@ func (p *ModelPool) Resolve(ctx context.Context, sessionID string) ModelPoolMemb
 	return member
 }
 
+// memberEligible reports whether member i's provider pool has at least
+// one eligible upstream member right now (spec 014). A provider handler
+// that does not implement WindowEligible is always eligible.
+func (p *ModelPool) memberEligible(i int) bool {
+	return windowEligible(p.members[i].Handler)
+}
+
+// eligibleIndices returns the indices of members whose provider is
+// eligible right now.
+func (p *ModelPool) eligibleIndices(ctx context.Context) []int {
+	idx := make([]int, 0, len(p.members))
+	for i := range p.members {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if p.memberEligible(i) {
+			idx = append(idx, i)
+		}
+	}
+	return idx
+}
+
 // pinSlot returns the member index that the weighted ring hash of
-// sessionID maps to: slot = FNV-1a 64 over the id, mod totalWeight, then
-// the first member whose cumulative weight exceeds the slot. The same
-// mechanism the upstream pool handler uses (spec 012), so a fixed
-// session id over a fixed pool is stable across requests and restarts.
+// sessionID maps to over the currently-eligible members: slot = FNV-1a 64
+// over the id, mod the eligible total weight, then the first eligible
+// member whose cumulative weight exceeds the slot. The same mechanism the
+// upstream pool handler uses (spec 012), so a fixed session id over a
+// fixed eligible set is stable across requests and restarts. A member
+// whose provider pool has no eligible upstream member is not part of the
+// ring, so a session pinned to it re-resolves to an eligible member on
+// the next request (spec 014).
 func (p *ModelPool) pinSlot(ctx context.Context, sessionID string) int {
+	idx := p.eligibleIndices(ctx)
+	if len(idx) == 0 {
+		return 0
+	}
+	total := 0
+	cumulative := make([]int, len(idx))
+	for i, mi := range idx {
+		total += p.members[mi].Weight
+		cumulative[i] = total
+	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(sessionID))
 	// #nosec G115 -- totalWeight and cumulative are sums of config-validated
 	// positive weights, far below uint64 max; the int→uint64 conversion is
 	// overflow-safe.
-	slot := h.Sum64() % uint64(p.totalWeight)
-	for i, c := range p.cumulative {
+	slot := h.Sum64() % uint64(total)
+	for i, c := range cumulative {
 		select {
 		case <-ctx.Done():
 			return 0
@@ -118,37 +149,43 @@ func (p *ModelPool) pinSlot(ctx context.Context, sessionID string) int {
 		// #nosec G115 -- see above: cumulative values are positive weight
 		// sums, overflow-safe when widened.
 		if uint64(c) > slot {
-			return i
+			return idx[i]
 		}
 	}
-	return len(p.members) - 1
+	return idx[len(idx)-1]
 }
 
-// leastLoaded returns the index of the member with the fewest in-flight
-// requests, breaking ties round-robin (the atomic rr counter, cycled by
-// the tie count) so equally-loaded members share idless traffic instead
-// of stacking on the first-declared one.
+// leastLoaded returns the index of the currently-eligible member with the
+// fewest in-flight requests, breaking ties round-robin (the atomic rr
+// counter, cycled by the tie count) so equally-loaded members share
+// idless traffic instead of stacking on the first-declared one. Members
+// whose provider pool has no eligible upstream member are not considered
+// (spec 014).
 func (p *ModelPool) leastLoaded(ctx context.Context) int {
-	min := p.load(0)
-	for i := 1; i < len(p.members); i++ {
+	idx := p.eligibleIndices(ctx)
+	if len(idx) == 0 {
+		return 0
+	}
+	min := p.load(idx[0])
+	for i := 1; i < len(idx); i++ {
 		select {
 		case <-ctx.Done():
 			return 0
 		default:
 		}
-		if load := p.load(i); load < min {
+		if load := p.load(idx[i]); load < min {
 			min = load
 		}
 	}
-	ties := make([]int, 0, len(p.members))
-	for i := range p.members {
+	ties := make([]int, 0, len(idx))
+	for _, mi := range idx {
 		select {
 		case <-ctx.Done():
 			return 0
 		default:
 		}
-		if p.load(i) == min {
-			ties = append(ties, i)
+		if p.load(mi) == min {
+			ties = append(ties, mi)
 		}
 	}
 	rr := p.rr.Add(1)
@@ -156,26 +193,28 @@ func (p *ModelPool) leastLoaded(ctx context.Context) int {
 }
 
 // overflowTarget returns the index of the least-loaded member among all
-// members EXCEPT excluded, breaking ties by declaration order (stable
-// and deterministic — the first-declared lowest-load member wins). With
-// no sibling (a single-member pool declaring overflow) there is nowhere
-// to overflow to, so the excluded member itself is returned and the
-// pinned member's own provider semantics apply.
+// currently-eligible members EXCEPT excluded, breaking ties by
+// declaration order (stable and deterministic — the first-declared
+// lowest-load member wins). A member whose provider pool has no eligible
+// upstream member is not a valid overflow target (spec 014). With no
+// eligible sibling (a single-member pool declaring overflow, or every
+// sibling closed) there is nowhere to overflow to, so the excluded member
+// itself is returned and the pinned member's own provider semantics apply.
 func (p *ModelPool) overflowTarget(ctx context.Context, excluded int) int {
 	minIdx := excluded
 	minLoad := 0
-	for i := range p.members {
+	for _, mi := range p.eligibleIndices(ctx) {
 		select {
 		case <-ctx.Done():
 			return excluded
 		default:
 		}
-		if i == excluded {
+		if mi == excluded {
 			continue
 		}
-		load := p.load(i)
+		load := p.load(mi)
 		if minIdx == excluded || load < minLoad {
-			minIdx = i
+			minIdx = mi
 			minLoad = load
 		}
 	}

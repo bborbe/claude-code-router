@@ -31,6 +31,9 @@ providers:
   minimax:
     upstream: https://api.minimax.io/anthropic
     token: "<YOUR_MINIMAX_API_KEY>"
+    # window:                     # optional; legacy single-upstream form only — applies to the implicit single member (see docs/config.md ## Time-of-day windows). Cannot be combined with upstreams:.
+    #   from: "08:00 Europe/Berlin"
+    #   until: "18:00 Europe/Berlin"
     # allowedApiKeys:            # optional; keys that route to THIS provider, overriding model globs
     #   - "<ROUTING_KEY>"
     models:
@@ -56,6 +59,9 @@ providers:
     #   - upstream: http://localhost:11434
     #     token: "ollama"
     #     weight: 1
+    #     window:                   # optional; per-member time-of-day eligibility window (see docs/config.md ## Time-of-day windows). from/until in "HH:MM <location>" form.
+    #       from: "08:00 Europe/Berlin"
+    #       until: "18:00 Europe/Berlin"
     #     maxConcurrentRequests: 8
     #     maxConcurrentWaitSeconds: 30
     #   - upstream: http://localhost:11435

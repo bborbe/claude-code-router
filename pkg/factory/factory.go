@@ -35,6 +35,7 @@ type RouterOptionFunc func(*routerOptions)
 
 type routerOptions struct {
 	metricsRegisterer prometheus.Registerer
+	currentDateTime   libtime.CurrentDateTimeGetter
 }
 
 // WithMetricsRegisterer overrides the Prometheus registerer used for
@@ -43,6 +44,17 @@ type routerOptions struct {
 func WithMetricsRegisterer(reg prometheus.Registerer) RouterOptionFunc {
 	return func(o *routerOptions) {
 		o.metricsRegisterer = reg
+	}
+}
+
+// WithCurrentDateTime overrides the clock used for time-window
+// eligibility and the router's timestamps. Defaults to
+// libtime.NewCurrentDateTime(). Tests pass a fixed clock
+// (libtime.NewCurrentDateTime() + SetNow) for deterministic window
+// checks (spec 014).
+func WithCurrentDateTime(clock libtime.CurrentDateTimeGetter) RouterOptionFunc {
+	return func(o *routerOptions) {
+		o.currentDateTime = clock
 	}
 }
 
@@ -168,7 +180,10 @@ func CreateRouterFromConfig(
 	cfg *pkg.Config,
 	opts ...RouterOptionFunc,
 ) (http.Handler, error) {
-	o := &routerOptions{metricsRegisterer: prometheus.DefaultRegisterer}
+	o := &routerOptions{
+		metricsRegisterer: prometheus.DefaultRegisterer,
+		currentDateTime:   libtime.NewCurrentDateTime(),
+	}
 	for _, opt := range opts {
 		select {
 		case <-ctx.Done():
@@ -243,6 +258,8 @@ func CreateRouterFromConfig(
 				Handler:  memberHandler,
 				Weight:   up.Weight,
 				InFlight: inFlight,
+				Window:   up.Window,
+				Now:      o.currentDateTime.Now,
 			})
 		}
 		upCaps[name] = caps
@@ -306,7 +323,7 @@ func CreateRouterFromConfig(
 		modelPools,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
-		libtime.NewCurrentDateTime(),
+		o.currentDateTime,
 	)
 
 	// The inbound key set is the single auth registry resolved from the

@@ -41,10 +41,16 @@ providers:
     # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
     # maxConcurrentRequests: 8   # optional; cap concurrent /v1/* requests to THIS provider (see ## Concurrency limit). Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # window:                    # optional; legacy single-upstream form only — applies to the implicit single member (see ## Time-of-day windows). Cannot be combined with an upstreams: list.
+    #   from: "08:00 Europe/Berlin"
+    #   until: "18:00 Europe/Berlin"
     # upstreams:                  # optional; alternative to `upstream:` — a pool of servers. Each entry carries upstream/token/weight/maxConcurrentRequests/maxConcurrentWaitSeconds (see ## Upstream pools). Mutually exclusive with `upstream:`.
     #   - upstream: <URL>
     #     token: <string>         # optional; per-member token (defaults to the provider token semantics: absent = pass client's Authorization through)
     #     weight: 1               # optional; default 1. Relative share of pinned sessions this member receives.
+    #     window:                 # optional; per-member time-of-day eligibility window (see ## Time-of-day windows). Values are "HH:MM <location>", e.g. "18:00 Europe/Berlin". from/until required when the block is present. A member outside its window is ineligible for dispatch.
+    #       from: "08:00 Europe/Berlin"
+    #       until: "18:00 Europe/Berlin"
     #     maxConcurrentRequests: 8   # optional; per-member cap. Absent or 0 or negative = unlimited.
     #     maxConcurrentWaitSeconds: 30 # optional; per-member queue wait before HTTP 429 (default 30)
 ```
@@ -222,6 +228,64 @@ providers:
 ```
 
 With two Claude Code sessions (each set `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<unique id>"}'`), the `[route] session=<id> upstream=<url>` lines name a distinct member per session, and every request within one session names the same member — two sessions, two servers, warm caches on both.
+
+## Time-of-day windows
+
+A pool member can declare an optional `window:` block that restricts when it is eligible for a dispatch — so one provider can serve the same endpoint with different keys at different times of day (the normal-rate key during business hours, the unlimited key off-peak) with no operator action at the boundary:
+
+```yaml
+providers:
+  <provider-key>:
+    upstreams:
+      - upstream: <URL>
+        token: "<day-key>"
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: <URL>
+        token: "<night-key>"
+        window:
+          from: "18:00 Europe/Berlin"
+          until: "08:00 Europe/Berlin"
+```
+
+The legacy single `upstream:` provider form carries the same `window:` at provider level, applied to its implicit single member (see the schema recap below).
+
+- **What it is.** A member's `window:` has two fields, `from` and `until`, each a time-of-day value in the `"HH:MM <location>"` form (e.g. `"18:00 Europe/Berlin"`). Each value carries its IANA location inline — the boundary is the location's wall clock, never the router host's local time, and there is no separate timezone field. The legacy single `upstream:` / `token:` provider form accepts the same `window:` at provider level; it applies to the implicit single member of the one-entry pool (see the note below).
+- **Eligibility semantics.** A member is ELIGIBLE for a dispatch only while "now" (the router's injected clock — see `WithCurrentDateTime` in `pkg/factory/factory.go`) is inside `[from, until)` — the `from` boundary is inclusive, the `until` boundary exclusive. A member whose window does not contain "now" is INELIGIBLE: it is skipped by BOTH session pinning (the weighted ring hash only considers eligible members) and keyless least-loaded selection, and it is not a valid overflow target. A member with no `window:` is always eligible — today's behavior, byte-for-byte. Two members whose windows overlap at the same moment are BOTH eligible and selected by the normal pinning / least-loaded rules (see ## Upstream pools) — overlap does not prefer one member over another.
+- **Overnight wrap.** `from` after `until` wraps overnight: `from: "22:00"` `until: "06:00"` covers 02:00 and excludes 14:00. `from` == `until` is an empty window (never eligible) — avoid it.
+- **Provider fall-through.** When no member of a provider's pool is eligible, the provider itself is ineligible for that dispatch: the model falls through declaration order to the next matching provider that has an eligible member, then to `default_provider`. A closed window is ELIGIBILITY, never a failure — no router error, no HTTP 429, no health check, no probing. The complementary-window config below guarantees at least one eligible member per period, so the fall-through is the safety net, not the normal path.
+- **Session re-resolution.** Pinning is stateless: a session pinned to a member whose window closes mid-session re-resolves to an eligible member on its next request (the cache on the old member is lost — unavoidable, its key is unusable), and a stream already dispatched completes even if the boundary passes mid-request.
+- **Observability.** When the router falls through because the first matching provider's pool is fully closed, it logs `[route] provider=<p> window=closed -> <fallback>` at glog V(2) — the same verbosity as the `[route] session=<id> upstream=<url>` and `[route] model=... matched ...` detail lines — the operator evidence that the window boundary is behaving as configured. Each dispatch still logs the normal `[route]` line naming the serving member.
+- **Validation.** Malformed times (e.g. `"25:00 Europe/Berlin"`) and unknown IANA locations (e.g. `"18:00 Mars/Olympus"`) are rejected at config load, as is a `window:` with only one boundary (a `window:` block present but missing `from` or `until` fails validation — the block is all-or-nothing). A provider-level `window:` combined with an `upstreams:` list is rejected — windows live on pool members. A valid-but-wrong location (e.g. `Europe/London` for `Europe/Berlin`) passes validation and shifts the boundary by its offset — the operator verifies the `[route] … window=closed` lines against the expected boundary (see Observability) and corrects the value via SIGHUP.
+- **SIGHUP.** A change to a member's `window:` (or the member list) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config (see ## Reload).
+- **Security.** The window is server-side config + server clock, evaluated per request; a client cannot influence which window applies, and the window never widens access or bypasses `allowedApiKeys`. The complementary-window config below guarantees the off-peak unlimited key is only ever used inside its window.
+
+The operator pattern this feature exists for: one provider serving the same endpoint with two keys, each restricted to its own period:
+
+```yaml
+providers:
+  seibert-vllm-default:
+    upstreams:
+      - upstream: http://vllm:8000
+        token: "<normal-rate-key>"
+        maxConcurrentRequests: 16
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: http://vllm:8000
+        token: "<unlimited-off-peak-key>"
+        maxConcurrentRequests: 50
+        window:
+          from: "18:00 Europe/Berlin"
+          until: "08:00 Europe/Berlin"
+    models:
+      - "deepseek-v4-*"
+```
+
+With complementary windows, business hours (08:00–18:00 Europe/Berlin) are served by the day member/key at its 16-request cap, and off-peak by the night member/key at its 50-request cap — exactly one eligible member per period, so the unlimited key is never touched during business hours and no operator action is needed at the boundary. The `[route]` lines name the day member during business hours and the night member off-peak.
+
+The per-entry `window:` sits alongside the per-entry `weight` / `maxConcurrentRequests` / `maxConcurrentWaitSeconds` fields documented in ## Upstream pools, and the provider-level `window:` on the legacy single-`upstream:` form behaves exactly like the provider-level caps (copied onto the implicit single member).
 
 ## Auth
 
