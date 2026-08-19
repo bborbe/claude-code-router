@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [013-model-pools]
+summary: 'Documented the model_pools: config block in docs/config.md (schema reference + new ## Model pools section covering member fields, session pinning, idless least-loaded dispatch, overflow failover, fall-through, validation, observability, SIGHUP, security) and docs/config.example.yaml (commented two-member example), and added a feat: CHANGELOG bullet under ## Unreleased'
+execution_id: claude-code-router-session-pinning-exec-044-spec-013-docs-changelog
+dark-factory-version: dev
 created: "2026-08-19T18:10:00Z"
 queued: "2026-08-19T15:50:36Z"
+started: "2026-08-19T16:39:14Z"
+completed: "2026-08-19T16:41:39Z"
 ---
 
 # Docs + changelog: `model_pools:` resolution

@@ -21,6 +21,13 @@ allowedApiKeys:                  # optional; list of API keys authenticating non
 
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
+# model_pools:               # optional; invented model names that resolve to a choice of providers (see ## Model pools). Each entry carries provider/model/weight/overflow.
+#   <poolname>:
+#     - provider: <provider-key>   # required; must exist under providers:
+#       model: <concrete-model>    # required; the fixed model string that provider sees
+#       weight: 1                  # optional; default 1. Relative share of pinned sessions this member receives.
+#       overflow: false            # optional; default false. If true, a saturated pinned member may fail over to a sibling member.
+
 providers:
   <provider-key>:
     upstream: <URL>                    # required; e.g. https://api.anthropic.com
@@ -84,6 +91,33 @@ Then in any Claude Code session:
 |---|---|
 | Alias key equals a provider name (e.g. `aliases: { minimax: ... }` AND `providers: { minimax: ... }`) | **Error** at `config.Load` — daemon refuses to start. Operator must rename the alias key or the provider. |
 | Alias target matches no provider's `models:` glob (e.g. `aliases: { foo: typo-name }` where no provider lists `typo-name*`) | **Warning** at startup via glog (`[config] alias target "typo-name" (from alias key "foo") matches no provider glob`); config still loads. At runtime, requests using that alias get rewritten to the typo string and fall through to `default_provider`, which likely returns 404. Operator notices the warning at startup. |
+
+## Model pools
+
+The optional top-level `model_pools:` block maps an invented model name (e.g. `coding`) to an ordered list of members, each naming a provider, a fixed concrete model, an optional weight, and an optional overflow flag. A client sends `model: <poolname>`; the router picks one member, rewrites the request body's `model` field to that member's fixed concrete model, and routes through that member's provider — the client never sees which member it got. The provider then applies its own upstream pool + session pinning + caps (see ## Upstream pools).
+
+```yaml
+model_pools:
+  coding:
+    - provider: deepseek-pool       # required; must exist under providers:
+      model: deepseek-v4-flash      # required; the fixed concrete model this member serves
+      weight: 2                     # optional; default 1. Share of pinned sessions this member receives.
+      overflow: true                # optional; default false. Allow failover to a sibling when this member's provider is saturated.
+    - provider: minimax-pool
+      model: MiniMax-2.7
+```
+
+- **Per-member fields.** `provider` is required and must name a key under `providers:` — an unknown provider fails config load with an error naming the pool. `model` is required; the fixed concrete model string that provider sees — it may itself match that provider's `models:` globs, which is the normal case. `weight` is optional and defaults to 1; a negative weight is rejected at config load, and `weight: 0` and an absent key both resolve to the default 1. `weight` is the relative share of PINNED sessions this member receives — a 2:1 weight over two members sends roughly 2/3 of pinned sessions to the heavier member. `overflow` is optional and defaults to false (see failover below).
+- **Session pinning.** A client that sets an `x-session-id` header (e.g. `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<id>"}'` in Claude Code) is pinned to the same pool member on every request via a weighted ring hash of the id — deterministic and stateless (FNV-1a over the id, no session→member map), so the member's prompt cache stays warm and the session consistently sees one provider's model. The same id over a two-member pool resolves to the same member across requests and restarts. The header is used only as the selection key, never for auth, and is stripped before forwarding (see ## Upstream pools).
+- **Idless least-loaded.** A request without `x-session-id` is sent to the least-loaded member — the fewest in-flight requests at the member's provider — with round-robin tie-breaking among equally-loaded members, so an idless burst (e.g. dark-factory containers) spreads across the members instead of stacking on the first-declared one.
+- **Overflow failover.** When the pinned member's provider is saturated (every capped upstream at its concurrency cap — see ## Upstream pools) and the member declares `overflow: true`, the request fails over to the least-loaded sibling member — availability over cache warmth, which costs nothing here because members are different providers/caches anyway. The `[route]` line names the member that actually served the request. With `overflow: false` (the default), the request stays on its pinned member and the provider's own concurrency semantics apply — it waits and answers HTTP 429 with the Anthropic-shaped `rate_limit_error` body (see ## Concurrency limit / ## Upstream pools).
+- **Fall-through.** A model name that is not a configured pool name is untouched — it flows through the existing alias + provider-glob routing exactly as before. `model_pools:` names do not interact with `aliases:`; the two blocks are independent ("one name → one model" vs "one name → a choice of models").
+- **Validation.** An unknown provider, a negative weight, a duplicate `(provider, model)` pair within a pool, and an empty member list all fail config load with an error naming the pool (the same pair in two different pools is not a duplicate). `weight: 0` and an absent weight both mean the default 1.
+- **Observability.** Each pool resolution logs `[route] model=<poolname> -> provider=<provider> model=<concrete>` at glog `V(2)` — the same verbosity as the `[route] model=... matched ...` detail lines — the operator evidence of which member served a session. The `[req]` line and `ccrouter_requests_total` / `ccrouter_tokens_total` metrics are unchanged; the metrics' model label is the concrete member model the upstream saw.
+- **SIGHUP applies changes.** A change to `model_pools:` (add/remove a member, change a weight or overflow flag) applies on SIGHUP without a restart — the reloader rebuilds the pool table (see ## Reload).
+- **Security.** A pool name is ordinary client input like any model string — it never widens access; resolution only selects among configured members and their providers' existing auth. The rewritten body carries only the member's configured concrete model — a client cannot inject an arbitrary model string via a pool name.
+
+A short worked example: two Claude Code sessions with distinct `x-session-id` values both send `model: coding` — the weighted ring hash pins each id to its own slot, so each session lands on its own member consistently (`deepseek-pool/deepseek-v4-flash` and `minimax-pool/MiniMax-2.7`), and each upstream log sees only its own model name in the body.
 
 ## Requires leading system
 
