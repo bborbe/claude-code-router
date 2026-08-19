@@ -197,7 +197,7 @@ type Provider struct {
 // caps are the provider-level values (spec 012).
 type Upstream struct {
 	Upstream                 string `yaml:"upstream"`
-	Token                    string `yaml:"token,omitempty"`
+	Token                    string `yaml:"token,omitempty" display:"length"`
 	Weight                   int    `yaml:"weight,omitempty"`
 	MaxConcurrentRequests    int    `yaml:"maxConcurrentRequests,omitempty"`
 	MaxConcurrentWaitSeconds int    `yaml:"maxConcurrentWaitSeconds,omitempty"`
