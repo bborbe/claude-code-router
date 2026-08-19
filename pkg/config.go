@@ -35,6 +35,14 @@ type Config struct {
 	// `{"model":"qwen3.6:35b-a3b-coding-nvfp4"}` before the router
 	// walks providers' models globs. Nil / empty map = no-op.
 	Aliases map[string]string `yaml:"aliases,omitempty"`
+	// ModelPools maps an invented model name to an ordered list of
+	// members (spec 013). A client that sends `model: <poolname>` gets
+	// the request body's model field rewritten to one member's concrete
+	// model and routed through that member's provider — the router picks
+	// the member per session, the client never sees it. Unlike Aliases
+	// (one name -> one model), a pool name maps to a choice of models.
+	// Nil / empty map = no-op.
+	ModelPools map[string][]ModelPoolMember `yaml:"model_pools,omitempty"`
 	// Trace, when true, enables per-request trace logging for /v1/*
 	// requests: every request writes one JSON file capturing the full
 	// request and response to ~/.claude-code-router/trace/. When false
@@ -195,6 +203,20 @@ type Upstream struct {
 	MaxConcurrentWaitSeconds int    `yaml:"maxConcurrentWaitSeconds,omitempty"`
 }
 
+// ModelPoolMember is one candidate of a model pool: the provider to
+// route through, the fixed concrete model string that provider sees,
+// the weight for session-pinned member selection (default 1), and
+// whether the member may overflow to a sibling when its provider is
+// saturated (default false). Model is the concrete string sent to
+// that provider — it may itself match the provider's models globs,
+// which is the normal case (spec 013).
+type ModelPoolMember struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+	Weight   int    `yaml:"weight,omitempty"`
+	Overflow bool   `yaml:"overflow,omitempty"`
+}
+
 // Load reads, parses, and validates the config at path. Tilde-prefix
 // (~/) is expanded to the user's home directory.
 func Load(ctx context.Context, rawPath string) (*Config, error) {
@@ -294,6 +316,9 @@ func (c *Config) Validate(ctx context.Context) error {
 	}
 	if err := c.validateAllowedApiKeyClaims(ctx); err != nil {
 		return errors.Wrapf(ctx, err, "validate allowedApiKeys")
+	}
+	if err := c.validateModelPools(ctx); err != nil {
+		return errors.Wrapf(ctx, err, "validate model_pools")
 	}
 	return c.validateAliases(ctx)
 }
@@ -476,6 +501,67 @@ func (c *Config) validateAliases(ctx context.Context) error {
 				`alias target %q (from alias key %q) matches no provider glob`,
 				target, aliasKey,
 			)
+		}
+	}
+	return nil
+}
+
+// validateModelPools checks the model_pools contract: every member's
+// provider must exist, weights are defaulted or rejected, and a pool
+// may not repeat a (provider, model) pair. Error messages always name
+// the pool, never rely on map iteration order. A pool member's model
+// is deliberately NOT matched against any provider glob — it is the
+// concrete string sent to that provider directly.
+//
+//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
+func (c *Config) validateModelPools(ctx context.Context) error {
+	for name := range c.ModelPools {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if len(c.ModelPools[name]) == 0 {
+			return errors.New(ctx, fmt.Sprintf(
+				"model pool %q: must declare at least one member",
+				name,
+			))
+		}
+		seen := make(map[[2]string]struct{})
+		for i := range c.ModelPools[name] {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			member := c.ModelPools[name][i]
+			if _, ok := c.Providers[member.Provider]; !ok {
+				return errors.New(ctx, fmt.Sprintf(
+					"model pool %q: unknown provider %q",
+					name, member.Provider,
+				))
+			}
+			if member.Weight < 0 {
+				return errors.New(ctx, fmt.Sprintf(
+					"model pool %q: member weight must be > 0 (got %d)",
+					name, member.Weight,
+				))
+			}
+			if member.Weight == 0 {
+				// Write back in place: a plain int field cannot distinguish
+				// `weight: 0` from an absent key (same resolution the
+				// sibling Upstream.Weight uses), so 0 is the default 1.
+				c.ModelPools[name][i].Weight = 1
+				member.Weight = 1
+			}
+			pair := [2]string{member.Provider, member.Model}
+			if _, ok := seen[pair]; ok {
+				return errors.New(ctx, fmt.Sprintf(
+					"model pool %q: duplicate member (provider %q, model %q)",
+					name, member.Provider, member.Model,
+				))
+			}
+			seen[pair] = struct{}{}
 		}
 	}
 	return nil

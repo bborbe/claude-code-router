@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [013-model-pools]
+summary: 'Added the model_pools: config contract — ModelPoolMember type, Config.ModelPools field, and validateModelPools with normative error messages (empty pool, unknown provider, negative weight, per-pool duplicate pairs) wired into Config.Validate, plus 10 yaml-boundary Ginkgo rows and a ## Unreleased CHANGELOG entry'
+execution_id: claude-code-router-session-pinning-exec-042-spec-013-config-model-pools
+dark-factory-version: dev
 created: "2026-08-19T18:00:00Z"
 queued: "2026-08-19T15:50:36Z"
+started: "2026-08-19T16:15:43Z"
+completed: "2026-08-19T16:20:32Z"
 ---
 
 # Config: `model_pools:` schema + `ModelPoolMember` + validation

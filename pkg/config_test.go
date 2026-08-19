@@ -268,6 +268,199 @@ aliases:
 		})
 	})
 
+	Context("model_pools", func() {
+		// The model_pools block is validated against the providers it names,
+		// so every fixture references real providers. These are yaml-boundary
+		// tests: a wrong tag would silently leave ModelPools nil or a member
+		// field zeroed, so they go through Load, not struct literals.
+		providers := `
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+  deepseek-pool:
+    upstream: https://vllm.example.com
+    token: "vllm-token"
+    models: ["deepseek-*"]
+  minimax-pool:
+    upstream: https://api.minimax.io/anthropic
+    token: "minimax-token"
+    models: ["MiniMax-*"]
+`
+		writeWithPools := func(modelPools string) string {
+			return write(providers + modelPools)
+		}
+
+		It("parses a valid model_pools block with member fields intact", func() {
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+      weight: 2
+      overflow: true
+    - provider: minimax-pool
+      model: MiniMax-2.7
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ModelPools).To(HaveLen(1))
+			Expect(cfg.ModelPools["coding"]).To(HaveLen(2))
+			Expect(cfg.ModelPools["coding"][0]).To(Equal(pkgcfg.ModelPoolMember{
+				Provider: "deepseek-pool",
+				Model:    "deepseek-v4-flash",
+				Weight:   2,
+				Overflow: true,
+			}))
+			// Absent weight / overflow are defaulted (1 / false).
+			Expect(cfg.ModelPools["coding"][1]).To(Equal(pkgcfg.ModelPoolMember{
+				Provider: "minimax-pool",
+				Model:    "MiniMax-2.7",
+				Weight:   1,
+				Overflow: false,
+			}))
+		})
+
+		It("defaults an absent member weight to 1 and an absent overflow to false", func() {
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+      weight: 1
+    - provider: minimax-pool
+      model: MiniMax-2.7
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ModelPools["coding"][0].Weight).To(Equal(1))
+			Expect(cfg.ModelPools["coding"][0].Overflow).To(BeFalse())
+			Expect(cfg.ModelPools["coding"][1].Weight).To(Equal(1))
+			Expect(cfg.ModelPools["coding"][1].Overflow).To(BeFalse())
+		})
+
+		It("treats an explicit weight: 0 as the default 1, not an error", func() {
+			// Same int-type resolution as the sibling upstreams: weight — a
+			// plain int field cannot distinguish `weight: 0` from an absent
+			// key, so 0 means the default.
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+      weight: 0
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ModelPools["coding"][0].Weight).To(Equal(1))
+		})
+
+		It("loads a config with both an aliases block and a model_pools block", func() {
+			p := write(providers + `
+aliases:
+  opus: claude-opus-4-7
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Aliases["opus"]).To(Equal("claude-opus-4-7"))
+			Expect(cfg.ModelPools["coding"]).To(HaveLen(1))
+			Expect(cfg.ModelPools["coding"][0].Provider).To(Equal("deepseek-pool"))
+			Expect(cfg.ModelPools["coding"][0].Model).To(Equal("deepseek-v4-flash"))
+		})
+
+		It("loads a config with neither block unchanged — backward compat", func() {
+			p := write(providers)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ModelPools).To(BeNil())
+			Expect(cfg.Aliases).To(BeEmpty())
+		})
+
+		It("rejects a member whose provider is not declared, naming the pool and provider", func() {
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: nope
+      model: deepseek-v4-flash
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unknown provider"))
+			Expect(err.Error()).To(ContainSubstring("coding"))
+			Expect(err.Error()).To(ContainSubstring("nope"))
+		})
+
+		It("rejects two members with the same (provider, model) pair in one pool", func() {
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+      weight: 2
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+      weight: 1
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("duplicate"))
+			Expect(err.Error()).To(ContainSubstring("coding"))
+			Expect(err.Error()).To(ContainSubstring(`"deepseek-pool"`))
+			Expect(err.Error()).To(ContainSubstring(`"deepseek-v4-flash"`))
+		})
+
+		It("rejects a member with a negative weight, naming the pool", func() {
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+      weight: -1
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("weight must be > 0"))
+			Expect(err.Error()).To(ContainSubstring("coding"))
+			Expect(err.Error()).To(ContainSubstring("-1"))
+		})
+
+		It("rejects a pool with an empty member list", func() {
+			p := writeWithPools(`
+model_pools:
+  coding: []
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("at least one member"))
+			Expect(err.Error()).To(ContainSubstring("coding"))
+		})
+
+		It("allows the same (provider, model) pair in two different pools", func() {
+			// The duplicate check is per-pool, not global: a pair repeated
+			// across two pools is two independent member lists.
+			p := writeWithPools(`
+model_pools:
+  coding:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+  review:
+    - provider: deepseek-pool
+      model: deepseek-v4-flash
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ModelPools["coding"]).To(HaveLen(1))
+			Expect(cfg.ModelPools["review"]).To(HaveLen(1))
+			Expect(cfg.ModelPools["coding"][0]).To(Equal(cfg.ModelPools["review"][0]))
+		})
+	})
+
 	Context("requiresLeadingSystem", func() {
 		It("parses a per-provider requiresLeadingSystem list", func() {
 			p := write(`
