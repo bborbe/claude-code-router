@@ -149,14 +149,15 @@ func providerKeys(cfg *pkg.Config) []string {
 const defaultMaxConcurrentWaitSeconds = 30
 
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
-// config: per-provider reverse-proxies with token-swap transports, a
-// model-name dispatcher on /v1/, and the canonical admin endpoints
-// (/healthz, /readiness, /metrics, /setloglevel/, /gc). The model
-// router emits its own structured one-line log per request at V(1)
+// config: per-provider upstream pools (each member its own reverse proxy,
+// token-swap transport, and concurrency limiter), a model-name dispatcher
+// on /v1/, and the canonical admin endpoints (/healthz, /readiness,
+// /metrics, /setloglevel/, /gc). The model router emits its own structured
+// one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
 //
-//nolint:funlen // per-provider wiring with per-loop ctx cancellation checks
+//nolint:funlen,gocognit // per-provider/per-upstream wiring with per-loop ctx cancellation checks
 func CreateRouterFromConfig(
 	ctx context.Context,
 	cfg *pkg.Config,
@@ -181,31 +182,54 @@ func CreateRouterFromConfig(
 		default:
 		}
 		prov := cfg.Providers[name]
-		upstream, err := url.Parse(prov.Upstream)
-		if err != nil {
-			return nil, errors.Wrapf(
-				ctx,
-				err,
-				"provider %q: parse upstream %q",
-				name,
-				prov.Upstream,
+		upstreams := prov.UpstreamList()
+		members := make([]handler.UpstreamMember, 0, len(upstreams))
+		for _, up := range upstreams {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			upstream, err := url.Parse(up.Upstream)
+			if err != nil {
+				return nil, errors.Wrapf(
+					ctx,
+					err,
+					"provider %q: parse upstream %q",
+					name,
+					up.Upstream,
+				)
+			}
+			transport := handler.NewLoggingRoundTripper(
+				handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), up.Token),
+				liblog.SamplerList{
+					liblog.NewSampleTime(time.Second),
+					liblog.NewSamplerGlogLevel(5),
+				},
+				libtime.NewCurrentDateTime(),
 			)
+			proxy := handler.NewAnthropicProxyHandler(upstream, transport)
+			waitSeconds := up.MaxConcurrentWaitSeconds
+			if waitSeconds <= 0 {
+				waitSeconds = defaultMaxConcurrentWaitSeconds
+			}
+			memberHandler := handler.NewConcurrencyLimiter(
+				proxy,
+				up.MaxConcurrentRequests,
+				time.Duration(waitSeconds)*time.Second,
+			)
+			var inFlight func() int
+			if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
+				inFlight = limiter.InFlight
+			}
+			members = append(members, handler.UpstreamMember{
+				Upstream: up.Upstream,
+				Handler:  memberHandler,
+				Weight:   up.Weight,
+				InFlight: inFlight,
+			})
 		}
-		transport := handler.NewLoggingRoundTripper(
-			handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token),
-			liblog.SamplerList{liblog.NewSampleTime(time.Second), liblog.NewSamplerGlogLevel(5)},
-			libtime.NewCurrentDateTime(),
-		)
-		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
-		waitSeconds := prov.MaxConcurrentWaitSeconds
-		if waitSeconds <= 0 {
-			waitSeconds = defaultMaxConcurrentWaitSeconds
-		}
-		providerHandler := handler.NewConcurrencyLimiter(
-			proxy,
-			prov.MaxConcurrentRequests,
-			time.Duration(waitSeconds)*time.Second,
-		)
+		providerHandler := handler.NewUpstreamPoolHandler(members)
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			select {
@@ -260,11 +284,16 @@ func CreateRouterFromConfig(
 // buildMux wires the operator-local admin handlers and the model router
 // into a ServeMux. Admin endpoints are: /healthz, /readiness, /metrics,
 // /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, /api/hello,
-// and the catch-all 404 logger. The model router is wrapped in the auth middleware
-// when allowedKeys is non-empty, and in the trace middleware when trace is
-// true. Auth sits INSIDE trace so the trace middleware still observes
-// x-api-key (redacted) and still captures requests auth rejects, while
-// the header is gone before the request reaches the model router.
+// and the catch-all 404 logger. The model router is wrapped, deepest first,
+// in the session middleware (strips x-session-id outbound and carries it on
+// the context for the upstream pool handler to pin on), then the auth
+// middleware when allowedKeys is non-empty, then the trace middleware when
+// trace is true — so the chain is trace → auth → session → modelRouter. Auth
+// sits INSIDE trace so the trace middleware still observes x-api-key
+// (redacted) and still captures requests auth rejects, while the header is
+// gone before the request reaches the model router; session sits inside auth
+// so x-session-id is read and stripped before dispatch and never reaches an
+// upstream.
 func buildMux(
 	modelRouter http.Handler,
 	trace bool,
@@ -313,7 +342,7 @@ func buildMux(
 			handler.IsLoopbackRemoteAddr,
 		),
 	)
-	v1Handler := http.Handler(modelRouter)
+	v1Handler := http.Handler(handler.NewSessionMiddleware(modelRouter))
 	v1Handler = handler.NewAuthMiddleware(v1Handler, allowedKeys)
 	if trace {
 		glog.V(2).Infof("trace enabled via config")

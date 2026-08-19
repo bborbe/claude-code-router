@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [012-session-pinning-pools]
+summary: Generalized pkg/handler/concurrency-limiter.go with InFlight(), wired per-upstream pools into the factory (per-member proxy/token/limiter + least-loaded via real semaphore counts), mounted the session middleware on /v1/*, and added full-path pool wiring tests including the SIGHUP-rebuilt pool and outbound header-strip boundary
+execution_id: claude-code-router-session-pinning-exec-040-spec-012-per-upstream-concurrency-wiring
+dark-factory-version: dev
 created: "2026-08-19T17:12:00Z"
 queued: "2026-08-19T15:50:36Z"
+started: "2026-08-19T16:01:02Z"
+completed: "2026-08-19T16:12:49Z"
 ---
 
 # Per-upstream concurrency + factory pool wiring + SIGHUP-rebuilt pool

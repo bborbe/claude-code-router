@@ -116,6 +116,26 @@ var _ = Describe("ConcurrencyLimiter", func() {
 		},
 	)
 
+	It("reports its in-flight slot occupancy via InFlight", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 1, time.Second)
+		// The no-op path (cap <= 0) returns next unchanged, which carries no
+		// InFlight; a real limiter exposes the semaphore occupancy the pool
+		// handler's least-loaded selection reads.
+		capped, ok := limiter.(interface{ InFlight() int })
+		Expect(ok).To(BeTrue(), "a capped limiter must expose InFlight")
+		inFlight := capped.InFlight
+
+		rec1 := httptest.NewRecorder()
+		done1 := serveAsync(limiter, rec1, newMessagesRequest())
+		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(1), "request 1 must hold the slot")
+		Expect(inFlight()).To(Equal(1), "the limiter must report the held slot")
+
+		close(inner.release)
+		Eventually(done1, "1s").Should(BeClosed())
+		Expect(inFlight()).To(Equal(0), "the limiter must report the slot released")
+	})
+
 	It("answers HTTP 429 with the Anthropic-shaped rate_limit_error body on queue timeout", func() {
 		inner := newBlockingHandler()
 		limiter := handler.NewConcurrencyLimiter(inner, 1, 50*time.Millisecond)
