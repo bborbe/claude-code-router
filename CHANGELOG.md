@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.41.1
 
 - fix: thread context cancellation into the time-window `eligibleIndices()` eligibility scans (upstream pool handler + model pool) so a cancelled request aborts the scan, and add `display:"length"` to `ModelRoute.AllowedApiKeys`. These are the PR-review fixes landed after v0.41.0 was cut on the feature branch.
 
