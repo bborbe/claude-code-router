@@ -173,6 +173,13 @@ func CreateRouterFromConfig(
 		opt(o)
 	}
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
+	// Per-provider concurrency state consumed by the model-pool closures
+	// (spec 013): upCaps records each upstream's MaxConcurrentRequests and
+	// upInFlight each upstream's live in-flight counter (nil for uncapped
+	// members), both keyed by provider name and indexed identically to the
+	// provider's upstream list.
+	upCaps := make(map[string][]int, len(cfg.Providers))
+	upInFlight := make(map[string][]func() int, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
 	for _, name := range providerKeys(cfg) {
@@ -184,6 +191,8 @@ func CreateRouterFromConfig(
 		prov := cfg.Providers[name]
 		upstreams := prov.UpstreamList()
 		members := make([]handler.UpstreamMember, 0, len(upstreams))
+		caps := make([]int, 0, len(upstreams))
+		inflights := make([]func() int, 0, len(upstreams))
 		for _, up := range upstreams {
 			select {
 			case <-ctx.Done():
@@ -222,6 +231,8 @@ func CreateRouterFromConfig(
 			if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
 				inFlight = limiter.InFlight
 			}
+			caps = append(caps, up.MaxConcurrentRequests)
+			inflights = append(inflights, inFlight)
 			members = append(members, handler.UpstreamMember{
 				Upstream: up.Upstream,
 				Handler:  memberHandler,
@@ -229,6 +240,8 @@ func CreateRouterFromConfig(
 				InFlight: inFlight,
 			})
 		}
+		upCaps[name] = caps
+		upInFlight[name] = inflights
 		providerHandler := handler.NewUpstreamPoolHandler(members)
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
@@ -258,15 +271,80 @@ func CreateRouterFromConfig(
 		)
 	}
 
+	// Build the model-pool table (spec 013): each config member becomes a
+	// runtime member carrying the provider's handler plus live load and
+	// saturation closures. InFlight is the provider's total in-flight (sum
+	// over its upstream counters, nil entries as 0) — the load the pool's
+	// least-loaded and overflow selection reads. Saturated is the provider
+	// being at capacity: every capped upstream is at its cap, and a single
+	// uncapped upstream makes it never saturated. Config.Validate
+	// guarantees the provider exists; the lookup failure is a defensive
+	// safety net for direct CreateRouterFromConfig callers that bypass
+	// Load.
+	modelPools := make(map[string]*handler.ModelPool, len(cfg.ModelPools))
+	for name, cfgMembers := range cfg.ModelPools {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		members := make([]handler.ModelPoolMember, 0, len(cfgMembers))
+		for _, m := range cfgMembers {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			providerHandler, ok := providerHandlers[m.Provider]
+			if !ok {
+				return nil, errors.New(ctx, fmt.Sprintf(
+					"model pool %q: provider %q has no handler",
+					name, m.Provider,
+				))
+			}
+			caps := upCaps[m.Provider]
+			inflights := upInFlight[m.Provider]
+			members = append(members, handler.ModelPoolMember{
+				Provider: m.Provider,
+				Model:    m.Model,
+				Weight:   m.Weight,
+				Overflow: m.Overflow,
+				Handler:  providerHandler,
+				InFlight: func() int {
+					total := 0
+					for _, fn := range inflights {
+						if fn != nil {
+							total += fn()
+						}
+					}
+					return total
+				},
+				Saturated: func() bool {
+					if len(caps) == 0 {
+						return false
+					}
+					for i, cap := range caps {
+						if cap <= 0 || inflights[i] == nil || inflights[i]() < cap {
+							return false
+						}
+					}
+					return true
+				},
+			})
+		}
+		modelPools[name] = handler.NewModelPool(members)
+	}
+
 	metrics := handler.NewMetrics(cfg.Aliases)
 	if err := metrics.Register(o.metricsRegisterer); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
-	modelRouter := handler.NewModelRouter(
+	modelRouter := handler.NewModelRouterWithPools(
 		routes,
 		cfg.Router.DefaultProvider,
 		defaultHandler,
 		cfg.Aliases,
+		modelPools,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
 		libtime.NewCurrentDateTime(),

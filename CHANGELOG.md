@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: resolve a client-sent `model: <poolname>` as a pre-step in the model router before alias/key/glob routing (`pkg/handler/model-pool.go`, `NewModelRouterWithPools`): the pool's weighted FNV-1a ring hash pins each session id to one member whose concrete model is written into the request body and whose provider serves it, an idless request goes to the least-loaded member with round-robin tie-breaking so bursts never stack on the first-declared member, a pinned member whose provider is saturated overflows to the least-loaded sibling only when it declares `overflow: true` (the default keeps the request on its pinned member and its provider's own limiter answers), and a non-pool model name falls through to today's alias + key + glob routing unchanged; `pkg/factory/factory.go` builds the pool table from the `model_pools:` config with real per-provider load/saturation closures and rebuilds it on SIGHUP, so adding, removing, or re-weighting a pool member is live without a restart.
+
 ## v0.37.0
 
 - feat: add the `model_pools:` config contract and `ModelPoolMember` type (`pkg/config.go`) — a top-level `model_pools:` block maps an invented model name to an ordered list of members, each naming a `provider`, a fixed concrete `model`, an optional `weight` (absent or 0 resolves to the default 1, negative is rejected), and an optional `overflow` flag; `Config.Validate` rejects a member whose provider is unknown, a pool with an empty member list, and a duplicate `(provider, model)` pair within one pool (the same pair in two different pools is not a duplicate). The new block is optional and the `aliases:` block parses exactly as before — existing configs load byte-for-byte unchanged. Config contract only — routing behavior is unchanged.

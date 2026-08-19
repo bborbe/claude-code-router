@@ -94,13 +94,63 @@ type ModelRoute struct {
 // fix per architecture audit 2026-06-28 — inlined back). If a second
 // log-event shape ever needs the same data, introduce a `requestLogger`
 // struct holding `sampler` + `metrics` then.
-//
-//nolint:gocognit,funlen,maintidx // single-pass request flow: read body → resolve alias →
 func NewModelRouter(
 	routes []ModelRoute,
 	defaultProviderName string,
 	defaultHandler http.Handler,
 	aliases map[string]string,
+	sampler liblog.Sampler,
+	metrics *Metrics,
+	currentDateTime libtime.CurrentDateTimeGetter,
+) http.Handler {
+	return newModelRouter(
+		routes,
+		defaultProviderName,
+		defaultHandler,
+		aliases,
+		nil,
+		sampler,
+		metrics,
+		currentDateTime,
+	)
+}
+
+// NewModelRouterWithPools is NewModelRouter with an additional model-pool
+// pre-step: a request whose `model` field names a configured pool
+// resolves to one member before alias/key/glob routing, rewrites the
+// body's model field to that member's concrete model, and dispatches
+// through the member's handler — the glob walk is never reached for a
+// pool name. modelPools may be nil or empty — both mean "no pool
+// resolution", identical to NewModelRouter.
+func NewModelRouterWithPools(
+	routes []ModelRoute,
+	defaultProviderName string,
+	defaultHandler http.Handler,
+	aliases map[string]string,
+	modelPools map[string]*ModelPool,
+	sampler liblog.Sampler,
+	metrics *Metrics,
+	currentDateTime libtime.CurrentDateTimeGetter,
+) http.Handler {
+	return newModelRouter(
+		routes,
+		defaultProviderName,
+		defaultHandler,
+		aliases,
+		modelPools,
+		sampler,
+		metrics,
+		currentDateTime,
+	)
+}
+
+//nolint:gocognit,funlen,maintidx,gocyclo // single-pass request flow: read body → resolve alias →
+func newModelRouter(
+	routes []ModelRoute,
+	defaultProviderName string,
+	defaultHandler http.Handler,
+	aliases map[string]string,
+	modelPools map[string]*ModelPool,
 	sampler liblog.Sampler,
 	metrics *Metrics,
 	currentDateTime libtime.CurrentDateTimeGetter,
@@ -151,28 +201,88 @@ func NewModelRouter(
 		model := origModel
 		var aliasResolved string
 
-		if resolved, ok := aliases[model]; ok && model != "" {
-			rewritten, rerr := rewriteModelField(r.Context(), body, resolved)
-			if rerr != nil {
-				glog.Errorf("[alias] rewrite failed for %q -> %q: %v", model, resolved, rerr)
-				http.Error(w, "alias rewrite failed", http.StatusInternalServerError)
-				latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
-				metrics.ObserveRequest(
-					UnknownModelLabel,
-					UnknownModelLabel,
-					http.StatusInternalServerError,
-					latency.Seconds(),
-					true,
-				)
-				return
+		providerName := defaultProviderName
+		target := defaultHandler
+		// Seed from the default provider's own globs: a request matching no
+		// route still reaches defaultHandler, and that provider's chat-template
+		// restriction applies to it just the same. Every route built for a
+		// provider carries that provider's list, so the first one wins.
+		var requiresLeadingSystem []string
+		for _, route := range routes {
+			if route.ProviderName == defaultProviderName {
+				requiresLeadingSystem = route.RequiresLeadingSystem
+				break
 			}
-			glog.V(2).Infof("[alias] %s -> %s", model, resolved)
-			metrics.ObserveAliasResolution(origModel, resolved)
-			body = rewritten
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
-			aliasResolved = resolved
-			model = resolved
+		}
+
+		// Model-pool pre-step: a request whose model names a configured pool
+		// resolves to one member BEFORE alias/key/glob routing — pool names do
+		// not interact with aliases, keys, or the glob walk (spec 013 Desired
+		// Behavior 5). The body's model field is rewritten to the member's
+		// concrete model, which is what the upstream sees; the pool name itself
+		// is matched verbatim, so a pool name must not carry the [1m] suffix
+		// (the strip below runs after pool lookup).
+		matchedByPool := false
+		//nolint:nestif // single pool-resolve branch with its own rewrite-failure path
+		if modelPools != nil {
+			if pool, ok := modelPools[model]; ok {
+				member := pool.Resolve(SessionIDFromContext(r.Context()))
+				rewritten, rerr := rewriteModelField(r.Context(), body, member.Model)
+				if rerr != nil {
+					glog.Errorf("[pool] rewrite failed for %q -> %q: %v", model, member.Model, rerr)
+					http.Error(w, "pool rewrite failed", http.StatusInternalServerError)
+					latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+					metrics.ObserveRequest(
+						UnknownModelLabel,
+						UnknownModelLabel,
+						http.StatusInternalServerError,
+						latency.Seconds(),
+						true,
+					)
+					return
+				}
+				body = rewritten
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.ContentLength = int64(len(body))
+				model = member.Model
+				providerName = member.Provider
+				target = member.Handler
+				for _, route := range routes {
+					if route.ProviderName == member.Provider {
+						requiresLeadingSystem = route.RequiresLeadingSystem
+						break
+					}
+				}
+				glog.V(2).
+					Infof("[route] model=%s -> provider=%s model=%s", origModel, member.Provider, member.Model)
+				matchedByPool = true
+			}
+		}
+
+		if !matchedByPool {
+			if resolved, ok := aliases[model]; ok && model != "" {
+				rewritten, rerr := rewriteModelField(r.Context(), body, resolved)
+				if rerr != nil {
+					glog.Errorf("[alias] rewrite failed for %q -> %q: %v", model, resolved, rerr)
+					http.Error(w, "alias rewrite failed", http.StatusInternalServerError)
+					latency := currentDateTime.Now().Time().Sub(start).Round(time.Millisecond)
+					metrics.ObserveRequest(
+						UnknownModelLabel,
+						UnknownModelLabel,
+						http.StatusInternalServerError,
+						latency.Seconds(),
+						true,
+					)
+					return
+				}
+				glog.V(2).Infof("[alias] %s -> %s", model, resolved)
+				metrics.ObserveAliasResolution(origModel, resolved)
+				body = rewritten
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.ContentLength = int64(len(body))
+				aliasResolved = resolved
+				model = resolved
+			}
 		}
 
 		// Claude Code annotates model names with [1m] to mark 1M-token
@@ -206,51 +316,43 @@ func NewModelRouter(
 			model = cleaned
 		}
 
-		providerName := defaultProviderName
-		target := defaultHandler
-		// Seed from the default provider's own globs: a request matching no
-		// route still reaches defaultHandler, and that provider's chat-template
-		// restriction applies to it just the same. Every route built for a
-		// provider carries that provider's list, so the first one wins.
-		var requiresLeadingSystem []string
-		for _, route := range routes {
-			if route.ProviderName == defaultProviderName {
-				requiresLeadingSystem = route.RequiresLeadingSystem
-				break
-			}
-		}
 		// Key routing runs BEFORE the glob walk: a presented x-api-key that
 		// some provider claims pins the dispatch to that provider, and the
 		// glob walk is skipped wholesale. Plain string membership is correct
 		// here — the auth middleware already validated the key in constant
 		// time, so no timing boundary remains (AC 10 is scoped to
 		// auth-middleware.go). The key itself is never logged or written to
-		// the request body; the `[route]` line names the provider only.
-		matchedByKey := false
-		if presentedKey := PresentedApiKeyFromContext(r.Context()); presentedKey != "" {
+		// the request body; the `[route]` line names the provider only. Both
+		// branches are skipped wholesale for a pool-resolved request — the
+		// model field explicitly named a pool, so the pool pre-step wins.
+		//nolint:nestif // key-routing scan + glob walk, both skipped for pool-resolved requests
+		if !matchedByPool {
+			matchedByKey := false
+			if presentedKey := PresentedApiKeyFromContext(r.Context()); presentedKey != "" {
+				for _, route := range routes {
+					if containsString(route.AllowedApiKeys, presentedKey) {
+						providerName = route.ProviderName
+						target = route.Handler
+						requiresLeadingSystem = route.RequiresLeadingSystem
+						glog.V(2).Infof("[route] key matched provider=%s", providerName)
+						matchedByKey = true
+						break
+					}
+				}
+			}
 			for _, route := range routes {
-				if containsString(route.AllowedApiKeys, presentedKey) {
+				if matchedByKey {
+					break
+				}
+				ok, _ := path.Match(route.Pattern, model)
+				if ok {
 					providerName = route.ProviderName
 					target = route.Handler
 					requiresLeadingSystem = route.RequiresLeadingSystem
-					glog.V(2).Infof("[route] key matched provider=%s", providerName)
-					matchedByKey = true
+					glog.V(2).
+						Infof("[route] model=%q matched %q -> provider=%s", model, route.Pattern, providerName)
 					break
 				}
-			}
-		}
-		for _, route := range routes {
-			if matchedByKey {
-				break
-			}
-			ok, _ := path.Match(route.Pattern, model)
-			if ok {
-				providerName = route.ProviderName
-				target = route.Handler
-				requiresLeadingSystem = route.RequiresLeadingSystem
-				glog.V(2).
-					Infof("[route] model=%q matched %q -> provider=%s", model, route.Pattern, providerName)
-				break
 			}
 		}
 
