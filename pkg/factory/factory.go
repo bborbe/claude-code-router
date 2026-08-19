@@ -131,12 +131,17 @@ func streamingServerTimeouts(o *libhttp.ServerOptions) {
 // order when two providers share a model glob — the first-declared provider
 // owns the keyless traffic, a later one is reached only by an allowedApiKeys
 // pin (spec 010).
-func providerKeys(cfg *pkg.Config) []string {
+func providerKeys(ctx context.Context, cfg *pkg.Config) []string {
 	if len(cfg.ProviderOrder) > 0 {
 		return cfg.ProviderOrder
 	}
 	keys := make([]string, 0, len(cfg.Providers))
 	for k := range cfg.Providers {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -149,14 +154,15 @@ func providerKeys(cfg *pkg.Config) []string {
 const defaultMaxConcurrentWaitSeconds = 30
 
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
-// config: per-provider reverse-proxies with token-swap transports, a
-// model-name dispatcher on /v1/, and the canonical admin endpoints
-// (/healthz, /readiness, /metrics, /setloglevel/, /gc). The model
-// router emits its own structured one-line log per request at V(1)
+// config: per-provider upstream pools (each member its own reverse proxy,
+// token-swap transport, and concurrency limiter), a model-name dispatcher
+// on /v1/, and the canonical admin endpoints (/healthz, /readiness,
+// /metrics, /setloglevel/, /gc). The model router emits its own structured
+// one-line log per request at V(1)
 // (`[req] METHOD path model=... provider=... status=... latency=...`),
 // so no outer logging wrapper is needed — admin endpoints stay quiet.
 //
-//nolint:funlen // per-provider wiring with per-loop ctx cancellation checks
+//nolint:funlen,gocognit // per-provider/per-upstream wiring with per-loop ctx cancellation checks
 func CreateRouterFromConfig(
 	ctx context.Context,
 	cfg *pkg.Config,
@@ -172,40 +178,79 @@ func CreateRouterFromConfig(
 		opt(o)
 	}
 	providerHandlers := make(map[string]http.Handler, len(cfg.Providers))
+	// Per-provider concurrency state consumed by the model-pool closures
+	// (spec 013): upCaps records each upstream's MaxConcurrentRequests and
+	// upInFlight each upstream's live in-flight counter (nil for uncapped
+	// members), both keyed by provider name and indexed identically to the
+	// provider's upstream list.
+	upCaps := make(map[string][]int, len(cfg.Providers))
+	upInFlight := make(map[string][]func() int, len(cfg.Providers))
 	var routes []handler.ModelRoute
 
-	for _, name := range providerKeys(cfg) {
+	for _, name := range providerKeys(ctx, cfg) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 		prov := cfg.Providers[name]
-		upstream, err := url.Parse(prov.Upstream)
-		if err != nil {
-			return nil, errors.Wrapf(
-				ctx,
-				err,
-				"provider %q: parse upstream %q",
-				name,
-				prov.Upstream,
+		upstreams := prov.UpstreamList()
+		members := make([]handler.UpstreamMember, 0, len(upstreams))
+		caps := make([]int, 0, len(upstreams))
+		inflights := make([]func() int, 0, len(upstreams))
+		for _, up := range upstreams {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			upstream, err := url.Parse(up.Upstream)
+			if err != nil {
+				return nil, errors.Wrapf(
+					ctx,
+					err,
+					"provider %q: parse upstream %q",
+					name,
+					up.Upstream,
+				)
+			}
+			transport := handler.NewLoggingRoundTripper(
+				handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), up.Token),
+				liblog.SamplerList{
+					liblog.NewSampleTime(time.Second),
+					liblog.NewSamplerGlogLevel(5),
+				},
+				libtime.NewCurrentDateTime(),
 			)
+			proxy := handler.NewAnthropicProxyHandler(upstream, transport)
+			waitSeconds := up.MaxConcurrentWaitSeconds
+			if waitSeconds <= 0 {
+				waitSeconds = defaultMaxConcurrentWaitSeconds
+			}
+			memberHandler := handler.NewConcurrencyLimiter(
+				proxy,
+				up.MaxConcurrentRequests,
+				time.Duration(waitSeconds)*time.Second,
+			)
+			var inFlight func() int
+			if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
+				inFlight = limiter.InFlight
+			}
+			caps = append(caps, up.MaxConcurrentRequests)
+			inflights = append(inflights, inFlight)
+			members = append(members, handler.UpstreamMember{
+				Upstream: up.Upstream,
+				Handler:  memberHandler,
+				Weight:   up.Weight,
+				InFlight: inFlight,
+			})
 		}
-		transport := handler.NewLoggingRoundTripper(
-			handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), prov.Token),
-			liblog.SamplerList{liblog.NewSampleTime(time.Second), liblog.NewSamplerGlogLevel(5)},
-			libtime.NewCurrentDateTime(),
-		)
-		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
-		waitSeconds := prov.MaxConcurrentWaitSeconds
-		if waitSeconds <= 0 {
-			waitSeconds = defaultMaxConcurrentWaitSeconds
+		upCaps[name] = caps
+		upInFlight[name] = inflights
+		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
+		if providerHandler == nil {
+			return nil, ctx.Err()
 		}
-		providerHandler := handler.NewConcurrencyLimiter(
-			proxy,
-			prov.MaxConcurrentRequests,
-			time.Duration(waitSeconds)*time.Second,
-		)
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			select {
@@ -234,15 +279,31 @@ func CreateRouterFromConfig(
 		)
 	}
 
+	// Build the model-pool table (spec 013): each config member becomes a
+	// runtime member carrying the provider's handler plus live load and
+	// saturation closures. InFlight is the provider's total in-flight (sum
+	// over its upstream counters, nil entries as 0) — the load the pool's
+	// least-loaded and overflow selection reads. Saturated is the provider
+	// being at capacity: every capped upstream is at its cap, and a single
+	// uncapped upstream makes it never saturated. Config.Validate
+	// guarantees the provider exists; the lookup failure is a defensive
+	// safety net for direct CreateRouterFromConfig callers that bypass
+	// Load.
+	modelPools, err := buildModelPools(ctx, cfg.ModelPools, providerHandlers, upCaps, upInFlight)
+	if err != nil {
+		return nil, err
+	}
+
 	metrics := handler.NewMetrics(cfg.Aliases)
 	if err := metrics.Register(o.metricsRegisterer); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
-	modelRouter := handler.NewModelRouter(
+	modelRouter := handler.NewModelRouterWithPools(
 		routes,
 		cfg.Router.DefaultProvider,
 		defaultHandler,
 		cfg.Aliases,
+		modelPools,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
 		libtime.NewCurrentDateTime(),
@@ -257,14 +318,126 @@ func CreateRouterFromConfig(
 	return mux, nil
 }
 
+// buildModelPools builds the runtime model-pool table from config: for each
+// pool name it resolves every member's provider handler (defensive —
+// Config.Validate guarantees existence) and wires the InFlight/Saturated
+// closures from the provider's per-upstream caps and in-flight counters, so
+// overflow and least-loaded selection read real production load. Extracted
+// from CreateRouterFromConfig to keep that function's complexity under the
+// maintidx gate.
+func buildModelPools(
+	ctx context.Context,
+	cfgModelPools map[string][]pkg.ModelPoolMember,
+	providerHandlers map[string]http.Handler,
+	upCaps map[string][]int,
+	upInFlight map[string][]func() int,
+) (map[string]*handler.ModelPool, error) {
+	modelPools := make(map[string]*handler.ModelPool, len(cfgModelPools))
+	for name, cfgMembers := range cfgModelPools {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		members := make([]handler.ModelPoolMember, 0, len(cfgMembers))
+		for _, m := range cfgMembers {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			member, err := buildPoolMember(ctx, name, m, providerHandlers, upCaps, upInFlight)
+			if err != nil {
+				return nil, err
+			}
+			members = append(members, member)
+		}
+		pool := handler.NewModelPool(ctx, members)
+		if pool == nil {
+			return nil, ctx.Err()
+		}
+		modelPools[name] = pool
+	}
+	return modelPools, nil
+}
+
+// buildPoolMember resolves one configured pool member to its runtime form:
+// the provider's request handler plus the InFlight/Saturated closures that
+// read the provider's per-upstream caps and in-flight counters, so overflow
+// and least-loaded selection see real production load. The provider lookup
+// is defensive — Config.Validate guarantees it exists.
+func buildPoolMember(
+	ctx context.Context,
+	poolName string,
+	m pkg.ModelPoolMember,
+	providerHandlers map[string]http.Handler,
+	upCaps map[string][]int,
+	upInFlight map[string][]func() int,
+) (handler.ModelPoolMember, error) {
+	providerHandler, ok := providerHandlers[m.Provider]
+	if !ok {
+		return handler.ModelPoolMember{}, errors.New(ctx, fmt.Sprintf(
+			"model pool %q: provider %q has no handler",
+			poolName, m.Provider,
+		))
+	}
+	caps := upCaps[m.Provider]
+	inflights := upInFlight[m.Provider]
+	return handler.ModelPoolMember{
+		Provider: m.Provider,
+		Model:    m.Model,
+		Weight:   m.Weight,
+		Overflow: m.Overflow,
+		Handler:  providerHandler,
+		InFlight: func() int {
+			return sumInFlight(inflights)
+		},
+		Saturated: func() bool {
+			return providerSaturated(caps, inflights)
+		},
+	}, nil
+}
+
+// sumInFlight totals a provider's per-upstream in-flight counters, treating
+// nil (an uncapped upstream) as 0.
+func sumInFlight(inflights []func() int) int {
+	total := 0
+	for _, fn := range inflights {
+		if fn != nil {
+			total += fn()
+		}
+	}
+	return total
+}
+
+// providerSaturated reports whether a provider is at capacity: every capped
+// upstream is at its cap, and a single uncapped upstream makes it never
+// saturated.
+func providerSaturated(caps []int, inflights []func() int) bool {
+	if len(caps) == 0 {
+		return false
+	}
+	for i, cap := range caps {
+		if cap <= 0 || inflights[i] == nil || inflights[i]() < cap {
+			return false
+		}
+	}
+	return true
+}
+
 // buildMux wires the operator-local admin handlers and the model router
 // into a ServeMux. Admin endpoints are: /healthz, /readiness, /metrics,
 // /setloglevel/, /enabletrace, /disabletrace, /gc, HEAD /{$}, /api/hello,
-// and the catch-all 404 logger. The model router is wrapped in the auth middleware
-// when allowedKeys is non-empty, and in the trace middleware when trace is
-// true. Auth sits INSIDE trace so the trace middleware still observes
-// x-api-key (redacted) and still captures requests auth rejects, while
-// the header is gone before the request reaches the model router.
+// and the catch-all 404 logger. The model router is wrapped, deepest first,
+// in the session middleware (strips x-session-id outbound and carries it on
+// the context for the upstream pool handler to pin on), then the auth
+// middleware when allowedKeys is non-empty, then the trace middleware when
+// trace is true — so the chain is trace → auth → session → modelRouter. Auth
+// sits INSIDE trace so the trace middleware still observes x-api-key
+// (redacted) and still captures requests auth rejects, while the header is
+// gone before the request reaches the model router; session sits inside auth
+// so x-session-id is read and stripped before dispatch and never reaches an
+// upstream.
 func buildMux(
 	modelRouter http.Handler,
 	trace bool,
@@ -313,7 +486,7 @@ func buildMux(
 			handler.IsLoopbackRemoteAddr,
 		),
 	)
-	v1Handler := http.Handler(modelRouter)
+	v1Handler := http.Handler(handler.NewSessionMiddleware(modelRouter))
 	v1Handler = handler.NewAuthMiddleware(v1Handler, allowedKeys)
 	if trace {
 		glog.V(2).Infof("trace enabled via config")

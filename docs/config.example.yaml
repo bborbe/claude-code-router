@@ -52,6 +52,14 @@ providers:
     # maxConcurrentRequests: 8 on each seibert vllm provider that points at it.
     # maxConcurrentRequests: 8     # optional; cap concurrent /v1/* requests to this provider. Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # upstreams:                   # optional; alternative to `upstream:` — a pool of servers (see docs/config.md ## Upstream pools).
+    #   - upstream: http://localhost:11434
+    #     token: "ollama"
+    #     weight: 1
+    #     maxConcurrentRequests: 8
+    #     maxConcurrentWaitSeconds: 30
+    #   - upstream: http://localhost:11435
+    #     weight: 1
 
 # Short names that map to full model identifiers.
 # Operator-facing only — the upstream always sees the resolved full name.
@@ -60,3 +68,12 @@ aliases:
   qwen: qwen3.6:35b-a3b-coding-nvfp4
   minimax: MiniMax-M3-highspeed
   opus: claude-opus-4-7
+
+# model_pools:                 # optional; invented model names that resolve to a choice of providers (see docs/config.md ## Model pools).
+#   coding:
+#     - provider: deepseek-pool      # required; must exist under providers:
+#       model: deepseek-v4-flash     # required; the fixed concrete model this member serves
+#       weight: 2                    # optional; default 1. Share of pinned sessions this member receives.
+#       overflow: true               # optional; default false. Allow failover to a sibling when this member's provider is saturated.
+#     - provider: minimax-pool
+#       model: MiniMax-2.7

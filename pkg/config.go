@@ -35,6 +35,14 @@ type Config struct {
 	// `{"model":"qwen3.6:35b-a3b-coding-nvfp4"}` before the router
 	// walks providers' models globs. Nil / empty map = no-op.
 	Aliases map[string]string `yaml:"aliases,omitempty"`
+	// ModelPools maps an invented model name to an ordered list of
+	// members (spec 013). A client that sends `model: <poolname>` gets
+	// the request body's model field rewritten to one member's concrete
+	// model and routed through that member's provider — the router picks
+	// the member per session, the client never sees it. Unlike Aliases
+	// (one name -> one model), a pool name maps to a choice of models.
+	// Nil / empty map = no-op.
+	ModelPools map[string][]ModelPoolMember `yaml:"model_pools,omitempty"`
 	// Trace, when true, enables per-request trace logging for /v1/*
 	// requests: every request writes one JSON file capturing the full
 	// request and response to ~/.claude-code-router/trace/. When false
@@ -56,7 +64,7 @@ type Config struct {
 	// are equivalent and all mean: no key enforcement and no key routing —
 	// the /v1/* path behaves exactly as it does today. Keys are literal
 	// strings, like provider token: fields.
-	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty" display:"length"`
 	// ProviderOrder records the provider keys in YAML declaration order,
 	// captured during unmarshal. Go maps cannot preserve iteration order, but
 	// the router's "walk providers in declaration order, first glob match
@@ -116,7 +124,7 @@ type AuthConfig struct {
 	// Key is the legacy shared secret field. Kept solely so a legacy `auth:`
 	// block still parses and is rejected at load; a non-nil AuthConfig makes
 	// Config.Validate fail the config (fail-closed migration guard).
-	Key string `yaml:"key"`
+	Key string `yaml:"key" display:"length"`
 }
 
 // Provider describes one upstream LLM API.
@@ -126,7 +134,7 @@ type Provider struct {
 	// Token, if set, replaces the client's Authorization header with
 	// "Bearer <Token>". If empty, the client's Authorization is
 	// forwarded verbatim — used for the subscription-OAuth case.
-	Token string `yaml:"token,omitempty"`
+	Token string `yaml:"token,omitempty"                    display:"length"`
 	// Models is the list of glob patterns (filepath.Match syntax) the
 	// router uses to match request body's `model` field. Examples:
 	// "claude-opus-*", "MiniMax-*", "qwen*".
@@ -155,7 +163,7 @@ type Provider struct {
 	// A key must NOT be claimed by more than one provider (validation
 	// error, see Config.Validate). Absent, null, and empty all mean: this
 	// provider claims no keys, so it is only reachable via glob routing.
-	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"`
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"           display:"length"`
 	// MaxConcurrentRequests, when > 0, caps how many /v1/* requests this
 	// provider forwards upstream at the same time. Requests beyond the cap
 	// queue for up to MaxConcurrentWaitSeconds; a request still waiting
@@ -169,6 +177,44 @@ type Provider struct {
 	// capped provider (MaxConcurrentRequests > 0); absent, 0, or negative
 	// resolves to the 30s default at wiring.
 	MaxConcurrentWaitSeconds int `yaml:"maxConcurrentWaitSeconds,omitempty"`
+	// Upstreams is the pool of servers this provider routes to. When
+	// present it wins over the legacy single Upstream field; validation
+	// rejects a provider that sets both. Absent, the legacy form is
+	// synthesized into a one-entry pool by normalizeUpstreams, so after
+	// Load every provider has a non-empty Upstreams (spec 012).
+	Upstreams []Upstream `yaml:"upstreams,omitempty"`
+}
+
+// Upstream is one server in a provider's pool. When a provider
+// declares an `upstreams:` list, every /v1/* request for that
+// provider is dispatched to exactly one member: a request carrying an
+// x-session-id header is pinned to the same member every time
+// (weighted ring hash of the session id), a request without one goes
+// to the least-loaded member, and each member independently enforces
+// its own MaxConcurrentRequests cap. Weight defaults to 1 when absent
+// or 0; a negative weight is rejected at validation. The legacy single
+// `upstream:` form is sugar for a one-entry pool with Weight 1 whose
+// caps are the provider-level values (spec 012).
+type Upstream struct {
+	Upstream                 string `yaml:"upstream"`
+	Token                    string `yaml:"token,omitempty" display:"length"`
+	Weight                   int    `yaml:"weight,omitempty"`
+	MaxConcurrentRequests    int    `yaml:"maxConcurrentRequests,omitempty"`
+	MaxConcurrentWaitSeconds int    `yaml:"maxConcurrentWaitSeconds,omitempty"`
+}
+
+// ModelPoolMember is one candidate of a model pool: the provider to
+// route through, the fixed concrete model string that provider sees,
+// the weight for session-pinned member selection (default 1), and
+// whether the member may overflow to a sibling when its provider is
+// saturated (default false). Model is the concrete string sent to
+// that provider — it may itself match the provider's models globs,
+// which is the normal case (spec 013).
+type ModelPoolMember struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+	Weight   int    `yaml:"weight,omitempty"`
+	Overflow bool   `yaml:"overflow,omitempty"`
 }
 
 // Load reads, parses, and validates the config at path. Tilde-prefix
@@ -196,6 +242,9 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 //
 //nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
 func (c *Config) Validate(ctx context.Context) error {
+	if err := c.normalizeUpstreams(ctx); err != nil {
+		return errors.Wrapf(ctx, err, "normalize upstreams")
+	}
 	if c.Auth != nil {
 		return errors.New(
 			ctx,
@@ -220,8 +269,21 @@ func (c *Config) Validate(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		if prov.Upstream == "" {
-			return errors.New(ctx, fmt.Sprintf("provider %q: upstream is required", name))
+		for _, up := range prov.Upstreams {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if up.Upstream == "" {
+				return errors.New(ctx, fmt.Sprintf("provider %q: upstream is required", name))
+			}
+			if up.Weight < 0 {
+				return errors.New(ctx, fmt.Sprintf(
+					"provider %q: upstream weight must be > 0 (got %d)",
+					name, up.Weight,
+				))
+			}
 		}
 		for _, pattern := range prov.Models {
 			select {
@@ -255,7 +317,84 @@ func (c *Config) Validate(ctx context.Context) error {
 	if err := c.validateAllowedApiKeyClaims(ctx); err != nil {
 		return errors.Wrapf(ctx, err, "validate allowedApiKeys")
 	}
+	if err := c.validateModelPools(ctx); err != nil {
+		return errors.Wrapf(ctx, err, "validate model_pools")
+	}
 	return c.validateAliases(ctx)
+}
+
+// normalizeUpstreams reconciles the legacy single-upstream form with the
+// upstreams pool, so the per-provider validation loop only ever sees
+// Upstreams entries. Contract:
+//
+//   - A provider that sets both `upstream` and `upstreams` is rejected —
+//     the two forms are mutually exclusive (spec 012).
+//   - A provider with no `upstreams` is synthesized into a one-entry pool
+//     carrying its provider-level token and caps with Weight 1, written
+//     back into c.Providers.
+//   - Every explicitly-declared entry with Weight 0 gets Weight 1 (with a
+//     plain int field yaml.v3 cannot distinguish `weight: 0` from an absent
+//     key, so 0 is the default, not a misconfiguration).
+//
+// After this step every provider in c.Providers has a non-empty Upstreams.
+//
+//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
+func (c *Config) normalizeUpstreams(ctx context.Context) error {
+	for name, prov := range c.Providers {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if prov.Upstream != "" && len(prov.Upstreams) > 0 {
+			return errors.New(ctx, fmt.Sprintf(
+				"provider %q: specify either `upstream` or `upstreams`, not both",
+				name,
+			))
+		}
+		if len(prov.Upstreams) == 0 {
+			prov.Upstreams = []Upstream{{
+				Upstream:                 prov.Upstream,
+				Token:                    prov.Token,
+				Weight:                   1,
+				MaxConcurrentRequests:    prov.MaxConcurrentRequests,
+				MaxConcurrentWaitSeconds: prov.MaxConcurrentWaitSeconds,
+			}}
+		}
+		for i := range prov.Upstreams {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if prov.Upstreams[i].Weight == 0 {
+				prov.Upstreams[i].Weight = 1
+			}
+		}
+		c.Providers[name] = prov
+	}
+	return nil
+}
+
+// UpstreamList returns the pool of upstreams this provider routes to:
+// the configured Upstreams when present, else the legacy single
+// upstream synthesized as a one-entry pool with Weight 1 and the
+// provider-level caps. Config.Validate already normalizes Load-ed
+// configs, so this is always the configured list there; the fallback
+// keeps programmatically-built configs (tests and direct
+// CreateRouterFromConfig callers that bypass Load) working with the
+// legacy single-upstream form.
+func (p Provider) UpstreamList() []Upstream {
+	if len(p.Upstreams) > 0 {
+		return p.Upstreams
+	}
+	return []Upstream{{
+		Upstream:                 p.Upstream,
+		Token:                    p.Token,
+		Weight:                   1,
+		MaxConcurrentRequests:    p.MaxConcurrentRequests,
+		MaxConcurrentWaitSeconds: p.MaxConcurrentWaitSeconds,
+	}}
 }
 
 func (c *Config) validateAllowedApiKeyClaims(ctx context.Context) error {
@@ -362,6 +501,67 @@ func (c *Config) validateAliases(ctx context.Context) error {
 				`alias target %q (from alias key %q) matches no provider glob`,
 				target, aliasKey,
 			)
+		}
+	}
+	return nil
+}
+
+// validateModelPools checks the model_pools contract: every member's
+// provider must exist, weights are defaulted or rejected, and a pool
+// may not repeat a (provider, model) pair. Error messages always name
+// the pool, never rely on map iteration order. A pool member's model
+// is deliberately NOT matched against any provider glob — it is the
+// concrete string sent to that provider directly.
+//
+//nolint:gocognit // per-loop ctx cancellation checks; matches model-router.go precedent
+func (c *Config) validateModelPools(ctx context.Context) error {
+	for name := range c.ModelPools {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if len(c.ModelPools[name]) == 0 {
+			return errors.New(ctx, fmt.Sprintf(
+				"model pool %q: must declare at least one member",
+				name,
+			))
+		}
+		seen := make(map[[2]string]struct{})
+		for i := range c.ModelPools[name] {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			member := c.ModelPools[name][i]
+			if _, ok := c.Providers[member.Provider]; !ok {
+				return errors.New(ctx, fmt.Sprintf(
+					"model pool %q: unknown provider %q",
+					name, member.Provider,
+				))
+			}
+			if member.Weight < 0 {
+				return errors.New(ctx, fmt.Sprintf(
+					"model pool %q: member weight must be > 0 (got %d)",
+					name, member.Weight,
+				))
+			}
+			if member.Weight == 0 {
+				// Write back in place: a plain int field cannot distinguish
+				// `weight: 0` from an absent key (same resolution the
+				// sibling Upstream.Weight uses), so 0 is the default 1.
+				c.ModelPools[name][i].Weight = 1
+				member.Weight = 1
+			}
+			pair := [2]string{member.Provider, member.Model}
+			if _, ok := seen[pair]; ok {
+				return errors.New(ctx, fmt.Sprintf(
+					"model pool %q: duplicate member (provider %q, model %q)",
+					name, member.Provider, member.Model,
+				))
+			}
+			seen[pair] = struct{}{}
 		}
 	}
 	return nil

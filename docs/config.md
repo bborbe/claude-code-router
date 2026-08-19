@@ -21,6 +21,13 @@ allowedApiKeys:                  # optional; list of API keys authenticating non
 
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
+# model_pools:               # optional; invented model names that resolve to a choice of providers (see ## Model pools). Each entry carries provider/model/weight/overflow.
+#   <poolname>:
+#     - provider: <provider-key>   # required; must exist under providers:
+#       model: <concrete-model>    # required; the fixed model string that provider sees
+#       weight: 1                  # optional; default 1. Relative share of pinned sessions this member receives.
+#       overflow: false            # optional; default false. If true, a saturated pinned member may fail over to a sibling member.
+
 providers:
   <provider-key>:
     upstream: <URL>                    # required; e.g. https://api.anthropic.com
@@ -34,6 +41,12 @@ providers:
     # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
     # maxConcurrentRequests: 8   # optional; cap concurrent /v1/* requests to THIS provider (see ## Concurrency limit). Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # upstreams:                  # optional; alternative to `upstream:` — a pool of servers. Each entry carries upstream/token/weight/maxConcurrentRequests/maxConcurrentWaitSeconds (see ## Upstream pools). Mutually exclusive with `upstream:`.
+    #   - upstream: <URL>
+    #     token: <string>         # optional; per-member token (defaults to the provider token semantics: absent = pass client's Authorization through)
+    #     weight: 1               # optional; default 1. Relative share of pinned sessions this member receives.
+    #     maxConcurrentRequests: 8   # optional; per-member cap. Absent or 0 or negative = unlimited.
+    #     maxConcurrentWaitSeconds: 30 # optional; per-member queue wait before HTTP 429 (default 30)
 ```
 
 ## Routing
@@ -70,7 +83,7 @@ Then in any Claude Code session:
 - **Single-hop.** If `aliases: {a: b, b: c}` and the request uses `model: a`, the upstream receives `model: b` — NOT `c`. The router resolves once and forwards.
 - **Case-sensitive.** `aliases["Qwen"]` and `aliases["qwen"]` are distinct entries (same byte-exact match as provider glob keys).
 - **Optional.** Configs without an `aliases:` block route exactly as before. Backward-compatible.
-- **Log line.** On a hit, the router logs `[alias] qwen -> qwen3.6:35b-a3b-coding-nvfp4` at glog `V(1)` — visible in `/tmp/claude-code-router.log` when the router runs with `-v=1` or higher.
+- **Log line.** On a hit, the router logs `[alias] qwen -> qwen3.6:35b-a3b-coding-nvfp4` at glog `V(2)` — visible in `/tmp/claude-code-router.log` when the router runs with `-v=2` or higher (raise the level with `curl http://127.0.0.1:8788/setloglevel/2`).
 
 ### Validation
 
@@ -78,6 +91,33 @@ Then in any Claude Code session:
 |---|---|
 | Alias key equals a provider name (e.g. `aliases: { minimax: ... }` AND `providers: { minimax: ... }`) | **Error** at `config.Load` — daemon refuses to start. Operator must rename the alias key or the provider. |
 | Alias target matches no provider's `models:` glob (e.g. `aliases: { foo: typo-name }` where no provider lists `typo-name*`) | **Warning** at startup via glog (`[config] alias target "typo-name" (from alias key "foo") matches no provider glob`); config still loads. At runtime, requests using that alias get rewritten to the typo string and fall through to `default_provider`, which likely returns 404. Operator notices the warning at startup. |
+
+## Model pools
+
+The optional top-level `model_pools:` block maps an invented model name (e.g. `coding`) to an ordered list of members, each naming a provider, a fixed concrete model, an optional weight, and an optional overflow flag. A client sends `model: <poolname>`; the router picks one member, rewrites the request body's `model` field to that member's fixed concrete model, and routes through that member's provider — the client never sees which member it got. The provider then applies its own upstream pool + session pinning + caps (see ## Upstream pools).
+
+```yaml
+model_pools:
+  coding:
+    - provider: deepseek-pool       # required; must exist under providers:
+      model: deepseek-v4-flash      # required; the fixed concrete model this member serves
+      weight: 2                     # optional; default 1. Share of pinned sessions this member receives.
+      overflow: true                # optional; default false. Allow failover to a sibling when this member's provider is saturated.
+    - provider: minimax-pool
+      model: MiniMax-2.7
+```
+
+- **Per-member fields.** `provider` is required and must name a key under `providers:` — an unknown provider fails config load with an error naming the pool. `model` is required; the fixed concrete model string that provider sees — it may itself match that provider's `models:` globs, which is the normal case. `weight` is optional and defaults to 1; a negative weight is rejected at config load, and `weight: 0` and an absent key both resolve to the default 1. `weight` is the relative share of PINNED sessions this member receives — a 2:1 weight over two members sends roughly 2/3 of pinned sessions to the heavier member. `overflow` is optional and defaults to false (see failover below).
+- **Session pinning.** A client that sets an `x-session-id` header (e.g. `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<id>"}'` in Claude Code) is pinned to the same pool member on every request via a weighted ring hash of the id — deterministic and stateless (FNV-1a over the id, no session→member map), so the member's prompt cache stays warm and the session consistently sees one provider's model. The same id over a two-member pool resolves to the same member across requests and restarts. The header is used only as the selection key, never for auth, and is stripped before forwarding (see ## Upstream pools).
+- **Idless least-loaded.** A request without `x-session-id` is sent to the least-loaded member — the fewest in-flight requests at the member's provider — with round-robin tie-breaking among equally-loaded members, so an idless burst (e.g. dark-factory containers) spreads across the members instead of stacking on the first-declared one.
+- **Overflow failover.** When the pinned member's provider is saturated (every capped upstream at its concurrency cap — see ## Upstream pools) and the member declares `overflow: true`, the request fails over to the least-loaded sibling member — availability over cache warmth, which costs nothing here because members are different providers/caches anyway. The `[route]` line names the member that actually served the request. With `overflow: false` (the default), the request stays on its pinned member and the provider's own concurrency semantics apply — it waits and answers HTTP 429 with the Anthropic-shaped `rate_limit_error` body (see ## Concurrency limit / ## Upstream pools).
+- **Fall-through.** A model name that is not a configured pool name is untouched — it flows through the existing alias + provider-glob routing exactly as before. `model_pools:` names do not interact with `aliases:`; the two blocks are independent ("one name → one model" vs "one name → a choice of models").
+- **Validation.** An unknown provider, a negative weight, a duplicate `(provider, model)` pair within a pool, and an empty member list all fail config load with an error naming the pool (the same pair in two different pools is not a duplicate). `weight: 0` and an absent weight both mean the default 1.
+- **Observability.** Each pool resolution logs `[route] model=<poolname> -> provider=<provider> model=<concrete>` at glog `V(2)` — the same verbosity as the `[route] model=... matched ...` detail lines — the operator evidence of which member served a session. The `[req]` line and `ccrouter_requests_total` / `ccrouter_tokens_total` metrics are unchanged; the metrics' model label is the concrete member model the upstream saw.
+- **SIGHUP applies changes.** A change to `model_pools:` (add/remove a member, change a weight or overflow flag) applies on SIGHUP without a restart — the reloader rebuilds the pool table (see ## Reload).
+- **Security.** A pool name is ordinary client input like any model string — it never widens access; resolution only selects among configured members and their providers' existing auth. The rewritten body carries only the member's configured concrete model — a client cannot inject an arbitrary model string via a pool name.
+
+A short worked example: two Claude Code sessions with distinct `x-session-id` values both send `model: coding` — the weighted ring hash pins each id to its own slot, so each session lands on its own member consistently (`deepseek-pool/deepseek-v4-flash` and `minimax-pool/MiniMax-2.7`), and each upstream log sees only its own model name in the body.
 
 ## Requires leading system
 
@@ -138,6 +178,50 @@ providers:
 - **SIGHUP applies changes.** Both fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider limiters, so a changed cap (or its removal) is live without a restart.
 - **Observability is unchanged.** No new metrics. A router-issued 429 appears in the existing `[req] ... status=429` log line and the existing `4xx_rate_limited` class of `ccrouter_requests_total` — the same class as an upstream's own 429.
 - **Suggested use.** `vllm.seibert.tools` enforces its own per-user ceiling of 8 concurrent requests. Set `maxConcurrentRequests: 8` on both seibert vllm providers (`seibert-vllm-default` and `seibert-dark-factory`) so the router queues instead of the upstream rejecting.
+
+## Upstream pools
+
+A provider with more than one server replaces the single `upstream:` field with an `upstreams:` list — a pool of servers the router spreads sessions and keyless traffic across. Each entry carries its own URL, optional token, weight, and per-server concurrency cap:
+
+```yaml
+providers:
+  <provider-key>:
+    upstreams:
+      - upstream: http://vllm-1:8000
+        token: "<key>"
+        weight: 2
+        maxConcurrentRequests: 8
+        maxConcurrentWaitSeconds: 30
+      - upstream: http://vllm-2:8000
+        weight: 1
+```
+
+- **Schema recap.** `upstreams:` is the alternative to `upstream:` for a provider with more than one server; the two are mutually exclusive, and a provider setting both fails to load. The legacy single `upstream:` / `token:` / provider-level `maxConcurrentRequests` / `maxConcurrentWaitSeconds` form loads unchanged as a one-entry pool with weight 1 — the provider-level caps become the single entry's caps, so nothing an operator has today needs editing.
+- **Per-entry fields.** `upstream` is required on every entry. `token` is per-member: absent means the client's `Authorization` header passes through, exactly like the provider-level token semantics. `weight` defaults to 1; a negative weight is rejected at config load, and `weight: 0` or an absent key resolves to 1. `maxConcurrentRequests` / `maxConcurrentWaitSeconds` are the per-member cap with the same spec-011 semantics as the provider-level fields (see ## Concurrency limit).
+- **Session pinning.** A client that sets an `x-session-id` header (e.g. `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<id>"}'` in Claude Code) is pinned to the same pool member on every request via a weighted ring hash of the id — deterministic and stateless (FNV-1a over the id, no session→member map), so the session's upstream prompt cache stays warm on that one server, including across restarts. The header is stripped before forwarding, so upstreams never see it, and it is used only for pinning, never for auth. An absent header means a keyless request.
+- **Keyless least-loaded.** A request without `x-session-id` is sent to the least-loaded member — the fewest in-flight requests by that member's concurrency semaphore — with round-robin tie-breaking among equally-loaded members, so keyless floods (e.g. dark-factory containers) spread across the pool instead of stacking on the first-declared server.
+- **Per-member caps are independent.** Each member enforces its own `maxConcurrentRequests` — two members each allowing 8 do not share one global cap of 8. A request that queues past `maxConcurrentWaitSeconds` is answered HTTP 429 with the same Anthropic-shaped `rate_limit_error` body as the provider-level cap (see ## Concurrency limit).
+- **Member down.** A member that fails answers with the existing sanitized 502 (unchanged behavior) — there is no probe-and-rotate. The operator removes or repairs the member and SIGHUPs, and the next `[route]` log line reflects the pool without it.
+- **Client disconnect while queued.** No slot is held — a slot is acquired only at dispatch — so a client that disconnects while queued never consumes concurrency, and the 429 write to the dead connection fails harmlessly (spec-011 semantics).
+- **Observability.** Each dispatch logs `[route] session=<id> upstream=<url>` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines — the operator evidence that a session is pinned and that keyless load is spreading. The `[req]` line is unchanged.
+- **SIGHUP applies changes.** A change to `upstreams:` (add/remove a member, change a weight or cap) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config.
+- **Suggested use.** Five DeepSeek vLLM instances under vllm's per-user ceiling of 8 concurrent requests: give each member `maxConcurrentRequests: 8` so the router queues instead of the upstream rejecting, and pin every Claude Code session to its own member so each session's prompt cache stays warm on one server:
+
+```yaml
+providers:
+  seibert-vllm-default:
+    upstreams:
+      - upstream: http://vllm-1:8000
+        weight: 1
+        maxConcurrentRequests: 8
+      - upstream: http://vllm-2:8000
+        weight: 1
+        maxConcurrentRequests: 8
+    models:
+      - "deepseek-v4-*"
+```
+
+With two Claude Code sessions (each set `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<unique id>"}'`), the `[route] session=<id> upstream=<url>` lines name a distinct member per session, and every request within one session names the same member — two sessions, two servers, warm caches on both.
 
 ## Auth
 

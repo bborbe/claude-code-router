@@ -28,6 +28,8 @@ const limiter429Body = `{"type":"error","error":{"type":"rate_limit_error","mess
 // and a client that disconnects while queued never acquires a slot.
 // The slot is held for the full duration of next.ServeHTTP — including
 // streaming SSE responses — and released only when it returns.
+// InFlight reports the semaphore occupancy — the per-upstream in-flight
+// count the upstream pool handler's least-loaded selection reads.
 // maxConcurrentWait must be > 0; the factory resolves the 30s default
 // (spec DB 5) before constructing.
 func NewConcurrencyLimiter(
@@ -49,6 +51,17 @@ type concurrencyLimiter struct {
 	next http.Handler
 	sem  chan struct{}
 	wait time.Duration
+}
+
+// InFlight returns the number of slots currently held — the number of
+// requests this limiter is currently serving. It is the per-upstream
+// in-flight count the pool handler's least-loaded selection reads
+// (spec 012 DB 4). Only valid on a real limiter (constructed with
+// maxConcurrentRequests > 0); the <= 0 no-op path returns next
+// unchanged and has no limiter, and the pool handler treats a missing
+// counter as 0.
+func (l *concurrencyLimiter) InFlight() int {
+	return len(l.sem)
 }
 
 // ServeHTTP runs entirely in the request goroutine: it acquires a slot
