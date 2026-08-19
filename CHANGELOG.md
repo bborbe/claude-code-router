@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: thread context cancellation into the time-window `eligibleIndices()` eligibility scans (upstream pool handler + model pool) so a cancelled request aborts the scan, and add `display:"length"` to `ModelRoute.AllowedApiKeys`. These are the PR-review fixes landed after v0.41.0 was cut on the feature branch.
+
 ## v0.41.0
 
 - feat: document the per-upstream `window:` time-of-day eligibility block in `docs/config.md` (new `## Time-of-day windows` section + schema reference) and `docs/config.example.yaml` (commented examples) — a pool member can declare an optional `window:` with `from` / `until` as `"HH:MM <location>"` time-of-day values, each carrying its IANA location inline (no separate timezone field), on `upstreams:` entries and on the legacy single-`upstream:` provider form (a provider-level window is copied onto the implicit single member like the caps); a member whose window does not contain "now" (the injected clock, evaluated in the value's attached location) is ineligible for that dispatch — excluded from session pinning and keyless least-loaded selection; when no member of a provider's pool is eligible the provider is ineligible and the model falls through declaration order to the next matching provider or `default_provider`, with a closed window being eligibility only (never a router error, never a 429) and the fall-through logged as `[route] provider=<p> window=closed -> <fallback>`; overnight windows (`from` > `until`) wrap; a session pinned to a member whose window closes re-resolves on its next request while an in-flight request completes; config validation rejects malformed times, unknown IANA locations, a window with only one boundary, and a provider-level window combined with an `upstreams:` list; SIGHUP reload rebuilds the pool tree so window changes are live without a restart.
