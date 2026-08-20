@@ -836,6 +836,106 @@ providers:
 		})
 	})
 
+	Context("default_token", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave DefaultToken empty, so every fixture goes through Load, not
+		// struct literals. Providers use https://a.example style URLs.
+		providers := `
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+`
+
+		It(
+			"parses a top-level default_token alongside token-less and token-bearing providers",
+			func() {
+				p := write(providers + `
+  y:
+    upstream: https://b.example
+    token: "provider-key"
+    models: ["bar-*"]
+default_token: "sk-global-123"
+`)
+				cfg, err := pkgcfg.Load(context.Background(), p)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.DefaultToken).To(Equal("sk-global-123"))
+				Expect(cfg.Providers["x"].Token).To(BeEmpty())
+				Expect(cfg.Providers["y"].Token).To(Equal("provider-key"))
+			},
+		)
+
+		It("treats an empty default_token as no global default", func() {
+			p := write(providers + `
+default_token: ""
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DefaultToken).To(BeEmpty())
+		})
+
+		It("rejects a non-scalar default_token (nested mapping) at load", func() {
+			p := write(providers + `
+default_token:
+  foo: bar
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("rejects a non-scalar default_token (list) at load", func() {
+			p := write(providers + `
+default_token:
+  - "a"
+  - "b"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("loads a config without default_token unchanged — backward compat", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    token: "provider-key"
+    models: ["foo-*"]
+  y:
+    models: ["bar-*"]
+    upstreams:
+      - upstream: https://b.example
+        token: "member-key"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DefaultToken).To(BeEmpty())
+			Expect(cfg.Providers["x"].Token).To(Equal("provider-key"))
+			Expect(cfg.Providers["y"].Upstreams).To(HaveLen(1))
+			Expect(cfg.Providers["y"].Upstreams[0].Token).To(Equal("member-key"))
+		})
+
+		It("loads a top-level default_token alongside a provider token — both intact", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    token: "provider-key"
+    models: ["foo-*"]
+default_token: "sk-global-123"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DefaultToken).To(Equal("sk-global-123"))
+			Expect(cfg.Providers["x"].Token).To(Equal("provider-key"))
+		})
+	})
+
 	Context("maxConcurrentRequests", func() {
 		loadProvider := func(extra string) (*pkgcfg.Config, error) {
 			p := write(`

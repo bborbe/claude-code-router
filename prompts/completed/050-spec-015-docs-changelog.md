@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [015-global-default-provider-token]
+summary: 'Documented the top-level default_token: field and its three-way outbound-auth resolution order in docs/config.md (schema + rewritten ## Auth), docs/config.example.yaml (commented example + minimax override comment), and extended CHANGELOG.md ## Unreleased with a feat: bullet; make precommit exits 0.'
+execution_id: claude-code-router-global-token-exec-050-spec-015-docs-changelog
+dark-factory-version: dev
 created: "2026-08-20T14:52:00Z"
 queued: "2026-08-20T15:11:09Z"
+started: "2026-08-20T15:34:34Z"
+completed: "2026-08-20T15:38:00Z"
 ---
 
 # Docs + changelog: top-level `default_token:` (global default outbound key)

@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [015-global-default-provider-token]
+summary: Wired spec-015 effective-token resolution (member token → global default_token → client passthrough) into the factory's per-upstream auth-swap construction, flipped the auth-swap/logging nesting so the V(3) [upstream.headers] line reflects the swapped outbound Authorization, added a 7-row full-path wiring test file (inherit/override/passthrough/pool-fallback/SIGHUP-rebuild + no-literal-key security evidence), and added the CHANGELOG Unreleased entry
+execution_id: claude-code-router-global-token-exec-049-spec-015-resolution-wiring
+dark-factory-version: dev
 created: "2026-08-20T14:51:00Z"
 queued: "2026-08-20T15:11:09Z"
+started: "2026-08-20T15:28:34Z"
+completed: "2026-08-20T15:34:33Z"
 ---
 
 # Factory resolution: effective outbound token (member `token:` → global `default_token:` → client passthrough) + wiring tests

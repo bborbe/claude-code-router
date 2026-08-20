@@ -229,13 +229,32 @@ func CreateRouterFromConfig(
 					up.Upstream,
 				)
 			}
-			transport := handler.NewLoggingRoundTripper(
-				handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), up.Token),
-				liblog.SamplerList{
-					liblog.NewSampleTime(time.Second),
-					liblog.NewSamplerGlogLevel(5),
-				},
-				libtime.NewCurrentDateTime(),
+			// Effective outbound token (spec 015): the member's own token wins (for
+			// legacy single-upstream configs normalizeUpstreams/UpstreamList already
+			// copied the provider-level token onto this member), else the top-level
+			// default_token, else empty — an empty effective token keeps the
+			// auth-swap no-op contract (client Authorization passes through).
+			token := up.Token
+			if token == "" {
+				token = cfg.DefaultToken
+			}
+			// Auth-swap OUTER, logging INNER: the V(3) [upstream.headers] line (inside
+			// the logging roundtripper) must reflect the SWAPPED outbound
+			// Authorization — the operator evidence of which effective token went out
+			// (spec 015 AC 2, <redacted len=N> distinguishes the global key from an
+			// override key). With logging outer the line would show the client's
+			// pre-swap header instead. An empty token returns the logging transport
+			// unchanged (passthrough), identical to today's no-op wiring.
+			transport := handler.NewAuthSwapTransport(
+				handler.NewLoggingRoundTripper(
+					handler.DefaultProxyTransport(),
+					liblog.SamplerList{
+						liblog.NewSampleTime(time.Second),
+						liblog.NewSamplerGlogLevel(5),
+					},
+					libtime.NewCurrentDateTime(),
+				),
+				token,
 			)
 			proxy := handler.NewAnthropicProxyHandler(upstream, transport)
 			waitSeconds := up.MaxConcurrentWaitSeconds
