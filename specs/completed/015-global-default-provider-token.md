@@ -1,10 +1,11 @@
 ---
-status: verifying
+status: completed
 tags:
     - dark-factory
     - spec
 approved: "2026-08-20T14:38:39Z"
 verifying: "2026-08-20T15:38:01Z"
+completed: "2026-08-20T16:00:43Z"
 branch: dark-factory/global-default-provider-token
 ---
 
