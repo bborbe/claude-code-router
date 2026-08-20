@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update Go to 1.26.6 and update dependencies
+
 ## v0.38.0
 
 - feat: document the `model_pools:` block in `docs/config.md` (new `## Model pools` section + schema reference) and `docs/config.example.yaml` (commented two-member example) — a top-level `model_pools:` map turns an invented model name (e.g. `coding`) into an ordered list of `ModelPoolMember`s, each with a required `provider` (must exist under `providers:`) and `model` (the fixed concrete model string that provider sees), plus optional `weight` (default 1, negative rejected at load) and `overflow` (default false); a client-sent `model: <poolname>` is resolved by the pool pre-step BEFORE alias/key/glob routing — the body's `model` field is rewritten to the member's concrete model (`rewriteModelField`) and routed through that member's provider, whose own upstream pool, session pinning, and caps then apply (see `## Upstream pools`); a client setting `x-session-id` is pinned to the same member on every request via a stateless weighted ring hash of the id (same session stays on the same member across requests and restarts for cache warmth), an idless request goes to the least-loaded member with round-robin tie-breaking so bursts spread instead of stacking on the first-declared member, `weight` scales each member's share of pinned sessions, a pinned member whose provider is saturated overflows to the least-loaded sibling only when it declares `overflow: true` (the default keeps the request on its pinned member and its provider's own limiter answers HTTP 429), a non-pool model name falls through to the existing alias + provider-glob routing untouched (`model_pools:` and `aliases:` are independent), config validation rejects an unknown provider / negative weight / duplicate `(provider, model)` pair / empty member list naming the pool, and a SIGHUP reload rebuilds the pool table so pool edits are live without a restart.
