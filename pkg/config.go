@@ -31,6 +31,16 @@ import (
 type Config struct {
 	Router    Router              `yaml:"router"`
 	Providers map[string]Provider `yaml:"providers"`
+	// DefaultToken is the optional top-level shared outbound bearer key
+	// (spec 015). Every provider — and every Upstream pool member — that
+	// declares no token: of its own resolves its outbound Authorization to
+	// Bearer <DefaultToken>; a provider/member token: overrides it; with
+	// neither set, the client's Authorization header passes through
+	// unchanged. Absent or empty = no global default, today's behavior.
+	// The key is operator config read only at wiring — never from client
+	// input — and flows only in the outbound Authorization header, never
+	// into logs or trace files (redacted like every other token).
+	DefaultToken string `yaml:"default_token,omitempty" display:"length"`
 	// Aliases maps a short operator-typed model name to the full
 	// model string the upstream expects. Resolved single-hop before
 	// glob-routing: a request body `{"model":"qwen"}` becomes

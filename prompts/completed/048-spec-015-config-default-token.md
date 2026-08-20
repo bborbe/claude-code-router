@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [015-global-default-provider-token]
+summary: Landed the spec-015 top-level DefaultToken config field (default_token:) on Config in pkg/config.go with the frozen yaml tag + display:"length" redaction tag and zero validation change, plus six yaml-boundary Load rows in pkg/config_test.go (valid parse, empty string, non-scalar mapping/list rejection, backward-compat, coexistence with a provider token); per the prompt's explicit constraint, docs/ and CHANGELOG.md were left for spec-015 prompt 3.
+execution_id: claude-code-router-global-token-exec-048-spec-015-config-default-token
+dark-factory-version: dev
 created: "2026-08-20T14:50:00Z"
 queued: "2026-08-20T15:11:09Z"
+started: "2026-08-20T15:22:27Z"
+completed: "2026-08-20T15:28:33Z"
 ---
 
 # Config contract: top-level `default_token:` (global default outbound key)
