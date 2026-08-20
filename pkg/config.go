@@ -40,7 +40,7 @@ type Config struct {
 	// The key is operator config read only at wiring — never from client
 	// input — and flows only in the outbound Authorization header, never
 	// into logs or trace files (redacted like every other token).
-	DefaultToken string `yaml:"default_token,omitempty" display:"length"`
+	DefaultToken string `yaml:"default_token,omitempty"  display:"length"`
 	// Aliases maps a short operator-typed model name to the full
 	// model string the upstream expects. Resolved single-hop before
 	// glob-routing: a request body `{"model":"qwen"}` becomes

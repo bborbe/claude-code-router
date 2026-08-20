@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: resolve each upstream member's effective outbound bearer token at wiring time in the factory (`pkg/factory/factory.go`, spec 015) — the member's own `token:` wins (for legacy single-`upstream:` configs `normalizeUpstreams`/`UpstreamList` already copied the provider-level token onto the member), else the top-level `default_token:`, else empty, where an empty effective token keeps the auth-swap transport's no-op contract and the client's `Authorization` passes through byte-for-byte; the auth-swap transport now wraps the logging roundtripper (auth-swap outer, logging inner) so the V(3) `[upstream.headers]` line reflects the SWAPPED outbound `Authorization` as `<redacted len=N>` — matching the logging roundtripper's documented behavior — while the literal key never appears in logs or trace files.
+
 ## v0.41.1
 
 - fix: thread context cancellation into the time-window `eligibleIndices()` eligibility scans (upstream pool handler + model pool) so a cancelled request aborts the scan, and add `display:"length"` to `ModelRoute.AllowedApiKeys`. These are the PR-review fixes landed after v0.41.0 was cut on the feature branch.
