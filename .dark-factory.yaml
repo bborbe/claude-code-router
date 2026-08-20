@@ -1,4 +1,5 @@
 autoRelease: true
+autoGeneratePrompts: true
 validationPrompt: docs/dod.md
 workflow: direct
 env:
