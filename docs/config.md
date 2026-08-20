@@ -19,6 +19,8 @@ router:
 allowedApiKeys:                  # optional; list of API keys authenticating non-loopback /v1/* requests (see ## Routing by API key). Absent or empty disables key enforcement and key routing.
   - "<key>"
 
+default_token: <string>             # optional; one shared outbound key inherited by every provider / pool member that declares no token: of its own (see ## Auth). A provider's own token: overrides it; with neither set, the client's Authorization header passes through unchanged.
+
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
 # model_pools:               # optional; invented model names that resolve to a choice of providers (see ## Model pools). Each entry carries provider/model/weight/overflow.
@@ -289,12 +291,24 @@ The per-entry `window:` sits alongside the per-entry `weight` / `maxConcurrentRe
 
 ## Auth
 
+A provider — and every `Upstream` pool member (see ## Upstream pools) — resolves its outbound `Authorization` at wiring time in this frozen three-way order:
+
+1. **Its own `token:` wins when set.** A pool member's per-entry `token:`, or a legacy provider-level `token:` (which `normalizeUpstreams` copies onto the implicit single member), replaces the outbound `Authorization` with `Bearer <token>`.
+2. **Else the top-level `default_token:`.** A provider/member with no `token:` of its own inherits the shared global key — the outbound `Authorization` becomes `Bearer <default_token>`.
+3. **Else passthrough.** With neither set, the client's `Authorization` header is forwarded verbatim — Claude Code's subscription OAuth bearer passes through untouched and the router never holds it.
+
+There is NO per-provider opt-out that forces passthrough while a global default is set — a provider needing a different key (a separate vLLM quota, the off-peak window keys from ## Time-of-day windows) declares its own `token:` and overrides.
+
 | `token:` field | Behavior |
 |---|---|
-| absent / empty | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
-| set | Replace the outbound `Authorization` with `Bearer <token>` — used for fixed-token providers (MiniMax, Ollama, vLLM) |
+| set | Replace the outbound `Authorization` with `Bearer <token>` — overrides `default_token:`; used for fixed-token providers (MiniMax, Ollama, vLLM) |
+| absent/empty + `default_token:` set | Replace the outbound `Authorization` with `Bearer <default_token>` — one shared key defined once, no per-provider copies |
+| absent/empty + no `default_token:` | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
 
-The router never stores or logs token values; trace files inherit the same invariant — see ## Trace.
+- **Top-level placement.** `default_token:` is a top-level config key at the same level as `providers:` / `router:`; absent or empty means no global default — today's behavior. The resolution applies uniformly at the member level: a pool member's per-entry `token:` (see ## Upstream pools) and the legacy provider-level `token:` (copied onto the implicit single member) both override the global default.
+- **SIGHUP.** A change to `default_token:` applies on SIGHUP without a restart — the reloader rebuilds the router tree from the edited config (see ## Reload), and the next request's `[upstream.headers]` `len=N` reflects the new key.
+- **Security / redaction.** The global default is operator config read only at wiring — never from client input, so a client cannot influence which token the router sends. Like every token it flows only in the outbound `Authorization` header, is never echoed to a client or exposed via `/metrics` or admin endpoints, and never reaches logs or trace files: the V(3) `[upstream.headers]` line shows it as `<redacted len=N>` — the `len` distinguishes the inheriting key from an overriding key without printing either, the operator's live smoke evidence — and trace files redact `Authorization` (see ## Trace). The router never stores or logs token values, `default_token:` included; trace files inherit the same invariant — see ## Trace.
+- **Worked note.** With `default_token:` set, every no-token provider inherits it — the passthrough case exists on configs WITHOUT a global default (backward-compatible), which is the subscription-OAuth flow.
 
 ## Routing by API key
 
