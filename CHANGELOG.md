@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.43.0
 
 - chore: update dependencies
 - chore: update Go to 1.26.6 and update dependencies
