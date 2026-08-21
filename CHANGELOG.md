@@ -8,6 +8,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - feat: Log upstream pool member index (provider=<name>/<index>) in [req] line
 
+## v0.42.1
+
+- chore: Reorder the `format:` target so `gofmt -w` runs last, after golines, so golines' wrapping is normalized before the gofmt lint check passes
+- chore: Bump golangci-lint to v2.13.1 (fixes staticcheck `buildir` panic on Go 1.27 AST) and errcheck to v1.20.0 (fixes `package "context" without types` on Go 1.27) in `tools.env`
+- refactor: Remove the dead `providerHandler == nil` guard in `CreateRouterFromConfig` (`pkg/factory/factory.go`) — `NewUpstreamPoolHandler` always returns a non-nil handler, so the guard tripped staticcheck SA4023 once golangci-lint was bumped to v2.13.1
+
 ## v0.42.0
 
 - feat: resolve each upstream member's effective outbound bearer token at wiring time in the factory (`pkg/factory/factory.go`, spec 015) — the member's own `token:` wins (for legacy single-`upstream:` configs `normalizeUpstreams`/`UpstreamList` already copied the provider-level token onto the member), else the top-level `default_token:`, else empty, where an empty effective token keeps the auth-swap transport's no-op contract and the client's `Authorization` passes through byte-for-byte; the auth-swap transport now wraps the logging roundtripper (auth-swap outer, logging inner) so the V(3) `[upstream.headers]` line reflects the SWAPPED outbound `Authorization` as `<redacted len=N>` — matching the logging roundtripper's documented behavior — while the literal key never appears in logs or trace files.

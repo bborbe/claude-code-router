@@ -284,9 +284,6 @@ func CreateRouterFromConfig(
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
-		if providerHandler == nil {
-			return nil, ctx.Err()
-		}
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			select {
