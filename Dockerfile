@@ -1,6 +1,6 @@
 # Canonical Go Dockerfile — see ~/Documents/workspaces/coding/docs/go-dockerfile-guide.md
 ARG DOCKER_REGISTRY=docker.io
-FROM ${DOCKER_REGISTRY}/golang:1.26.6 AS build
+FROM ${DOCKER_REGISTRY}/golang:1.27.0 AS build
 ARG BUILD_GIT_VERSION=dev
 ARG BUILD_GIT_COMMIT=none
 ARG BUILD_DATE=unknown
