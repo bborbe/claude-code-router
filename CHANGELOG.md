@@ -7,6 +7,21 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 - chore: update Go to 1.26.6 and update dependencies
+- feat: Log upstream pool member index (provider=<name>/<index>) in [req] line
+
+## v0.42.1
+
+- chore: Reorder the `format:` target so `gofmt -w` runs last, after golines, so golines' wrapping is normalized before the gofmt lint check passes
+- chore: Bump golangci-lint to v2.13.1 (fixes staticcheck `buildir` panic on Go 1.27 AST) and errcheck to v1.20.0 (fixes `package "context" without types` on Go 1.27) in `tools.env`
+- refactor: Remove the dead `providerHandler == nil` guard in `CreateRouterFromConfig` (`pkg/factory/factory.go`) — `NewUpstreamPoolHandler` always returns a non-nil handler, so the guard tripped staticcheck SA4023 once golangci-lint was bumped to v2.13.1
+
+## v0.42.0
+
+- feat: resolve each upstream member's effective outbound bearer token at wiring time in the factory (`pkg/factory/factory.go`, spec 015) — the member's own `token:` wins (for legacy single-`upstream:` configs `normalizeUpstreams`/`UpstreamList` already copied the provider-level token onto the member), else the top-level `default_token:`, else empty, where an empty effective token keeps the auth-swap transport's no-op contract and the client's `Authorization` passes through byte-for-byte; the auth-swap transport now wraps the logging roundtripper (auth-swap outer, logging inner) so the V(3) `[upstream.headers]` line reflects the SWAPPED outbound `Authorization` as `<redacted len=N>` — matching the logging roundtripper's documented behavior — while the literal key never appears in logs or trace files.
+- feat: document the optional top-level `default_token:` field (`Config.DefaultToken`) in `docs/config.md` (new `## Auth` three-way resolution order + schema reference) and `docs/config.example.yaml` (commented example) — one shared outbound bearer key inherited by every provider and every `Upstream` pool member that declares no `token:` of its own; the frozen three-way outbound-auth resolution order is applied at wiring time (a provider/member `token:` wins, else the global `default_token:`, else the client's `Authorization` passes through unchanged — byte-for-byte today's subscription-OAuth behavior), with the factory resolving the effective token per upstream member and no per-provider opt-out to force passthrough while a global default is set; the V(3) `[upstream.headers]` log line reflects the swapped outbound `Authorization` as `<redacted len=N>` (the auth-swap transport now wraps the logging roundtripper), so an operator can distinguish the inheriting key from an overriding key's `len` without either key reaching the log; a config edit to `default_token:` applies on SIGHUP without a restart; the key is operator config read only at wiring (never from client input) and is redacted like every other token (`display:"length"`, never in logs or trace files).
+
+## v0.41.1
+
 - fix: thread context cancellation into the time-window `eligibleIndices()` eligibility scans (upstream pool handler + model pool) so a cancelled request aborts the scan, and add `display:"length"` to `ModelRoute.AllowedApiKeys`. These are the PR-review fixes landed after v0.41.0 was cut on the feature branch.
 
 ## v0.41.0

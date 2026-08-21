@@ -19,6 +19,8 @@ router:
 allowedApiKeys:                  # optional; list of API keys authenticating non-loopback /v1/* requests (see ## Routing by API key). Absent or empty disables key enforcement and key routing.
   - "<key>"
 
+default_token: <string>             # optional; one shared outbound key inherited by every provider / pool member that declares no token: of its own (see ## Auth). A provider's own token: overrides it; with neither set, the client's Authorization header passes through unchanged.
+
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
 # model_pools:               # optional; invented model names that resolve to a choice of providers (see ## Model pools). Each entry carries provider/model/weight/overflow.
@@ -119,7 +121,7 @@ model_pools:
 - **Overflow failover.** When the pinned member's provider is saturated (every capped upstream at its concurrency cap — see ## Upstream pools) and the member declares `overflow: true`, the request fails over to the least-loaded sibling member — availability over cache warmth, which costs nothing here because members are different providers/caches anyway. The `[route]` line names the member that actually served the request. With `overflow: false` (the default), the request stays on its pinned member and the provider's own concurrency semantics apply — it waits and answers HTTP 429 with the Anthropic-shaped `rate_limit_error` body (see ## Concurrency limit / ## Upstream pools).
 - **Fall-through.** A model name that is not a configured pool name is untouched — it flows through the existing alias + provider-glob routing exactly as before. `model_pools:` names do not interact with `aliases:`; the two blocks are independent ("one name → one model" vs "one name → a choice of models").
 - **Validation.** An unknown provider, a negative weight, a duplicate `(provider, model)` pair within a pool, and an empty member list all fail config load with an error naming the pool (the same pair in two different pools is not a duplicate). `weight: 0` and an absent weight both mean the default 1.
-- **Observability.** Each pool resolution logs `[route] model=<poolname> -> provider=<provider> model=<concrete>` at glog `V(2)` — the same verbosity as the `[route] model=... matched ...` detail lines — the operator evidence of which member served a session. The `[req]` line and `ccrouter_requests_total` / `ccrouter_tokens_total` metrics are unchanged; the metrics' model label is the concrete member model the upstream saw.
+- **Observability.** Each pool resolution logs `[route] model=<poolname> -> provider=<provider> model=<concrete>` at glog `V(2)` — the same verbosity as the `[route] model=... matched ...` detail lines — the operator evidence of which member served a session. The always-on `[req]` line's provider value carries the serving upstream-pool member's zero-based index (`provider=<name>/<index>`); the `ccrouter_requests_total` / `ccrouter_tokens_total` metrics are unchanged, and the metrics' model label is the concrete member model the upstream saw.
 - **SIGHUP applies changes.** A change to `model_pools:` (add/remove a member, change a weight or overflow flag) applies on SIGHUP without a restart — the reloader rebuilds the pool table (see ## Reload).
 - **Security.** A pool name is ordinary client input like any model string — it never widens access; resolution only selects among configured members and their providers' existing auth. The rewritten body carries only the member's configured concrete model — a client cannot inject an arbitrary model string via a pool name.
 
@@ -209,7 +211,7 @@ providers:
 - **Per-member caps are independent.** Each member enforces its own `maxConcurrentRequests` — two members each allowing 8 do not share one global cap of 8. A request that queues past `maxConcurrentWaitSeconds` is answered HTTP 429 with the same Anthropic-shaped `rate_limit_error` body as the provider-level cap (see ## Concurrency limit).
 - **Member down.** A member that fails answers with the existing sanitized 502 (unchanged behavior) — there is no probe-and-rotate. The operator removes or repairs the member and SIGHUPs, and the next `[route]` log line reflects the pool without it.
 - **Client disconnect while queued.** No slot is held — a slot is acquired only at dispatch — so a client that disconnects while queued never consumes concurrency, and the 429 write to the dead connection fails harmlessly (spec-011 semantics).
-- **Observability.** Each dispatch logs `[route] session=<id> upstream=<url>` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines — the operator evidence that a session is pinned and that keyless load is spreading. The `[req]` line is unchanged.
+- **Observability.** Each dispatch logs `[route] session=<id> upstream=<url>` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines — the operator evidence that a session is pinned and that keyless load is spreading. The always-on `[req]` line names the serving member by its zero-based pool index: `provider=<name>/<index>` (member 0 = the first declared upstream, member 1 = the second, …); the suffix is always present, so `provider=X/0` on a single-upstream provider is indistinguishable from a one-member pool by shape. `[route]`, `[inbound.end]`, and the metrics are unchanged.
 - **SIGHUP applies changes.** A change to `upstreams:` (add/remove a member, change a weight or cap) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config.
 - **Suggested use.** Five DeepSeek vLLM instances under vllm's per-user ceiling of 8 concurrent requests: give each member `maxConcurrentRequests: 8` so the router queues instead of the upstream rejecting, and pin every Claude Code session to its own member so each session's prompt cache stays warm on one server:
 
@@ -289,12 +291,24 @@ The per-entry `window:` sits alongside the per-entry `weight` / `maxConcurrentRe
 
 ## Auth
 
+A provider — and every `Upstream` pool member (see ## Upstream pools) — resolves its outbound `Authorization` at wiring time in this frozen three-way order:
+
+1. **Its own `token:` wins when set.** A pool member's per-entry `token:`, or a legacy provider-level `token:` (which `normalizeUpstreams` copies onto the implicit single member), replaces the outbound `Authorization` with `Bearer <token>`.
+2. **Else the top-level `default_token:`.** A provider/member with no `token:` of its own inherits the shared global key — the outbound `Authorization` becomes `Bearer <default_token>`.
+3. **Else passthrough.** With neither set, the client's `Authorization` header is forwarded verbatim — Claude Code's subscription OAuth bearer passes through untouched and the router never holds it.
+
+There is NO per-provider opt-out that forces passthrough while a global default is set — a provider needing a different key (a separate vLLM quota, the off-peak window keys from ## Time-of-day windows) declares its own `token:` and overrides.
+
 | `token:` field | Behavior |
 |---|---|
-| absent / empty | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
-| set | Replace the outbound `Authorization` with `Bearer <token>` — used for fixed-token providers (MiniMax, Ollama, vLLM) |
+| set | Replace the outbound `Authorization` with `Bearer <token>` — overrides `default_token:`; used for fixed-token providers (MiniMax, Ollama, vLLM) |
+| absent/empty + `default_token:` set | Replace the outbound `Authorization` with `Bearer <default_token>` — one shared key defined once, no per-provider copies |
+| absent/empty + no `default_token:` | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
 
-The router never stores or logs token values; trace files inherit the same invariant — see ## Trace.
+- **Top-level placement.** `default_token:` is a top-level config key at the same level as `providers:` / `router:`; absent or empty means no global default — today's behavior. The resolution applies uniformly at the member level: a pool member's per-entry `token:` (see ## Upstream pools) and the legacy provider-level `token:` (copied onto the implicit single member) both override the global default.
+- **SIGHUP.** A change to `default_token:` applies on SIGHUP without a restart — the reloader rebuilds the router tree from the edited config (see ## Reload), and the next request's `[upstream.headers]` `len=N` reflects the new key.
+- **Security / redaction.** The global default is operator config read only at wiring — never from client input, so a client cannot influence which token the router sends. Like every token it flows only in the outbound `Authorization` header, is never echoed to a client or exposed via `/metrics` or admin endpoints, and never reaches logs or trace files: the V(3) `[upstream.headers]` line shows it as `<redacted len=N>` — the `len` distinguishes the inheriting key from an overriding key without printing either, the operator's live smoke evidence — and trace files redact `Authorization` (see ## Trace). The router never stores or logs token values, `default_token:` included; trace files inherit the same invariant — see ## Trace.
+- **Worked note.** With `default_token:` set, every no-token provider inherits it — the passthrough case exists on configs WITHOUT a global default (backward-compatible), which is the subscription-OAuth flow.
 
 ## Routing by API key
 

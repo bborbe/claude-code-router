@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-08-19T15:01:30Z"
 generating: "2026-08-19T15:39:21Z"
 prompted: "2026-08-19T15:39:21Z"
 verifying: "2026-08-19T16:41:42Z"
+completed: "2026-08-20T13:46:51Z"
 branch: dark-factory/model-pools
 ---
 

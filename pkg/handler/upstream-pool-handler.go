@@ -92,7 +92,16 @@ type upstreamPoolHandler struct {
 
 func (p *upstreamPoolHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sessionID := SessionIDFromContext(r.Context())
-	member := p.members[p.selectMember(r.Context(), sessionID)]
+	memberIndex := p.selectMember(r.Context(), sessionID)
+	// Publish the selected member's zero-based index into the per-request
+	// slot the model router injected (spec 016), so the router's [req]
+	// line can log provider=<name>/<index>. The slot is nil when no pool
+	// handler is in the dispatch path (test stubs, non-pool handlers) —
+	// then the router keeps its default `/0`.
+	if slot := UpstreamIndexSlotFromContext(r.Context()); slot != nil {
+		slot.index = memberIndex
+	}
+	member := p.members[memberIndex]
 	glog.V(2).Infof("[route] session=%s upstream=%s", sessionID, member.Upstream)
 	member.Handler.ServeHTTP(w, r)
 }
