@@ -133,7 +133,7 @@ var _ = Describe("ModelRouter key routing", func() {
 		Expect(out).NotTo(ContainSubstring("[route] key matched"))
 		// The [req] line still names the glob-selected provider.
 		Expect(out).To(MatchRegexp(
-			`\[req\] POST /v1/messages model=deepseek-v4-pro provider=seibert-vllm status=200 latency=`,
+			`\[req\] POST /v1/messages model=deepseek-v4-pro provider=seibert-vllm/0 status=200 latency=`,
 		))
 	})
 

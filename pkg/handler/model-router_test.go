@@ -515,7 +515,7 @@ var _ = Describe("ModelRouter", func() {
 			})
 			Expect(
 				out,
-			).To(MatchRegexp(`\[req\] POST /v1/messages model=MiniMax-M3-highspeed provider=minimax status=200 latency=\d+m?s`))
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=MiniMax-M3-highspeed provider=minimax/0 status=200 latency=\d+m?s`))
 		})
 
 		It("emits [req] with alias= field on alias hit", func() {
@@ -534,7 +534,7 @@ var _ = Describe("ModelRouter", func() {
 			})
 			Expect(
 				out,
-			).To(MatchRegexp(`\[req\] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=`))
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax/0 status=200 latency=`))
 		})
 
 		It("emits [req] with default provider name on fallback", func() {
@@ -543,7 +543,7 @@ var _ = Describe("ModelRouter", func() {
 			})
 			Expect(
 				out,
-			).To(MatchRegexp(`\[req\] POST /v1/messages model=gemini-3-pro provider=default-fallback status=200 latency=`))
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=gemini-3-pro provider=default-fallback/0 status=200 latency=`))
 		})
 
 		It("latency value is non-zero and ends in ms or s", func() {
@@ -755,7 +755,7 @@ var _ = Describe("ModelRouter", func() {
 			})
 			Expect(
 				out,
-			).To(MatchRegexp(`\[req\] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=\d+m?s`))
+			).To(MatchRegexp(`\[req\] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax/0 status=200 latency=\d+m?s`))
 			re := regexp.MustCompile(`in=(\d+) out=(\d+)`)
 			matches := re.FindStringSubmatch(out)
 			Expect(matches).To(HaveLen(3), "expected in=<N> out=<N> in: %s", out)
