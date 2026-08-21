@@ -10,13 +10,34 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	stdtime "time"
 
+	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	pkgcfg "github.com/bborbe/claude-code-router/pkg"
 )
+
+// berlinLoc is the fixed IANA location used by the Window.Contains table
+// (spec 014 AC 5) — the boundary is the value's attached location, never
+// the host's local time.
+var berlinLoc, _ = stdtime.LoadLocation("Europe/Berlin")
+
+// mustTOD parses a "HH:MM <location>" time-of-day string, failing the test
+// on a malformed value.
+func mustTOD(s string) libtime.TimeOfDay {
+	v, err := libtime.ParseTimeOfDay(context.Background(), s)
+	Expect(err).NotTo(HaveOccurred())
+	return *v
+}
+
+// nowAt returns a fixed-clock DateTime for the given hour/minute in loc on
+// a fixed date, so window tests never depend on the wall clock.
+func nowAt(h, min int, loc *stdtime.Location) libtime.DateTime {
+	return libtime.DateTime(stdtime.Date(2026, 8, 19, h, min, 0, 0, loc))
+}
 
 var _ = Describe("Config", func() {
 	var dir string
@@ -815,6 +836,106 @@ providers:
 		})
 	})
 
+	Context("default_token", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave DefaultToken empty, so every fixture goes through Load, not
+		// struct literals. Providers use https://a.example style URLs.
+		providers := `
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+`
+
+		It(
+			"parses a top-level default_token alongside token-less and token-bearing providers",
+			func() {
+				p := write(providers + `
+  y:
+    upstream: https://b.example
+    token: "provider-key"
+    models: ["bar-*"]
+default_token: "sk-global-123"
+`)
+				cfg, err := pkgcfg.Load(context.Background(), p)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.DefaultToken).To(Equal("sk-global-123"))
+				Expect(cfg.Providers["x"].Token).To(BeEmpty())
+				Expect(cfg.Providers["y"].Token).To(Equal("provider-key"))
+			},
+		)
+
+		It("treats an empty default_token as no global default", func() {
+			p := write(providers + `
+default_token: ""
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DefaultToken).To(BeEmpty())
+		})
+
+		It("rejects a non-scalar default_token (nested mapping) at load", func() {
+			p := write(providers + `
+default_token:
+  foo: bar
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("rejects a non-scalar default_token (list) at load", func() {
+			p := write(providers + `
+default_token:
+  - "a"
+  - "b"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("loads a config without default_token unchanged — backward compat", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    token: "provider-key"
+    models: ["foo-*"]
+  y:
+    models: ["bar-*"]
+    upstreams:
+      - upstream: https://b.example
+        token: "member-key"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DefaultToken).To(BeEmpty())
+			Expect(cfg.Providers["x"].Token).To(Equal("provider-key"))
+			Expect(cfg.Providers["y"].Upstreams).To(HaveLen(1))
+			Expect(cfg.Providers["y"].Upstreams[0].Token).To(Equal("member-key"))
+		})
+
+		It("loads a top-level default_token alongside a provider token — both intact", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    token: "provider-key"
+    models: ["foo-*"]
+default_token: "sk-global-123"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DefaultToken).To(Equal("sk-global-123"))
+			Expect(cfg.Providers["x"].Token).To(Equal("provider-key"))
+		})
+	})
+
 	Context("maxConcurrentRequests", func() {
 		loadProvider := func(extra string) (*pkgcfg.Config, error) {
 			p := write(`
@@ -1061,5 +1182,301 @@ providers:
 				Weight:   2,
 			}}))
 		})
+	})
+
+	Context("window", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave Window nil, so every fixture goes through Load, not struct
+		// literals. Providers use https://a.example style URLs.
+		It("parses a window: on an upstreams entry", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			window := cfg.Providers["x"].Upstreams[0].Window
+			Expect(window).NotTo(BeNil())
+			Expect(window.From.Hour).To(Equal(8))
+			Expect(window.From.Minute).To(Equal(0))
+			Expect(window.From.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(window.Until.Hour).To(Equal(18))
+			Expect(window.Until.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(cfg.Providers["x"].Upstreams[1].Window).To(BeNil())
+		})
+
+		It("normalizes a legacy single upstream window onto the synthesized member", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+    window:
+      from: "18:00 Europe/Berlin"
+      until: "08:00 Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			upstreams := cfg.Providers["x"].Upstreams
+			Expect(upstreams).To(HaveLen(1))
+			Expect(upstreams[0].Weight).To(Equal(1))
+			Expect(upstreams[0].Window).NotTo(BeNil())
+			Expect(upstreams[0].Window.From.Hour).To(Equal(18))
+			Expect(upstreams[0].Window.From.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(upstreams[0].Window.Until.Hour).To(Equal(8))
+			Expect(upstreams[0].Window.Until.Location.String()).To(Equal("Europe/Berlin"))
+		})
+
+		It("loads a config without any window: unchanged — backward compat", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["x"].Upstreams).To(HaveLen(2))
+			for _, up := range cfg.Providers["x"].Upstreams {
+				Expect(up.Window).To(BeNil())
+			}
+		})
+
+		It("rejects a malformed time in a window at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "25:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("25:00"))
+		})
+
+		It("rejects an unknown IANA location in a window at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Mars/Olympus"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("Mars/Olympus"))
+		})
+
+		It("accepts an overnight window that wraps past midnight", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "22:00 Europe/Berlin"
+          until: "06:00 Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			window := cfg.Providers["x"].Upstreams[0].Window
+			Expect(window).NotTo(BeNil())
+			Expect(window.From.Hour).To(Equal(22))
+			Expect(window.Until.Hour).To(Equal(6))
+		})
+
+		It("rejects a window with only from — window.until is required", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          from: "08:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("window.until is required"))
+		})
+
+		It("rejects a window with only until — window.from is required", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        window:
+          until: "18:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("window.from is required"))
+		})
+
+		It("rejects a provider-level window combined with an upstreams list", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+      - upstream: https://b.example
+    window:
+      from: "08:00 Europe/Berlin"
+      until: "18:00 Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`provider "x"`))
+			Expect(
+				err.Error(),
+			).To(ContainSubstring("window applies only to the legacy upstream form"))
+		})
+
+		It("carries the provider window in UpstreamList for programmatic configs", func() {
+			from, err := libtime.ParseTimeOfDay(context.Background(), "08:00 Europe/Berlin")
+			Expect(err).NotTo(HaveOccurred())
+			until, err := libtime.ParseTimeOfDay(context.Background(), "18:00 Europe/Berlin")
+			Expect(err).NotTo(HaveOccurred())
+			prov := pkgcfg.Provider{
+				Upstream: "https://a.example",
+				Window: &pkgcfg.Window{
+					From:  *from,
+					Until: *until,
+				},
+			}
+			list := prov.UpstreamList()
+			Expect(list).To(HaveLen(1))
+			Expect(list[0].Window).NotTo(BeNil())
+			Expect(list[0].Window.From.Hour).To(Equal(8))
+			Expect(list[0].Window.Until.Hour).To(Equal(18))
+		})
+
+		It("leaves UpstreamList window nil for a window-less programmatic provider", func() {
+			prov := pkgcfg.Provider{Upstream: "https://a.example"}
+			Expect(prov.UpstreamList()[0].Window).To(BeNil())
+		})
+
+		DescribeTable(
+			"Contains",
+			func(from, until string, now libtime.DateTime, expected bool) {
+				w := &pkgcfg.Window{From: mustTOD(from), Until: mustTOD(until)}
+				Expect(w.Contains(now)).To(Equal(expected))
+			},
+			Entry(
+				"day window: 10:00 Berlin is inside",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(10, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"day window: 08:00 Berlin is inside (inclusive From)",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(8, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"day window: 18:00 Berlin is outside (exclusive Until)",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(18, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"day window: 07:59 Berlin is outside",
+				"08:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(7, 59, berlinLoc),
+				false,
+			),
+			Entry(
+				"overnight window: 02:00 Berlin is inside",
+				"22:00 Europe/Berlin",
+				"06:00 Europe/Berlin",
+				nowAt(2, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"overnight window: 14:00 Berlin is outside",
+				"22:00 Europe/Berlin",
+				"06:00 Europe/Berlin",
+				nowAt(14, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"overnight window: 22:00 Berlin is inside (inclusive From)",
+				"22:00 Europe/Berlin",
+				"06:00 Europe/Berlin",
+				nowAt(22, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"IANA: 15:30 UTC is 17:30 Berlin — inside",
+				"17:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(15, 30, stdtime.UTC),
+				true,
+			),
+			Entry(
+				"IANA: 17:30 UTC is 19:30 Berlin — outside",
+				"17:00 Europe/Berlin",
+				"18:00 Europe/Berlin",
+				nowAt(17, 30, stdtime.UTC),
+				false,
+			),
+			Entry(
+				"empty window: From == Until excludes every now",
+				"08:00 Europe/Berlin",
+				"08:00 Europe/Berlin",
+				nowAt(10, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"empty window: From == Until excludes every now (02:00)",
+				"08:00 Europe/Berlin",
+				"08:00 Europe/Berlin",
+				nowAt(2, 0, berlinLoc),
+				false,
+			),
+		)
 	})
 })

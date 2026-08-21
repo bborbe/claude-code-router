@@ -19,6 +19,8 @@ router:
 allowedApiKeys:                  # optional; list of API keys authenticating non-loopback /v1/* requests (see ## Routing by API key). Absent or empty disables key enforcement and key routing.
   - "<key>"
 
+default_token: <string>             # optional; one shared outbound key inherited by every provider / pool member that declares no token: of its own (see ## Auth). A provider's own token: overrides it; with neither set, the client's Authorization header passes through unchanged.
+
 trace: <bool>                         # optional; default false. When true, writes one JSON file per /v1/* request to ~/.claude-code-router/trace/ (deprecated — use POST /enabletrace for bounded trace windows; see ## Trace)
 
 # model_pools:               # optional; invented model names that resolve to a choice of providers (see ## Model pools). Each entry carries provider/model/weight/overflow.
@@ -41,10 +43,16 @@ providers:
     # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
     # maxConcurrentRequests: 8   # optional; cap concurrent /v1/* requests to THIS provider (see ## Concurrency limit). Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # window:                    # optional; legacy single-upstream form only — applies to the implicit single member (see ## Time-of-day windows). Cannot be combined with an upstreams: list.
+    #   from: "08:00 Europe/Berlin"
+    #   until: "18:00 Europe/Berlin"
     # upstreams:                  # optional; alternative to `upstream:` — a pool of servers. Each entry carries upstream/token/weight/maxConcurrentRequests/maxConcurrentWaitSeconds (see ## Upstream pools). Mutually exclusive with `upstream:`.
     #   - upstream: <URL>
     #     token: <string>         # optional; per-member token (defaults to the provider token semantics: absent = pass client's Authorization through)
     #     weight: 1               # optional; default 1. Relative share of pinned sessions this member receives.
+    #     window:                 # optional; per-member time-of-day eligibility window (see ## Time-of-day windows). Values are "HH:MM <location>", e.g. "18:00 Europe/Berlin". from/until required when the block is present. A member outside its window is ineligible for dispatch.
+    #       from: "08:00 Europe/Berlin"
+    #       until: "18:00 Europe/Berlin"
     #     maxConcurrentRequests: 8   # optional; per-member cap. Absent or 0 or negative = unlimited.
     #     maxConcurrentWaitSeconds: 30 # optional; per-member queue wait before HTTP 429 (default 30)
 ```
@@ -113,7 +121,7 @@ model_pools:
 - **Overflow failover.** When the pinned member's provider is saturated (every capped upstream at its concurrency cap — see ## Upstream pools) and the member declares `overflow: true`, the request fails over to the least-loaded sibling member — availability over cache warmth, which costs nothing here because members are different providers/caches anyway. The `[route]` line names the member that actually served the request. With `overflow: false` (the default), the request stays on its pinned member and the provider's own concurrency semantics apply — it waits and answers HTTP 429 with the Anthropic-shaped `rate_limit_error` body (see ## Concurrency limit / ## Upstream pools).
 - **Fall-through.** A model name that is not a configured pool name is untouched — it flows through the existing alias + provider-glob routing exactly as before. `model_pools:` names do not interact with `aliases:`; the two blocks are independent ("one name → one model" vs "one name → a choice of models").
 - **Validation.** An unknown provider, a negative weight, a duplicate `(provider, model)` pair within a pool, and an empty member list all fail config load with an error naming the pool (the same pair in two different pools is not a duplicate). `weight: 0` and an absent weight both mean the default 1.
-- **Observability.** Each pool resolution logs `[route] model=<poolname> -> provider=<provider> model=<concrete>` at glog `V(2)` — the same verbosity as the `[route] model=... matched ...` detail lines — the operator evidence of which member served a session. The `[req]` line and `ccrouter_requests_total` / `ccrouter_tokens_total` metrics are unchanged; the metrics' model label is the concrete member model the upstream saw.
+- **Observability.** Each pool resolution logs `[route] model=<poolname> -> provider=<provider> model=<concrete>` at glog `V(2)` — the same verbosity as the `[route] model=... matched ...` detail lines — the operator evidence of which member served a session. The always-on `[req]` line's provider value carries the serving upstream-pool member's zero-based index (`provider=<name>/<index>`); the `ccrouter_requests_total` / `ccrouter_tokens_total` metrics are unchanged, and the metrics' model label is the concrete member model the upstream saw.
 - **SIGHUP applies changes.** A change to `model_pools:` (add/remove a member, change a weight or overflow flag) applies on SIGHUP without a restart — the reloader rebuilds the pool table (see ## Reload).
 - **Security.** A pool name is ordinary client input like any model string — it never widens access; resolution only selects among configured members and their providers' existing auth. The rewritten body carries only the member's configured concrete model — a client cannot inject an arbitrary model string via a pool name.
 
@@ -203,7 +211,7 @@ providers:
 - **Per-member caps are independent.** Each member enforces its own `maxConcurrentRequests` — two members each allowing 8 do not share one global cap of 8. A request that queues past `maxConcurrentWaitSeconds` is answered HTTP 429 with the same Anthropic-shaped `rate_limit_error` body as the provider-level cap (see ## Concurrency limit).
 - **Member down.** A member that fails answers with the existing sanitized 502 (unchanged behavior) — there is no probe-and-rotate. The operator removes or repairs the member and SIGHUPs, and the next `[route]` log line reflects the pool without it.
 - **Client disconnect while queued.** No slot is held — a slot is acquired only at dispatch — so a client that disconnects while queued never consumes concurrency, and the 429 write to the dead connection fails harmlessly (spec-011 semantics).
-- **Observability.** Each dispatch logs `[route] session=<id> upstream=<url>` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines — the operator evidence that a session is pinned and that keyless load is spreading. The `[req]` line is unchanged.
+- **Observability.** Each dispatch logs `[route] session=<id> upstream=<url>` at glog `V(2)` — the same verbosity as the `[alias]` and `[1m-strip]` detail lines — the operator evidence that a session is pinned and that keyless load is spreading. The always-on `[req]` line names the serving member by its zero-based pool index: `provider=<name>/<index>` (member 0 = the first declared upstream, member 1 = the second, …); the suffix is always present, so `provider=X/0` on a single-upstream provider is indistinguishable from a one-member pool by shape. `[route]`, `[inbound.end]`, and the metrics are unchanged.
 - **SIGHUP applies changes.** A change to `upstreams:` (add/remove a member, change a weight or cap) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config.
 - **Suggested use.** Five DeepSeek vLLM instances under vllm's per-user ceiling of 8 concurrent requests: give each member `maxConcurrentRequests: 8` so the router queues instead of the upstream rejecting, and pin every Claude Code session to its own member so each session's prompt cache stays warm on one server:
 
@@ -223,14 +231,84 @@ providers:
 
 With two Claude Code sessions (each set `ANTHROPIC_CUSTOM_HEADERS='{"x-session-id":"<unique id>"}'`), the `[route] session=<id> upstream=<url>` lines name a distinct member per session, and every request within one session names the same member — two sessions, two servers, warm caches on both.
 
+## Time-of-day windows
+
+A pool member can declare an optional `window:` block that restricts when it is eligible for a dispatch — so one provider can serve the same endpoint with different keys at different times of day (the normal-rate key during business hours, the unlimited key off-peak) with no operator action at the boundary:
+
+```yaml
+providers:
+  <provider-key>:
+    upstreams:
+      - upstream: <URL>
+        token: "<day-key>"
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: <URL>
+        token: "<night-key>"
+        window:
+          from: "18:00 Europe/Berlin"
+          until: "08:00 Europe/Berlin"
+```
+
+The legacy single `upstream:` provider form carries the same `window:` at provider level, applied to its implicit single member (see the schema recap below).
+
+- **What it is.** A member's `window:` has two fields, `from` and `until`, each a time-of-day value in the `"HH:MM <location>"` form (e.g. `"18:00 Europe/Berlin"`). Each value carries its IANA location inline — the boundary is the location's wall clock, never the router host's local time, and there is no separate timezone field. The legacy single `upstream:` / `token:` provider form accepts the same `window:` at provider level; it applies to the implicit single member of the one-entry pool (see the note below).
+- **Eligibility semantics.** A member is ELIGIBLE for a dispatch only while "now" (the router's injected clock — see `WithCurrentDateTime` in `pkg/factory/factory.go`) is inside `[from, until)` — the `from` boundary is inclusive, the `until` boundary exclusive. A member whose window does not contain "now" is INELIGIBLE: it is skipped by BOTH session pinning (the weighted ring hash only considers eligible members) and keyless least-loaded selection, and it is not a valid overflow target. A member with no `window:` is always eligible — today's behavior, byte-for-byte. Two members whose windows overlap at the same moment are BOTH eligible and selected by the normal pinning / least-loaded rules (see ## Upstream pools) — overlap does not prefer one member over another.
+- **Overnight wrap.** `from` after `until` wraps overnight: `from: "22:00"` `until: "06:00"` covers 02:00 and excludes 14:00. `from` == `until` is an empty window (never eligible) — avoid it.
+- **Provider fall-through.** When no member of a provider's pool is eligible, the provider itself is ineligible for that dispatch: the model falls through declaration order to the next matching provider that has an eligible member, then to `default_provider`. A closed window is ELIGIBILITY, never a failure — no router error, no HTTP 429, no health check, no probing. The complementary-window config below guarantees at least one eligible member per period, so the fall-through is the safety net, not the normal path.
+- **Session re-resolution.** Pinning is stateless: a session pinned to a member whose window closes mid-session re-resolves to an eligible member on its next request (the cache on the old member is lost — unavoidable, its key is unusable), and a stream already dispatched completes even if the boundary passes mid-request.
+- **Observability.** When the router falls through because the first matching provider's pool is fully closed, it logs `[route] provider=<p> window=closed -> <fallback>` at glog V(2) — the same verbosity as the `[route] session=<id> upstream=<url>` and `[route] model=... matched ...` detail lines — the operator evidence that the window boundary is behaving as configured. Each dispatch still logs the normal `[route]` line naming the serving member.
+- **Validation.** Malformed times (e.g. `"25:00 Europe/Berlin"`) and unknown IANA locations (e.g. `"18:00 Mars/Olympus"`) are rejected at config load, as is a `window:` with only one boundary (a `window:` block present but missing `from` or `until` fails validation — the block is all-or-nothing). A provider-level `window:` combined with an `upstreams:` list is rejected — windows live on pool members. A valid-but-wrong location (e.g. `Europe/London` for `Europe/Berlin`) passes validation and shifts the boundary by its offset — the operator verifies the `[route] … window=closed` lines against the expected boundary (see Observability) and corrects the value via SIGHUP.
+- **SIGHUP.** A change to a member's `window:` (or the member list) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config (see ## Reload).
+- **Security.** The window is server-side config + server clock, evaluated per request; a client cannot influence which window applies, and the window never widens access or bypasses `allowedApiKeys`. The complementary-window config below guarantees the off-peak unlimited key is only ever used inside its window.
+
+The operator pattern this feature exists for: one provider serving the same endpoint with two keys, each restricted to its own period:
+
+```yaml
+providers:
+  seibert-vllm-default:
+    upstreams:
+      - upstream: http://vllm:8000
+        token: "<normal-rate-key>"
+        maxConcurrentRequests: 16
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: http://vllm:8000
+        token: "<unlimited-off-peak-key>"
+        maxConcurrentRequests: 50
+        window:
+          from: "18:00 Europe/Berlin"
+          until: "08:00 Europe/Berlin"
+    models:
+      - "deepseek-v4-*"
+```
+
+With complementary windows, business hours (08:00–18:00 Europe/Berlin) are served by the day member/key at its 16-request cap, and off-peak by the night member/key at its 50-request cap — exactly one eligible member per period, so the unlimited key is never touched during business hours and no operator action is needed at the boundary. The `[route]` lines name the day member during business hours and the night member off-peak.
+
+The per-entry `window:` sits alongside the per-entry `weight` / `maxConcurrentRequests` / `maxConcurrentWaitSeconds` fields documented in ## Upstream pools, and the provider-level `window:` on the legacy single-`upstream:` form behaves exactly like the provider-level caps (copied onto the implicit single member).
+
 ## Auth
+
+A provider — and every `Upstream` pool member (see ## Upstream pools) — resolves its outbound `Authorization` at wiring time in this frozen three-way order:
+
+1. **Its own `token:` wins when set.** A pool member's per-entry `token:`, or a legacy provider-level `token:` (which `normalizeUpstreams` copies onto the implicit single member), replaces the outbound `Authorization` with `Bearer <token>`.
+2. **Else the top-level `default_token:`.** A provider/member with no `token:` of its own inherits the shared global key — the outbound `Authorization` becomes `Bearer <default_token>`.
+3. **Else passthrough.** With neither set, the client's `Authorization` header is forwarded verbatim — Claude Code's subscription OAuth bearer passes through untouched and the router never holds it.
+
+There is NO per-provider opt-out that forces passthrough while a global default is set — a provider needing a different key (a separate vLLM quota, the off-peak window keys from ## Time-of-day windows) declares its own `token:` and overrides.
 
 | `token:` field | Behavior |
 |---|---|
-| absent / empty | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
-| set | Replace the outbound `Authorization` with `Bearer <token>` — used for fixed-token providers (MiniMax, Ollama, vLLM) |
+| set | Replace the outbound `Authorization` with `Bearer <token>` — overrides `default_token:`; used for fixed-token providers (MiniMax, Ollama, vLLM) |
+| absent/empty + `default_token:` set | Replace the outbound `Authorization` with `Bearer <default_token>` — one shared key defined once, no per-provider copies |
+| absent/empty + no `default_token:` | Forward the client's `Authorization` header verbatim — used for Anthropic subscription (Claude Code's OAuth bearer passes through untouched) |
 
-The router never stores or logs token values; trace files inherit the same invariant — see ## Trace.
+- **Top-level placement.** `default_token:` is a top-level config key at the same level as `providers:` / `router:`; absent or empty means no global default — today's behavior. The resolution applies uniformly at the member level: a pool member's per-entry `token:` (see ## Upstream pools) and the legacy provider-level `token:` (copied onto the implicit single member) both override the global default.
+- **SIGHUP.** A change to `default_token:` applies on SIGHUP without a restart — the reloader rebuilds the router tree from the edited config (see ## Reload), and the next request's `[upstream.headers]` `len=N` reflects the new key.
+- **Security / redaction.** The global default is operator config read only at wiring — never from client input, so a client cannot influence which token the router sends. Like every token it flows only in the outbound `Authorization` header, is never echoed to a client or exposed via `/metrics` or admin endpoints, and never reaches logs or trace files: the V(3) `[upstream.headers]` line shows it as `<redacted len=N>` — the `len` distinguishes the inheriting key from an overriding key without printing either, the operator's live smoke evidence — and trace files redact `Authorization` (see ## Trace). The router never stores or logs token values, `default_token:` included; trace files inherit the same invariant — see ## Trace.
+- **Worked note.** With `default_token:` set, every no-token provider inherits it — the passthrough case exists on configs WITHOUT a global default (backward-compatible), which is the subscription-OAuth flow.
 
 ## Routing by API key
 

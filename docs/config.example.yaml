@@ -14,6 +14,8 @@ trace: false
 # allowedApiKeys:            # optional; uncomment + list caller keys to require x-api-key auth on /v1/*
 #   - "<CALLER_API_KEY>"     # and to route those callers to a provider (see docs/config.md ## Routing by API key)
 
+# default_token: "<SHARED_OUTBOUND_KEY>"   # optional; one shared outbound key inherited by every provider / pool member with no token: of its own (see docs/config.md ## Auth). A provider's own token: overrides it. MUST stay commented — copying this example must not change behavior.
+
 providers:
 
   anthropic-subscription:
@@ -30,7 +32,10 @@ providers:
 
   minimax:
     upstream: https://api.minimax.io/anthropic
-    token: "<YOUR_MINIMAX_API_KEY>"
+    token: "<YOUR_MINIMAX_API_KEY>"   # overrides default_token: — a provider needing its own key declares token: here
+    # window:                     # optional; legacy single-upstream form only — applies to the implicit single member (see docs/config.md ## Time-of-day windows). Cannot be combined with upstreams:.
+    #   from: "08:00 Europe/Berlin"
+    #   until: "18:00 Europe/Berlin"
     # allowedApiKeys:            # optional; keys that route to THIS provider, overriding model globs
     #   - "<ROUTING_KEY>"
     models:
@@ -56,6 +61,9 @@ providers:
     #   - upstream: http://localhost:11434
     #     token: "ollama"
     #     weight: 1
+    #     window:                   # optional; per-member time-of-day eligibility window (see docs/config.md ## Time-of-day windows). from/until in "HH:MM <location>" form.
+    #       from: "08:00 Europe/Berlin"
+    #       until: "18:00 Europe/Berlin"
     #     maxConcurrentRequests: 8
     #     maxConcurrentWaitSeconds: 30
     #   - upstream: http://localhost:11435

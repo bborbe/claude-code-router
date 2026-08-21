@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -57,7 +58,7 @@ type ModelRoute struct {
 	// presented key. Nil or empty (the default for every route built from a
 	// config that omits the field) means: this provider claims no keys, so
 	// it is only reachable via glob routing.
-	AllowedApiKeys []string
+	AllowedApiKeys []string `display:"length"`
 }
 
 // NewModelRouter returns an HTTP handler that body-parses each request's
@@ -75,7 +76,7 @@ type ModelRoute struct {
 //
 // One structured `[req]` log line per request at V(1):
 //
-//	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms
+//	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax/0 status=200 latency=842ms
 //
 // Non-200 responses are ALWAYS logged; 200 responses are gated by the
 // sampler. `log.DefaultSamplerFactory` gives the canonical OR-combo:
@@ -325,12 +326,24 @@ func newModelRouter(
 		// the request body; the `[route]` line names the provider only. Both
 		// branches are skipped wholesale for a pool-resolved request — the
 		// model field explicitly named a pool, so the pool pre-step wins.
+		// A provider whose pool has no eligible member (its members' time
+		// windows all exclude "now", spec 014) is skipped by key routing and
+		// the glob walk alike: eligibility is never an error or a 429, the
+		// request falls through to the next matching provider or
+		// default_provider, logged with `window=closed`.
 		//nolint:nestif // key-routing scan + glob walk, both skipped for pool-resolved requests
 		if !matchedByPool {
+			var closedProvider string
 			matchedByKey := false
 			if presentedKey := PresentedApiKeyFromContext(r.Context()); presentedKey != "" {
 				for _, route := range routes {
 					if containsString(route.AllowedApiKeys, presentedKey) {
+						if !windowEligible(route.Handler) {
+							// The key-pinned provider has no eligible member: fall
+							// through to the glob walk / default (spec 014 DB 4).
+							closedProvider = route.ProviderName
+							break
+						}
 						providerName = route.ProviderName
 						target = route.Handler
 						requiresLeadingSystem = route.RequiresLeadingSystem
@@ -345,13 +358,35 @@ func newModelRouter(
 					break
 				}
 				ok, _ := path.Match(route.Pattern, model)
-				if ok {
-					providerName = route.ProviderName
-					target = route.Handler
-					requiresLeadingSystem = route.RequiresLeadingSystem
+				if !ok {
+					continue
+				}
+				if !windowEligible(route.Handler) {
+					if closedProvider == "" {
+						closedProvider = route.ProviderName
+					}
+					continue
+				}
+				providerName = route.ProviderName
+				target = route.Handler
+				requiresLeadingSystem = route.RequiresLeadingSystem
+				glog.V(2).
+					Infof("[route] model=%q matched %q -> provider=%s", model, route.Pattern, providerName)
+				if closedProvider != "" && closedProvider != providerName {
 					glog.V(2).
-						Infof("[route] model=%q matched %q -> provider=%s", model, route.Pattern, providerName)
-					break
+						Infof("[route] provider=%s window=closed -> %s", closedProvider, providerName)
+				}
+				break
+			}
+			if sameHandler(target, defaultHandler) && closedProvider != "" {
+				if closedProvider != defaultProviderName {
+					glog.V(2).
+						Infof("[route] provider=%s window=closed -> %s", closedProvider, defaultProviderName)
+				} else {
+					// Last-resort: the default provider itself is closed — serve it
+					// anyway, never an error/429 (spec: closed window is eligibility,
+					// never a failure). The line is the operator's signal.
+					glog.V(2).Infof("[route] provider=%s window=closed", closedProvider)
 				}
 			}
 		}
@@ -375,7 +410,17 @@ func newModelRouter(
 			}
 		}
 
+		// Per-request upstream-member-index slot (spec 016): the router
+		// injects a shared slot into the request context before dispatch;
+		// an upstream pool handler in the dispatch path writes the
+		// zero-based index of the member it selected, and the router reads
+		// it back below for the [req] line. No pool handler in the path
+		// (default-fallback, test stubs) leaves the slot at its zero value
+		// -> a uniform `/0` suffix, never conditionally omitted.
+		slot := &upstreamIndexSlot{}
+		r = r.WithContext(ContextWithUpstreamIndex(r.Context(), slot))
 		target.ServeHTTP(ur, r)
+		memberIndex := slot.index
 
 		status := rec.status
 		if status == 0 {
@@ -415,14 +460,14 @@ func newModelRouter(
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {
 			glog.V(1).Infof(
-				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s in=%s out=%s",
-				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency, in, out,
+				"[req] %s %s model=%s alias=%s provider=%s/%d status=%d latency=%s in=%s out=%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, memberIndex, status, latency, in, out,
 			)
 			return
 		}
 		glog.V(1).Infof(
-			"[req] %s %s model=%s provider=%s status=%d latency=%s in=%s out=%s",
-			r.Method, r.URL.Path, origModel, providerName, status, latency, in, out,
+			"[req] %s %s model=%s provider=%s/%d status=%d latency=%s in=%s out=%s",
+			r.Method, r.URL.Path, origModel, providerName, memberIndex, status, latency, in, out,
 		)
 	})
 }
@@ -535,4 +580,32 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// sameHandler reports whether two http.Handler values refer to the same
+// handler. Handlers are commonly funcs (http.HandlerFunc, an uncomparable
+// type), so a plain == would panic; compare the underlying value's
+// pointer instead. Pointers and funcs compare by pointer identity, any
+// other kind (comparable by construction) by interface equality — the
+// semantics of == without the panic.
+func sameHandler(a, b http.Handler) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Type() != bv.Type() {
+		return false
+	}
+	switch av.Kind() {
+	case reflect.Func,
+		reflect.Chan,
+		reflect.Map,
+		reflect.Slice,
+		reflect.Pointer,
+		reflect.UnsafePointer:
+		return av.Pointer() == bv.Pointer()
+	default:
+		return av.Interface() == bv.Interface()
+	}
 }

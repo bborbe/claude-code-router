@@ -35,6 +35,7 @@ type RouterOptionFunc func(*routerOptions)
 
 type routerOptions struct {
 	metricsRegisterer prometheus.Registerer
+	currentDateTime   libtime.CurrentDateTimeGetter
 }
 
 // WithMetricsRegisterer overrides the Prometheus registerer used for
@@ -43,6 +44,17 @@ type routerOptions struct {
 func WithMetricsRegisterer(reg prometheus.Registerer) RouterOptionFunc {
 	return func(o *routerOptions) {
 		o.metricsRegisterer = reg
+	}
+}
+
+// WithCurrentDateTime overrides the clock used for time-window
+// eligibility and the router's timestamps. Defaults to
+// libtime.NewCurrentDateTime(). Tests pass a fixed clock
+// (libtime.NewCurrentDateTime() + SetNow) for deterministic window
+// checks (spec 014).
+func WithCurrentDateTime(clock libtime.CurrentDateTimeGetter) RouterOptionFunc {
+	return func(o *routerOptions) {
+		o.currentDateTime = clock
 	}
 }
 
@@ -168,7 +180,10 @@ func CreateRouterFromConfig(
 	cfg *pkg.Config,
 	opts ...RouterOptionFunc,
 ) (http.Handler, error) {
-	o := &routerOptions{metricsRegisterer: prometheus.DefaultRegisterer}
+	o := &routerOptions{
+		metricsRegisterer: prometheus.DefaultRegisterer,
+		currentDateTime:   libtime.NewCurrentDateTime(),
+	}
 	for _, opt := range opts {
 		select {
 		case <-ctx.Done():
@@ -214,13 +229,32 @@ func CreateRouterFromConfig(
 					up.Upstream,
 				)
 			}
-			transport := handler.NewLoggingRoundTripper(
-				handler.NewAuthSwapTransport(handler.DefaultProxyTransport(), up.Token),
-				liblog.SamplerList{
-					liblog.NewSampleTime(time.Second),
-					liblog.NewSamplerGlogLevel(5),
-				},
-				libtime.NewCurrentDateTime(),
+			// Effective outbound token (spec 015): the member's own token wins (for
+			// legacy single-upstream configs normalizeUpstreams/UpstreamList already
+			// copied the provider-level token onto this member), else the top-level
+			// default_token, else empty — an empty effective token keeps the
+			// auth-swap no-op contract (client Authorization passes through).
+			token := up.Token
+			if token == "" {
+				token = cfg.DefaultToken
+			}
+			// Auth-swap OUTER, logging INNER: the V(3) [upstream.headers] line (inside
+			// the logging roundtripper) must reflect the SWAPPED outbound
+			// Authorization — the operator evidence of which effective token went out
+			// (spec 015 AC 2, <redacted len=N> distinguishes the global key from an
+			// override key). With logging outer the line would show the client's
+			// pre-swap header instead. An empty token returns the logging transport
+			// unchanged (passthrough), identical to today's no-op wiring.
+			transport := handler.NewAuthSwapTransport(
+				handler.NewLoggingRoundTripper(
+					handler.DefaultProxyTransport(),
+					liblog.SamplerList{
+						liblog.NewSampleTime(time.Second),
+						liblog.NewSamplerGlogLevel(5),
+					},
+					libtime.NewCurrentDateTime(),
+				),
+				token,
 			)
 			proxy := handler.NewAnthropicProxyHandler(upstream, transport)
 			waitSeconds := up.MaxConcurrentWaitSeconds
@@ -243,14 +277,13 @@ func CreateRouterFromConfig(
 				Handler:  memberHandler,
 				Weight:   up.Weight,
 				InFlight: inFlight,
+				Window:   up.Window,
+				Now:      o.currentDateTime.Now,
 			})
 		}
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
-		if providerHandler == nil {
-			return nil, ctx.Err()
-		}
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			select {
@@ -306,7 +339,7 @@ func CreateRouterFromConfig(
 		modelPools,
 		liblog.DefaultSamplerFactory.Sampler(),
 		metrics,
-		libtime.NewCurrentDateTime(),
+		o.currentDateTime,
 	)
 
 	// The inbound key set is the single auth registry resolved from the

@@ -6,7 +6,7 @@ The router exposes a layered debug ladder. Start at the cheapest tier (log line 
 
 | Tier | Command | What you see | Where | Cost |
 |------|---------|--------------|-------|------|
-| V(1) default | — (always on) | `[req]` per-request line: method, path, model, provider, status, latency | `/tmp/claude-code-router.log` | negligible |
+| V(1) default | — (always on) | `[req]` per-request line: method, path, model, provider (with upstream pool member index — `provider=<name>/<index>`), status, latency | `/tmp/claude-code-router.log` | negligible |
 | V(2) | `curl http://127.0.0.1:8788/setloglevel/2` | `[alias]` alias resolution + `[route]` provider match detail | `/tmp/claude-code-router.log` | low |
 | V(3) | `curl http://127.0.0.1:8788/setloglevel/3` | `[upstream.headers]` — request headers sent to the provider (redacted: `Authorization`, `Cookie`, etc.) | `/tmp/claude-code-router.log` | low |
 | V(4) | `curl http://127.0.0.1:8788/setloglevel/4` | `[inbound.start]`, `[upstream.start]`/`[upstream.end]`, `[upstream.req.body]`/`[upstream.resp.body]` (4 KB samples, Bearer-redacted) | `/tmp/claude-code-router.log` | medium (body samples) |
