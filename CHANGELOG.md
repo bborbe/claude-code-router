@@ -6,6 +6,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- chore: update Go to 1.26.6 and update dependencies
 - feat: Log upstream pool member index (provider=<name>/<index>) in [req] line
 
 ## v0.42.1
