@@ -76,7 +76,7 @@ type ModelRoute struct {
 //
 // One structured `[req]` log line per request at V(1):
 //
-//	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax status=200 latency=842ms
+//	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax/0 status=200 latency=842ms
 //
 // Non-200 responses are ALWAYS logged; 200 responses are gated by the
 // sampler. `log.DefaultSamplerFactory` gives the canonical OR-combo:
@@ -410,7 +410,17 @@ func newModelRouter(
 			}
 		}
 
+		// Per-request upstream-member-index slot (spec 016): the router
+		// injects a shared slot into the request context before dispatch;
+		// an upstream pool handler in the dispatch path writes the
+		// zero-based index of the member it selected, and the router reads
+		// it back below for the [req] line. No pool handler in the path
+		// (default-fallback, test stubs) leaves the slot at its zero value
+		// -> a uniform `/0` suffix, never conditionally omitted.
+		slot := &upstreamIndexSlot{}
+		r = r.WithContext(ContextWithUpstreamIndex(r.Context(), slot))
 		target.ServeHTTP(ur, r)
+		memberIndex := slot.index
 
 		status := rec.status
 		if status == 0 {
@@ -450,14 +460,14 @@ func newModelRouter(
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {
 			glog.V(1).Infof(
-				"[req] %s %s model=%s alias=%s provider=%s status=%d latency=%s in=%s out=%s",
-				r.Method, r.URL.Path, origModel, aliasResolved, providerName, status, latency, in, out,
+				"[req] %s %s model=%s alias=%s provider=%s/%d status=%d latency=%s in=%s out=%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, memberIndex, status, latency, in, out,
 			)
 			return
 		}
 		glog.V(1).Infof(
-			"[req] %s %s model=%s provider=%s status=%d latency=%s in=%s out=%s",
-			r.Method, r.URL.Path, origModel, providerName, status, latency, in, out,
+			"[req] %s %s model=%s provider=%s/%d status=%d latency=%s in=%s out=%s",
+			r.Method, r.URL.Path, origModel, providerName, memberIndex, status, latency, in, out,
 		)
 	})
 }

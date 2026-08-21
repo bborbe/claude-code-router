@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: Log upstream pool member index (provider=<name>/<index>) in [req] line
+
 ## v0.42.1
 
 - chore: Reorder the `format:` target so `gofmt -w` runs last, after golines, so golines' wrapping is normalized before the gofmt lint check passes
