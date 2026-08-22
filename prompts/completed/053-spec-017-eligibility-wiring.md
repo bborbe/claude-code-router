@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [017-weekday-window-upstreams]
+summary: 'Wired the spec-017 weekday days: filter into the spec-014 eligibility path: UpstreamMember gained Days, memberEligible became the window AND days conjunction, the factory copies each member''s days: onto the runtime pool member (SIGHUP-rebuild live), and fixed-clock Ginkgo rows prove the weekend all-day, offset-boundary, location-boundary, complementary three-member, keyless least-loaded, and provider fall-through behaviors through the real dispatch path — make precommit green.'
+execution_id: claude-code-router-weekday-exec-053-spec-017-eligibility-wiring
+dark-factory-version: dev
 created: "2026-08-22T12:05:00Z"
 queued: "2026-08-22T12:40:46Z"
+started: "2026-08-22T12:45:00Z"
+completed: "2026-08-22T12:54:34Z"
 branch: dark-factory/weekday-window-upstreams
 ---
 
