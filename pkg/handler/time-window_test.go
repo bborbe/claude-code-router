@@ -121,7 +121,7 @@ type windowStub struct {
 	eligible bool
 }
 
-func (w *windowStub) HasEligibleMember() bool { return w.eligible }
+func (w *windowStub) HasEligibleMember(context.Context) bool { return w.eligible }
 
 // mustDays parses a "comma-separated weekday names, optional location"
 // value into a *pkg.Days, failing the test on a malformed one.
@@ -155,11 +155,11 @@ func daysMember(
 // windowEligible gate.
 func poolEligible(members ...handler.UpstreamMember) bool {
 	pool := handler.NewUpstreamPoolHandler(context.Background(), members)
-	e, ok := pool.(interface{ HasEligibleMember() bool })
+	e, ok := pool.(interface{ HasEligibleMember(context.Context) bool })
 	if !ok {
 		return true
 	}
-	return e.HasEligibleMember()
+	return e.HasEligibleMember(context.Background())
 }
 
 // atDate returns a fixed-clock DateTime for the given date/time in loc,

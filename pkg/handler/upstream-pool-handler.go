@@ -22,16 +22,18 @@ import (
 // eligible — their time windows and/or weekday sets exclude "now" (spec
 // 014 / 017). A handler that does not implement the interface is always
 // eligible.
+//
+//counterfeiter:generate -o ../../mocks/window-eligible.go --fake-name WindowEligible . WindowEligible
 type WindowEligible interface {
-	HasEligibleMember() bool
+	HasEligibleMember(ctx context.Context) bool
 }
 
 // windowEligible reports whether a provider handler has at least one
 // eligible pool member. Handlers without time windows or weekday sets
 // are always eligible.
-func windowEligible(h http.Handler) bool {
+func windowEligible(ctx context.Context, h http.Handler) bool {
 	if e, ok := h.(WindowEligible); ok {
-		return e.HasEligibleMember()
+		return e.HasEligibleMember(ctx)
 	}
 	return true
 }
@@ -169,11 +171,8 @@ func (p *upstreamPoolHandler) eligibleIndices(ctx context.Context) []int {
 // eligible right now (spec 014 DB 4). A provider whose pool returns
 // false is ineligible for the dispatch and the model router falls
 // through to the next provider / default_provider.
-func (p *upstreamPoolHandler) HasEligibleMember() bool {
-	// HasEligibleMember is the WindowEligible interface method (no ctx in the
-	// signature); the eligible-subset scan is a bounded config-sized query, so
-	// a background context is safe here.
-	return len(p.eligibleIndices(context.Background())) > 0
+func (p *upstreamPoolHandler) HasEligibleMember(ctx context.Context) bool {
+	return len(p.eligibleIndices(ctx)) > 0
 }
 
 // pinSlot returns the member index that the weighted ring hash of
