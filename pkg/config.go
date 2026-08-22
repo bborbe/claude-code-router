@@ -297,6 +297,15 @@ type Days struct {
 // against the 7 canonical lowercase names. An empty value and an
 // unknown name are errors, so the yaml parse fails and Load rejects
 // the config.
+//
+// No ctx here: UnmarshalText is the encoding.TextUnmarshaler entry
+// point, whose signature is fixed by the stdlib (`UnmarshalText([]byte)
+// error`) — yaml.v3's decode path has no ctx-propagating variant, so
+// caller cancellation is not observable at parse time anyway. The
+// context.Background() arguments below feed bborbe/errors.New/Errorf,
+// which require a ctx first arg purely as error metadata (tracing), not
+// as a cancellation point. This mirrors the spec-014 precedent
+// libtime.TimeOfDay.UnmarshalText (bborbe/time v1.27.9).
 func (d *Days) UnmarshalText(text []byte) error {
 	value := strings.TrimSpace(string(text))
 	if value == "" {
