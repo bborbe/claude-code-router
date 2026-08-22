@@ -1,6 +1,7 @@
 ---
-status: approved
+status: verifying
 approved: "2026-08-20T20:11:08Z"
+verifying: "2026-08-22T17:10:00Z"
 branch: dark-factory/spec-016
 ---
 
