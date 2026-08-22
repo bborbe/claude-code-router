@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add the optional `days:` weekday eligibility block to the config contract (`pkg/config.go`, spec 017) — `Days{Weekdays, Location}` parsed from the comma-separated lowercase weekday-name list (`monday`..`sunday`, Go `time.Weekday.String()` lowercased) with an optional trailing inline IANA location (e.g. `"saturday, sunday Europe/Berlin"`), carried per `Upstream` member and on the legacy single-`upstream:` provider form (a provider-level days is copied onto the synthesized one-member pool by `normalizeUpstreams`, and onto the `Provider.UpstreamList()` fallback for programmatic configs); a provider-level days combined with an `upstreams:` list is rejected at load, an unknown weekday name and an empty value fail at yaml parse, and a days-only member (no `window:`) whose value carries no inline location fails validation (fail-closed, so a days-only member can never silently resolve its weekday in UTC and drift from its sibling members' calendar); `Days.Contains(now, window)` resolves the weekday in the inline days location, else the member's window from/until location, else UTC; configs without any `days:` load byte-for-byte as before. Config contract only — the selection-time eligibility wiring ships separately.
+
 ## v0.43.0
 
 - chore: update dependencies

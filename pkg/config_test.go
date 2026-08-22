@@ -39,6 +39,12 @@ func nowAt(h, min int, loc *stdtime.Location) libtime.DateTime {
 	return libtime.DateTime(stdtime.Date(2026, 8, 19, h, min, 0, 0, loc))
 }
 
+// atDate returns a fixed-clock DateTime for the given date/time in loc,
+// so weekday tests never depend on the wall clock.
+func atDate(y, mo, d, h, min int, loc *stdtime.Location) libtime.DateTime {
+	return libtime.DateTime(stdtime.Date(y, stdtime.Month(mo), d, h, min, 0, 0, loc))
+}
+
 var _ = Describe("Config", func() {
 	var dir string
 
@@ -1476,6 +1482,295 @@ providers:
 				"08:00 Europe/Berlin",
 				nowAt(2, 0, berlinLoc),
 				false,
+			),
+		)
+	})
+
+	Context("days", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave Days nil, so every fixture goes through Load, not struct
+		// literals. Providers use https://a.example style URLs.
+		It("parses days: on an upstreams entry", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        days: "saturday, sunday Europe/Berlin"
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			days := cfg.Providers["x"].Upstreams[0].Days
+			Expect(days).NotTo(BeNil())
+			Expect(days.Weekdays.Contains(libtime.Saturday)).To(BeTrue())
+			Expect(days.Weekdays.Contains(libtime.Monday)).To(BeFalse())
+			Expect(days.Weekdays.Contains(libtime.Sunday)).To(BeTrue())
+			Expect(days.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(cfg.Providers["x"].Upstreams[1].Days).To(BeNil())
+		})
+
+		It("normalizes a legacy single upstream days onto the synthesized member", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+    days: "monday, friday Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			upstreams := cfg.Providers["x"].Upstreams
+			Expect(upstreams).To(HaveLen(1))
+			Expect(upstreams[0].Weight).To(Equal(1))
+			Expect(upstreams[0].Days).NotTo(BeNil())
+			Expect(upstreams[0].Days.Weekdays.Contains(libtime.Monday)).To(BeTrue())
+			Expect(upstreams[0].Days.Weekdays.Contains(libtime.Saturday)).To(BeFalse())
+			Expect(upstreams[0].Days.Location.String()).To(Equal("Europe/Berlin"))
+		})
+
+		It("loads a config without any days: unchanged — backward compat", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+      - upstream: https://b.example
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["x"].Upstreams).To(HaveLen(2))
+			for _, up := range cfg.Providers["x"].Upstreams {
+				Expect(up.Days).To(BeNil())
+			}
+		})
+
+		It("rejects an unknown weekday name at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        days: "funday Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("funday"))
+		})
+
+		It("rejects an empty days: value at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        days: ""
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("days: value is required"))
+		})
+
+		It("rejects a days-only member without an inline location at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        days: "saturday, sunday"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("location"))
+		})
+
+		It("accepts a days-only member with an inline location (all-day weekend)", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        days: "saturday, sunday Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			days := cfg.Providers["x"].Upstreams[0].Days
+			Expect(days).NotTo(BeNil())
+			Expect(days.Location.String()).To(Equal("Europe/Berlin"))
+			Expect(cfg.Providers["x"].Upstreams[0].Window).To(BeNil())
+		})
+
+		It("accepts a member whose days inherit the window location at selection time", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+        days: "monday, friday"
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+`)
+			cfg, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).NotTo(HaveOccurred())
+			days := cfg.Providers["x"].Upstreams[0].Days
+			Expect(days).NotTo(BeNil())
+			Expect(days.Location).To(BeNil())
+			Expect(cfg.Providers["x"].Upstreams[0].Window).NotTo(BeNil())
+		})
+
+		It("rejects a days-only legacy provider without an inline location at load", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    upstream: https://a.example
+    models: ["foo-*"]
+    days: "saturday, sunday"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("location"))
+		})
+
+		It("rejects a provider-level days combined with an upstreams list", func() {
+			p := write(`
+router:
+  default_provider: x
+providers:
+  x:
+    models: ["foo-*"]
+    upstreams:
+      - upstream: https://a.example
+      - upstream: https://b.example
+    days: "saturday, sunday Europe/Berlin"
+`)
+			_, err := pkgcfg.Load(context.Background(), p)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`provider "x"`))
+			Expect(
+				err.Error(),
+			).To(ContainSubstring("days applies only to the legacy upstream form"))
+		})
+
+		It("carries the provider days in UpstreamList for programmatic configs", func() {
+			days := &pkgcfg.Days{}
+			Expect(days.UnmarshalText([]byte("saturday, sunday Europe/Berlin"))).To(Succeed())
+			prov := pkgcfg.Provider{
+				Upstream: "https://a.example",
+				Days:     days,
+			}
+			list := prov.UpstreamList()
+			Expect(list).To(HaveLen(1))
+			Expect(list[0].Days).NotTo(BeNil())
+			Expect(list[0].Days.Weekdays.Contains(libtime.Saturday)).To(BeTrue())
+			Expect(list[0].Days.Location.String()).To(Equal("Europe/Berlin"))
+		})
+
+		It("leaves UpstreamList days nil for a days-less programmatic provider", func() {
+			prov := pkgcfg.Provider{Upstream: "https://a.example"}
+			Expect(prov.UpstreamList()[0].Days).To(BeNil())
+		})
+
+		DescribeTable(
+			"Days.Contains",
+			func(value string, window *pkgcfg.Window, now libtime.DateTime, expected bool) {
+				days := &pkgcfg.Days{}
+				Expect(days.UnmarshalText([]byte(value))).To(Succeed())
+				Expect(days.Contains(now, window)).To(Equal(expected))
+			},
+			Entry(
+				"saturday set: Berlin Saturday 10:00 is inside",
+				"saturday, sunday Europe/Berlin",
+				nil,
+				atDate(2026, 8, 22, 10, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"saturday set: Berlin Monday 10:00 is outside",
+				"saturday, sunday Europe/Berlin",
+				nil,
+				atDate(2026, 8, 24, 10, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"saturday set: Berlin Sunday 00:01 is inside",
+				"saturday, sunday Europe/Berlin",
+				nil,
+				atDate(2026, 8, 23, 0, 1, berlinLoc),
+				true,
+			),
+			Entry(
+				"saturday set: Berlin Friday 23:59 is outside",
+				"saturday, sunday Europe/Berlin",
+				nil,
+				atDate(2026, 8, 21, 23, 59, berlinLoc),
+				false,
+			),
+			Entry(
+				"location inheritance: Berlin Monday 10:00 is inside",
+				"monday, friday",
+				&pkgcfg.Window{
+					From:  mustTOD("08:00 Europe/Berlin"),
+					Until: mustTOD("18:00 Europe/Berlin"),
+				},
+				atDate(2026, 8, 24, 10, 0, berlinLoc),
+				true,
+			),
+			Entry(
+				"location inheritance: Berlin Saturday 10:00 is outside",
+				"monday, friday",
+				&pkgcfg.Window{
+					From:  mustTOD("08:00 Europe/Berlin"),
+					Until: mustTOD("18:00 Europe/Berlin"),
+				},
+				atDate(2026, 8, 22, 10, 0, berlinLoc),
+				false,
+			),
+			Entry(
+				"IANA boundary: UTC Saturday 22:30 is Berlin Sunday 00:30 — inside",
+				"sunday Europe/Berlin",
+				nil,
+				atDate(2026, 8, 22, 22, 30, stdtime.UTC),
+				true,
+			),
+			Entry(
+				"IANA boundary: UTC Sunday 22:30 is Berlin Monday 00:30 — outside",
+				"sunday Europe/Berlin",
+				nil,
+				atDate(2026, 8, 23, 22, 30, stdtime.UTC),
+				false,
+			),
+			Entry(
+				"UTC fallback: UTC Saturday 10:00 resolves in UTC — inside",
+				"saturday",
+				nil,
+				atDate(2026, 8, 22, 10, 0, stdtime.UTC),
+				true,
 			),
 		)
 	})
