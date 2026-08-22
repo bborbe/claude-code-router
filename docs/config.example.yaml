@@ -36,6 +36,7 @@ providers:
     # window:                     # optional; legacy single-upstream form only — applies to the implicit single member (see docs/config.md ## Time-of-day windows). Cannot be combined with upstreams:.
     #   from: "08:00 Europe/Berlin"
     #   until: "18:00 Europe/Berlin"
+    # days:                        # optional; legacy single-upstream form only — applies to the implicit single member (see docs/config.md ## Time-of-day windows). Cannot be combined with upstreams:.
     # allowedApiKeys:            # optional; keys that route to THIS provider, overriding model globs
     #   - "<ROUTING_KEY>"
     models:
@@ -64,6 +65,7 @@ providers:
     #     window:                   # optional; per-member time-of-day eligibility window (see docs/config.md ## Time-of-day windows). from/until in "HH:MM <location>" form.
     #       from: "08:00 Europe/Berlin"
     #       until: "18:00 Europe/Berlin"
+    #     days:                      # optional; per-member weekday eligibility allow-list (see docs/config.md ## Time-of-day windows). Comma-separated lowercase weekday names (monday..sunday) with an optional trailing IANA location, e.g. "saturday, sunday Europe/Berlin". A member outside its days is ineligible for dispatch.
     #     maxConcurrentRequests: 8
     #     maxConcurrentWaitSeconds: 30
     #   - upstream: http://localhost:11435

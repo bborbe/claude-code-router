@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [017-weekday-window-upstreams]
+summary: 'Documented the per-upstream days: weekday eligibility block in docs/config.md (schema comments + extended ## Time-of-day windows section with a three-member weekend/day/night worked example), added commented days: examples to docs/config.example.yaml, and extended the existing ## Unreleased in CHANGELOG.md with a feat bullet containing the literal ''weekday'''
+execution_id: claude-code-router-weekday-exec-054-spec-017-docs-changelog
+dark-factory-version: dev
 created: "2026-08-22T12:10:00Z"
 queued: "2026-08-22T12:40:46Z"
+started: "2026-08-22T12:54:36Z"
+completed: "2026-08-22T13:01:12Z"
 branch: dark-factory/weekday-window-upstreams
 ---
 
