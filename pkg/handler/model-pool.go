@@ -93,8 +93,8 @@ func (p *ModelPool) Resolve(ctx context.Context, sessionID string) ModelPoolMemb
 // memberEligible reports whether member i's provider pool has at least
 // one eligible upstream member right now (spec 014). A provider handler
 // that does not implement WindowEligible is always eligible.
-func (p *ModelPool) memberEligible(i int) bool {
-	return windowEligible(p.members[i].Handler)
+func (p *ModelPool) memberEligible(ctx context.Context, i int) bool {
+	return windowEligible(ctx, p.members[i].Handler)
 }
 
 // eligibleIndices returns the indices of members whose provider is
@@ -107,7 +107,7 @@ func (p *ModelPool) eligibleIndices(ctx context.Context) []int {
 			return nil
 		default:
 		}
-		if p.memberEligible(i) {
+		if p.memberEligible(ctx, i) {
 			idx = append(idx, i)
 		}
 	}

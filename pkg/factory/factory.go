@@ -278,6 +278,7 @@ func CreateRouterFromConfig(
 				Weight:   up.Weight,
 				InFlight: inFlight,
 				Window:   up.Window,
+				Days:     up.Days,
 				Now:      o.currentDateTime.Now,
 			})
 		}

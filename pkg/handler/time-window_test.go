@@ -121,7 +121,54 @@ type windowStub struct {
 	eligible bool
 }
 
-func (w *windowStub) HasEligibleMember() bool { return w.eligible }
+func (w *windowStub) HasEligibleMember(context.Context) bool { return w.eligible }
+
+// mustDays parses a "comma-separated weekday names, optional location"
+// value into a *pkg.Days, failing the test on a malformed one.
+func mustDays(s string) *pkg.Days {
+	d := &pkg.Days{}
+	Expect(d.UnmarshalText([]byte(s))).To(Succeed())
+	return d
+}
+
+// daysMember builds an UpstreamMember carrying the given days set and
+// the fixed clock's Now, mirroring the factory wiring. window may be
+// nil (a days-only member).
+func daysMember(
+	upstream, days string,
+	h http.Handler,
+	clock libtime.CurrentDateTimeGetter,
+	window *pkg.Window,
+) handler.UpstreamMember {
+	return handler.UpstreamMember{
+		Upstream: upstream,
+		Handler:  h,
+		Weight:   1,
+		Window:   window,
+		Days:     mustDays(days),
+		Now:      clock.Now,
+	}
+}
+
+// poolEligible reports whether a pool over the given members has at
+// least one eligible member right now, mirroring the router's
+// windowEligible gate.
+func poolEligible(members ...handler.UpstreamMember) bool {
+	pool := handler.NewUpstreamPoolHandler(context.Background(), members)
+	e, ok := pool.(interface{ HasEligibleMember(context.Context) bool })
+	if !ok {
+		return true
+	}
+	return e.HasEligibleMember(context.Background())
+}
+
+// atDate returns a fixed-clock DateTime for the given date/time in loc,
+// so weekday tests never depend on the wall clock. Fixed dates used
+// below: 2026-08-19 Wednesday, 2026-08-21 Friday, 2026-08-22 Saturday,
+// 2026-08-23 Sunday, 2026-08-24 Monday.
+func atDate(y, mo, d, h, min int, loc *stdtime.Location) libtime.DateTime {
+	return libtime.DateTime(stdtime.Date(y, stdtime.Month(mo), d, h, min, 0, 0, loc))
+}
 
 var _ = Describe("UpstreamPoolHandler time windows", func() {
 	It(
@@ -508,4 +555,323 @@ var _ = Describe("ModelRouter time-window fall-through", func() {
 		Expect(pool.Resolve(context.Background(), id).Provider).To(Equal("b"))
 		Expect(pool.Resolve(context.Background(), "").Provider).To(Equal("b"))
 	})
+})
+
+var _ = Describe("UpstreamPoolHandler weekday eligibility (days)", func() {
+	It(
+		"AC 3: a days-only weekend member is eligible all day Sat+Sun (Berlin) and ineligible Mon-Fri, through the real dispatch path",
+		func() {
+			clock := libtime.NewCurrentDateTime()
+			id := pinID(0, 1, 1) // pinned to member 0 over the full ring
+
+			// ELIGIBLE Berlin instants: Sat and Sun all day. A fresh weekend/open
+			// pair per instant (the countingHandler has no reset) so the counters
+			// assert cleanly.
+			eligible := []libtime.DateTime{
+				atDate(2026, 8, 22, 0, 1, berlin),   // Sat 00:01
+				atDate(2026, 8, 22, 10, 0, berlin),  // Sat 10:00
+				atDate(2026, 8, 22, 23, 59, berlin), // Sat 23:59
+				atDate(2026, 8, 23, 0, 1, berlin),   // Sun 00:01
+				atDate(2026, 8, 23, 23, 59, berlin), // Sun 23:59
+			}
+			for _, now := range eligible {
+				weekend := &countingHandler{}
+				open := &countingHandler{}
+				pool := handler.NewUpstreamPoolHandler(
+					context.Background(),
+					[]handler.UpstreamMember{
+						daysMember(
+							"https://weekend",
+							"saturday, sunday Europe/Berlin",
+							weekend,
+							clock,
+							nil,
+						),
+						{Upstream: "https://open", Handler: open, Weight: 1},
+					},
+				)
+				clock.SetNow(now)
+				rec := httptest.NewRecorder()
+				pool.ServeHTTP(rec, sessionedReq(id))
+				Expect(rec.Code).To(Equal(http.StatusOK))
+				rec = httptest.NewRecorder()
+				pool.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+				Expect(rec.Code).To(Equal(http.StatusOK))
+				Expect(
+					weekend.invocations(),
+				).To(Equal(2), "the weekend member must serve the pinned and keyless requests")
+				Expect(
+					open.invocations(),
+				).To(Equal(0), "the open member must see no weekend traffic")
+			}
+
+			// INELIGIBLE Berlin instants: Mon and Fri — the same pinned id plus a
+			// keyless request must both land on the open member.
+			ineligible := []libtime.DateTime{
+				atDate(2026, 8, 24, 0, 1, berlin),   // Mon 00:01
+				atDate(2026, 8, 24, 10, 0, berlin),  // Mon 10:00
+				atDate(2026, 8, 21, 23, 59, berlin), // Fri 23:59
+			}
+			for _, now := range ineligible {
+				weekend := &countingHandler{}
+				open := &countingHandler{}
+				pool := handler.NewUpstreamPoolHandler(
+					context.Background(),
+					[]handler.UpstreamMember{
+						daysMember(
+							"https://weekend",
+							"saturday, sunday Europe/Berlin",
+							weekend,
+							clock,
+							nil,
+						),
+						{Upstream: "https://open", Handler: open, Weight: 1},
+					},
+				)
+				clock.SetNow(now)
+				rec := httptest.NewRecorder()
+				pool.ServeHTTP(rec, sessionedReq(id))
+				Expect(rec.Code).To(Equal(http.StatusOK))
+				rec = httptest.NewRecorder()
+				pool.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+				Expect(rec.Code).To(Equal(http.StatusOK))
+				Expect(
+					open.invocations(),
+				).To(Equal(2), "the open member must serve the pinned and keyless requests")
+				Expect(
+					weekend.invocations(),
+				).To(Equal(0), "the weekend member must serve nothing Mon-Fri")
+			}
+		},
+	)
+
+	It(
+		"AC 3: the boundary is the attached location's calendar, not host UTC (offset boundary)",
+		func() {
+			clock := libtime.NewCurrentDateTime()
+			weekend := &countingHandler{}
+			open := &countingHandler{}
+			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
+				daysMember(
+					"https://weekend",
+					"saturday, sunday Europe/Berlin",
+					weekend,
+					clock,
+					nil,
+				),
+				{Upstream: "https://open", Handler: open, Weight: 1},
+			})
+			id := pinID(0, 1, 1) // pinned to the weekend member over the full ring
+
+			// UTC Friday 22:30 IS Berlin Saturday 00:30 — the weekend member serves.
+			clock.SetNow(libtime.DateTime(stdtime.Date(2026, 8, 21, 22, 30, 0, 0, stdtime.UTC)))
+			rec := httptest.NewRecorder()
+			pool.ServeHTTP(rec, sessionedReq(id))
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(weekend.invocations()).To(Equal(1), "UTC Friday evening is Berlin Saturday")
+			Expect(open.invocations()).To(Equal(0))
+
+			// UTC Sunday 22:30 IS Berlin Monday 00:30 — the open member serves.
+			clock.SetNow(libtime.DateTime(stdtime.Date(2026, 8, 23, 22, 30, 0, 0, stdtime.UTC)))
+			rec = httptest.NewRecorder()
+			pool.ServeHTTP(rec, sessionedReq(id))
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(open.invocations()).To(Equal(1), "UTC Sunday evening is Berlin Monday")
+			Expect(
+				weekend.invocations(),
+			).To(Equal(1), "the weekend member must stay idle on Berlin Monday")
+		},
+	)
+
+	It(
+		"AC 5: a member whose location is Europe/Berlin flips eligibility on Berlin's weekday while UTC disagrees",
+		func() {
+			clock := libtime.NewCurrentDateTime()
+			berlinSun := daysMember(
+				"https://berlin", "sunday Europe/Berlin", labelHandler("berlin-sun"), clock, nil,
+			)
+			utcSun := daysMember("https://utc", "sunday UTC", labelHandler("utc-sun"), clock, nil)
+			pool := handler.NewUpstreamPoolHandler(
+				context.Background(),
+				[]handler.UpstreamMember{berlinSun, utcSun},
+			)
+			id := pinID(0, 1, 1) // pinned to member 0 over the full ring
+
+			// UTC Sat 22:30 = Berlin Sun 00:30 — berlin-sun eligible, utc-sun not.
+			clock.SetNow(libtime.DateTime(stdtime.Date(2026, 8, 22, 22, 30, 0, 0, stdtime.UTC)))
+			rec := httptest.NewRecorder()
+			pool.ServeHTTP(rec, sessionedReq(id))
+			Expect(rec.Body.String()).To(Equal("berlin-sun"))
+
+			// UTC Sun 22:30 = Berlin Mon 00:30 — utc-sun eligible, berlin-sun not.
+			clock.SetNow(libtime.DateTime(stdtime.Date(2026, 8, 23, 22, 30, 0, 0, stdtime.UTC)))
+			rec = httptest.NewRecorder()
+			pool.ServeHTTP(rec, sessionedReq(id))
+			Expect(rec.Body.String()).To(Equal("utc-sun"))
+		},
+	)
+
+	It(
+		"AC 4: complementary three-member pool — exactly one eligible member per (day, time), the cap traveling with each member",
+		func() {
+			clock := libtime.NewCurrentDateTime()
+			weekend := daysMember(
+				"https://weekend",
+				"saturday, sunday Europe/Berlin",
+				handler.NewConcurrencyLimiter(
+					labelHandler("weekend"),
+					50,
+					stdtime.Second,
+				),
+				clock,
+				nil,
+			)
+			day := handler.UpstreamMember{
+				Upstream: "https://day",
+				Handler:  handler.NewConcurrencyLimiter(labelHandler("day"), 16, stdtime.Second),
+				Weight:   1,
+				Window: &pkg.Window{
+					From:  mustTOD("08:00 Europe/Berlin"),
+					Until: mustTOD("18:00 Europe/Berlin"),
+				},
+				Days: mustDays("monday, friday"),
+				Now:  clock.Now,
+			}
+			night := handler.UpstreamMember{
+				Upstream: "https://night",
+				Handler:  handler.NewConcurrencyLimiter(labelHandler("night"), 50, stdtime.Second),
+				Weight:   1,
+				Window: &pkg.Window{
+					From:  mustTOD("18:00 Europe/Berlin"),
+					Until: mustTOD("08:00 Europe/Berlin"),
+				},
+				Days: mustDays("monday, friday"),
+				Now:  clock.Now,
+			}
+			pool := handler.NewUpstreamPoolHandler(
+				context.Background(),
+				[]handler.UpstreamMember{weekend, day, night},
+			)
+
+			points := []struct {
+				now      libtime.DateTime
+				eligible string
+			}{
+				{atDate(2026, 8, 24, 10, 0, berlin), "day"},     // Mon 10:00
+				{atDate(2026, 8, 24, 22, 0, berlin), "night"},   // Mon 22:00
+				{atDate(2026, 8, 24, 0, 30, berlin), "night"},   // Mon 00:30 (weekend NOT eligible)
+				{atDate(2026, 8, 22, 0, 30, berlin), "weekend"}, // Sat 00:30 (night NOT eligible)
+				{atDate(2026, 8, 22, 10, 0, berlin), "weekend"}, // Sat 10:00
+				{atDate(2026, 8, 22, 22, 0, berlin), "weekend"}, // Sat 22:00
+				{atDate(2026, 8, 23, 10, 0, berlin), "weekend"}, // Sun 10:00
+				{atDate(2026, 8, 21, 23, 30, berlin), "night"},  // Fri 23:30
+			}
+			for _, pt := range points {
+				clock.SetNow(pt.now)
+				candidates := []struct {
+					name   string
+					member handler.UpstreamMember
+				}{
+					{"weekend", weekend},
+					{"day", day},
+					{"night", night},
+				}
+				eligibleCount := 0
+				eligibleName := ""
+				for _, c := range candidates {
+					if poolEligible(c.member) {
+						eligibleCount++
+						eligibleName = c.name
+					}
+				}
+				Expect(
+					eligibleCount,
+				).To(Equal(1), "exactly one member must be eligible at %v", pt.now)
+				Expect(eligibleName).To(Equal(pt.eligible))
+
+				// The real three-member pool dispatches both the pinned and the
+				// keyless request to the single eligible member; the serving label
+				// proves the member's distinct limiter cap travels with it.
+				rec := httptest.NewRecorder()
+				pool.ServeHTTP(rec, sessionedReq(pinID(0, 1, 1, 1)))
+				Expect(rec.Body.String()).To(Equal(pt.eligible))
+				rec = httptest.NewRecorder()
+				pool.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+				Expect(rec.Body.String()).To(Equal(pt.eligible))
+			}
+		},
+	)
+
+	It(
+		"AC 2: a member outside its days is skipped by keyless least-loaded selection",
+		func() {
+			clock := libtime.NewCurrentDateTime()
+			clock.SetNow(atDate(2026, 8, 22, 10, 0, berlin)) // Saturday
+			a := &countingHandler{}
+			b := &countingHandler{}
+			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
+				daysMember("https://a", "monday Europe/Berlin", a, clock, nil),
+				{Upstream: "https://b", Handler: b, Weight: 1, InFlight: func() int { return 5 }},
+			})
+			rec := httptest.NewRecorder()
+			pool.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+			Expect(
+				a.invocations(),
+			).To(Equal(0), "the days-closed member must not be least-loaded-selected")
+			Expect(b.invocations()).To(Equal(1), "the open member must serve even at higher load")
+		},
+	)
+
+	It(
+		"AC 2: provider fall-through — a provider whose only member is outside its days logs window=closed and falls through, never 429",
+		func() {
+			clock := libtime.NewCurrentDateTime()
+			clock.SetNow(atDate(2026, 8, 22, 10, 0, berlin)) // Saturday
+			weekdayCounter := &countingHandler{}
+			weekdayPool := handler.NewUpstreamPoolHandler(
+				context.Background(),
+				[]handler.UpstreamMember{
+					daysMember(
+						"https://weekday",
+						"monday, friday Europe/Berlin",
+						weekdayCounter,
+						clock,
+						nil,
+					),
+				},
+			)
+			mux := handler.NewModelRouter(
+				[]handler.ModelRoute{
+					{Pattern: "deepseek-*", ProviderName: "weekday-pool", Handler: weekdayPool},
+				},
+				"default",
+				labelHandler("fallback"),
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			_ = flag.Set("logtostderr", "true")
+			_ = flag.Set("v", "2")
+			rec := httptest.NewRecorder()
+			out := captureStderr(func() {
+				mux.ServeHTTP(
+					rec,
+					httptest.NewRequest(
+						http.MethodPost,
+						"/v1/messages",
+						strings.NewReader(`{"model":"deepseek-x"}`),
+					),
+				)
+			})
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(rec.Body.String()).To(Equal("fallback"))
+			Expect(weekdayCounter.invocations()).To(Equal(0), "the days-closed pool must not serve")
+			Expect(
+				out,
+			).To(ContainSubstring("[route] provider=weekday-pool window=closed -> default"))
+			Expect(out).NotTo(ContainSubstring("status=429"))
+			Expect(out).NotTo(ContainSubstring("ERROR"))
+		},
+	)
 })

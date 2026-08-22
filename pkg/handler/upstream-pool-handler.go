@@ -18,19 +18,22 @@ import (
 )
 
 // WindowEligible is implemented by provider handlers that can be
-// ineligible for a dispatch because none of their pool members' time
-// windows contain "now" (spec 014). A handler that does not implement
-// the interface is always eligible.
+// ineligible for a dispatch because none of their pool members are
+// eligible — their time windows and/or weekday sets exclude "now" (spec
+// 014 / 017). A handler that does not implement the interface is always
+// eligible.
+//
+//counterfeiter:generate -o ../../mocks/window-eligible.go --fake-name WindowEligible . WindowEligible
 type WindowEligible interface {
-	HasEligibleMember() bool
+	HasEligibleMember(ctx context.Context) bool
 }
 
 // windowEligible reports whether a provider handler has at least one
-// eligible pool member. Handlers without time windows are always
-// eligible.
-func windowEligible(h http.Handler) bool {
+// eligible pool member. Handlers without time windows or weekday sets
+// are always eligible.
+func windowEligible(ctx context.Context, h http.Handler) bool {
 	if e, ok := h.(WindowEligible); ok {
-		return e.HasEligibleMember()
+		return e.HasEligibleMember(ctx)
 	}
 	return true
 }
@@ -41,7 +44,10 @@ func windowEligible(h http.Handler) bool {
 // selection inputs — Weight for the weighted ring hash of a pinned
 // session, InFlight for least-loaded selection of keyless requests.
 // InFlight may be nil, meaning "always 0" (an uncapped member). Window,
-// when non-nil, restricts eligibility to the times its Contains holds.
+// when non-nil, restricts eligibility to the times its Contains holds;
+// Days, when non-nil, restricts eligibility to the weekdays its set
+// contains. A member whose weekday is not in its days set is excluded
+// from session pinning and least-loaded selection alike (spec 017).
 type UpstreamMember struct {
 	Upstream string
 	Handler  http.Handler
@@ -51,9 +57,13 @@ type UpstreamMember struct {
 	// window: the member is eligible only while Window.Contains(now)
 	// holds (spec 014). Nil = always eligible.
 	Window *pkg.Window
+	// Days, when non-nil, is the member's weekday eligibility set: the
+	// member is eligible only while Days.Contains(now, Window) holds
+	// (spec 017). Nil = every day.
+	Days *pkg.Days
 	// Now returns the router's current time (the injected
-	// libtime.CurrentDateTimeGetter). Consulted only when Window is
-	// non-nil; nil Now falls back to the real clock.
+	// libtime.CurrentDateTimeGetter). Consulted only when Window or Days
+	// is non-nil; nil Now falls back to the real clock.
 	Now func() libtime.DateTime
 }
 
@@ -73,12 +83,13 @@ var realNow = func() libtime.DateTime { return libtime.DateTime(stdtime.Now()) }
 // (fewest in-flight requests by the per-upstream semaphore), with
 // round-robin tie-breaking among equally-loaded members so keyless
 // floods spread instead of stacking on the first-declared member. A
-// member whose time window does not contain "now" is excluded from both
-// selection paths — the ring and the least-loaded scan are computed over
-// the eligible subset per request, so a member whose window closes
-// mid-session stops receiving that session's requests immediately
-// (spec 014). Each chosen dispatch emits a [route] session=<id>
-// upstream=<url> glog V(2) detail line.
+// member whose time window does not contain "now", or whose weekday is
+// not in its days set, is excluded from both selection paths — the ring
+// and the least-loaded scan are computed over the eligible subset per
+// request, so a member whose window closes mid-session stops receiving
+// that session's requests immediately (spec 014 / 017). Each chosen
+// dispatch emits a [route] session=<id> upstream=<url> glog V(2) detail
+// line.
 func NewUpstreamPoolHandler(ctx context.Context, members []UpstreamMember) http.Handler {
 	return &upstreamPoolHandler{members: members}
 }
@@ -117,20 +128,27 @@ func (p *upstreamPoolHandler) selectMember(ctx context.Context, sessionID string
 	return p.leastLoaded(ctx)
 }
 
-// memberEligible reports whether member i's window contains "now" (nil
-// window = always eligible). The window check is the only place the clock
-// is read; selection below operates purely on the eligible subset,
-// recomputed per request.
+// memberEligible reports whether member i is eligible for a dispatch:
+// (window absent OR window.Contains(now)) AND (days absent OR
+// days.Contains(now)). The clock is read only when a member carries a
+// window or a days set; a member with neither is always eligible,
+// byte-for-byte today (spec 014 / 017).
 func (p *upstreamPoolHandler) memberEligible(i int) bool {
 	m := p.members[i]
-	if m.Window == nil {
+	if m.Window == nil && m.Days == nil {
 		return true
 	}
 	now := m.Now
 	if now == nil {
 		now = realNow
 	}
-	return m.Window.Contains(now())
+	if m.Window != nil && !m.Window.Contains(now()) {
+		return false
+	}
+	if m.Days != nil && !m.Days.Contains(now(), m.Window) {
+		return false
+	}
+	return true
 }
 
 // eligibleIndices returns the indices of members eligible right now.
@@ -153,11 +171,8 @@ func (p *upstreamPoolHandler) eligibleIndices(ctx context.Context) []int {
 // eligible right now (spec 014 DB 4). A provider whose pool returns
 // false is ineligible for the dispatch and the model router falls
 // through to the next provider / default_provider.
-func (p *upstreamPoolHandler) HasEligibleMember() bool {
-	// HasEligibleMember is the WindowEligible interface method (no ctx in the
-	// signature); the eligible-subset scan is a bounded config-sized query, so
-	// a background context is safe here.
-	return len(p.eligibleIndices(context.Background())) > 0
+func (p *upstreamPoolHandler) HasEligibleMember(ctx context.Context) bool {
+	return len(p.eligibleIndices(ctx)) > 0
 }
 
 // pinSlot returns the member index that the weighted ring hash of

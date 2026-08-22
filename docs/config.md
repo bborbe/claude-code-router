@@ -46,6 +46,7 @@ providers:
     # window:                    # optional; legacy single-upstream form only — applies to the implicit single member (see ## Time-of-day windows). Cannot be combined with an upstreams: list.
     #   from: "08:00 Europe/Berlin"
     #   until: "18:00 Europe/Berlin"
+    # days:                       # optional; legacy single-upstream form only — applies to the implicit single member (see ## Time-of-day windows). Cannot be combined with an upstreams: list.
     # upstreams:                  # optional; alternative to `upstream:` — a pool of servers. Each entry carries upstream/token/weight/maxConcurrentRequests/maxConcurrentWaitSeconds (see ## Upstream pools). Mutually exclusive with `upstream:`.
     #   - upstream: <URL>
     #     token: <string>         # optional; per-member token (defaults to the provider token semantics: absent = pass client's Authorization through)
@@ -53,6 +54,7 @@ providers:
     #     window:                 # optional; per-member time-of-day eligibility window (see ## Time-of-day windows). Values are "HH:MM <location>", e.g. "18:00 Europe/Berlin". from/until required when the block is present. A member outside its window is ineligible for dispatch.
     #       from: "08:00 Europe/Berlin"
     #       until: "18:00 Europe/Berlin"
+    #     days:                    # optional; per-member weekday eligibility allow-list (see ## Time-of-day windows). Comma-separated lowercase weekday names (monday..sunday) with an optional trailing IANA location, e.g. "saturday, sunday Europe/Berlin". A member outside its days is ineligible for dispatch.
     #     maxConcurrentRequests: 8   # optional; per-member cap. Absent or 0 or negative = unlimited.
     #     maxConcurrentWaitSeconds: 30 # optional; per-member queue wait before HTTP 429 (default 30)
 ```
@@ -263,6 +265,16 @@ The legacy single `upstream:` provider form carries the same `window:` at provid
 - **SIGHUP.** A change to a member's `window:` (or the member list) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config (see ## Reload).
 - **Security.** The window is server-side config + server clock, evaluated per request; a client cannot influence which window applies, and the window never widens access or bypasses `allowedApiKeys`. The complementary-window config below guarantees the off-peak unlimited key is only ever used inside its window.
 
+A member can go one step further and restrict eligibility to a WEEKDAY subset rather than (or alongside) a time window.
+
+- **What it is.** A member can declare an optional `days:` weekday allow-list as a sibling of `window:` — a comma-separated list of lowercase English weekday names (`monday`..`sunday`) with an optional trailing inline IANA location, e.g. `"saturday, sunday Europe/Berlin"`. Absent = every day — byte-for-byte today's behavior. The legacy single `upstream:` provider form carries the same `days:` at provider level, applied to its implicit single member, exactly like the provider-level `window:`.
+- **Eligibility AND.** A member is ELIGIBLE for a dispatch only while BOTH conditions hold: `(window absent OR window contains "now") AND (days absent OR today's weekday is in days)`. The weekday is resolved in the member's attached IANA location, in precedence order: the inline location on the `days:` value, else the `window:` `from`/`until` location, else UTC — so the boundary is the location's calendar, never the router host's local day. A member with `days:` but no `window:` is eligible ALL DAY on those weekdays — this is how the weekend use case below expresses "all day on Saturday and Sunday" (the `window:` block has no all-day value).
+- **Location + fail-closed rule.** A member with `days:` and no `window:` MUST carry the inline location on its `days:` value — config load rejects a days-only member whose `days:` has no location, so it can never silently resolve its weekday in UTC and drift from its sibling members' calendar. A member with `days:` AND a `window:` may omit the inline location — the window's `from`/`until` location governs both boundaries.
+- **Validation.** Unknown weekday names (e.g. `funday`) and an empty value (`days: ""`) are rejected at config load, as is a provider-level `days:` combined with an `upstreams:` list. The 7 canonical names are `monday` `tuesday` `wednesday` `thursday` `friday` `saturday` `sunday` (lowercase; no abbreviations, no `monday..friday` ranges, no numeric indices). A valid-but-wrong location (e.g. `Europe/London` for `Europe/Berlin`) passes validation and shifts both the weekday and time boundaries by its offset — verify the `[route]` lines against the expected boundary and correct via SIGHUP.
+- **Ineligibility semantics (unchanged from `window:`).** A member outside its `days:` is excluded from BOTH session pinning (the weighted ring hash only considers eligible members) and keyless least-loaded selection; when no member of a provider's pool is eligible the provider falls through declaration order to the next matching provider or `default_provider`, logged as `[route] provider=<p> window=closed -> <fallback>` at V(2) — eligibility, never an error, never a 429 (the fall-through line keeps the `window=closed` wording).
+- **SIGHUP.** A change to a member's `days:` (or the member list) applies on SIGHUP without a restart — the reloader rebuilds the pool tree from the edited config (see ## Reload).
+- **Security.** `days:` is server-side config + the router's injected clock, evaluated per request; a client cannot influence which member applies, and it never widens access or bypasses `allowedApiKeys`.
+
 The operator pattern this feature exists for: one provider serving the same endpoint with two keys, each restricted to its own period:
 
 ```yaml
@@ -287,7 +299,37 @@ providers:
 
 With complementary windows, business hours (08:00–18:00 Europe/Berlin) are served by the day member/key at its 16-request cap, and off-peak by the night member/key at its 50-request cap — exactly one eligible member per period, so the unlimited key is never touched during business hours and no operator action is needed at the boundary. The `[route]` lines name the day member during business hours and the night member off-peak.
 
-The per-entry `window:` sits alongside the per-entry `weight` / `maxConcurrentRequests` / `maxConcurrentWaitSeconds` fields documented in ## Upstream pools, and the provider-level `window:` on the legacy single-`upstream:` form behaves exactly like the provider-level caps (copied onto the implicit single member).
+Adding `days:` extends the same one-member-per-period pattern across the weekday boundary: the unlimited key serves all day on weekends, while the day/night keys own Monday–Friday. One provider, three members — the weekday-day member (normal-rate key, cap 16, business-hours window), the weekday-night member (unlimited key, cap 50, off-peak window), and the weekend member (`days: "saturday, sunday Europe/Berlin"`, the SAME unlimited off-peak key, cap 50, NO `window:` — so it is eligible ALL DAY on Saturday and Sunday):
+
+```yaml
+providers:
+  seibert-vllm-default:
+    upstreams:
+      - upstream: http://vllm:8000
+        token: "<normal-rate-key>"
+        maxConcurrentRequests: 16
+        days: "monday, tuesday, wednesday, thursday, friday"
+        window:
+          from: "08:00 Europe/Berlin"
+          until: "18:00 Europe/Berlin"
+      - upstream: http://vllm:8000
+        token: "<unlimited-off-peak-key>"
+        maxConcurrentRequests: 50
+        days: "monday, tuesday, wednesday, thursday, friday"
+        window:
+          from: "18:00 Europe/Berlin"
+          until: "08:00 Europe/Berlin"
+      - upstream: http://vllm:8000
+        token: "<unlimited-off-peak-key>"
+        maxConcurrentRequests: 50
+        days: "saturday, sunday Europe/Berlin"
+    models:
+      - "deepseek-v4-*"
+```
+
+Exactly one eligible member exists per (day, time): the day member during Mon–Fri business hours (08:00–18:00 Europe/Berlin, its 16-request cap), the night member Mon–Fri off-peak (18:00–08:00, its 50-request cap), and the weekend member all day Saturday and Sunday (50-request cap, no window to close). The unlimited key therefore serves all day on weekends and is never touched Monday–Friday, with no operator action at any day/time boundary. Note the full weekday list is written out (`monday, tuesday, ...`) because the format has no `monday..friday` range sugar — the `[route]` lines name the weekend member all day Sat+Sun, the day member during Mon–Fri business hours, and the night member Mon–Fri off-peak.
+
+The per-entry `days:` sits alongside the per-entry `window:` / `weight` / `maxConcurrentRequests` / `maxConcurrentWaitSeconds` fields documented in ## Upstream pools, and the provider-level `days:` on the legacy single-`upstream:` form behaves exactly like the provider-level `window:` (copied onto the implicit single member).
 
 ## Auth
 
