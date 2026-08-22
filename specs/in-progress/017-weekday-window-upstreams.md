@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-08-22T11:45:52Z"
 generating: "2026-08-22T11:45:53Z"
 prompted: "2026-08-22T12:07:07Z"
+verifying: "2026-08-22T13:01:13Z"
 branch: dark-factory/weekday-window-upstreams
 ---
 
