@@ -201,6 +201,12 @@ type Provider struct {
 	// Providers that declare an upstreams: list carry windows per entry —
 	// setting a provider-level window AND upstreams: is rejected.
 	Window *Window `yaml:"window,omitempty"`
+	// Days is the legacy single-upstream form's weekday eligibility set
+	// (spec 017): when set, normalizeUpstreams copies it onto the
+	// synthesized single member (a one-member pool is still a pool).
+	// Providers that declare an upstreams: list carry days per entry —
+	// setting a provider-level days AND upstreams: is rejected.
+	Days *Days `yaml:"days,omitempty"`
 }
 
 // Window is an optional per-upstream time-of-day eligibility window
@@ -245,6 +251,117 @@ func (w *Window) Contains(now libtime.DateTime) bool {
 	}
 }
 
+// weekdayNames maps the canonical lowercase English weekday names
+// (spec 017: Go time.Weekday.String() lowercased) to libtime.Weekday
+// values. No abbreviations, no ranges, no numeric indices — validation
+// rejects anything else at config load.
+var weekdayNames = map[string]libtime.Weekday{
+	"sunday":    libtime.Sunday,
+	"monday":    libtime.Monday,
+	"tuesday":   libtime.Tuesday,
+	"wednesday": libtime.Wednesday,
+	"thursday":  libtime.Thursday,
+	"friday":    libtime.Friday,
+	"saturday":  libtime.Saturday,
+}
+
+// Days is an optional per-upstream weekday eligibility set (spec 017).
+// A member is eligible for a dispatch only while the weekday of "now"
+// (the router's injected clock) is in the set, where the weekday is
+// resolved in an explicit IANA location: the inline location on the
+// days value, else the member's window from/until location, else UTC.
+// The YAML value is a comma-separated list of lowercase English
+// weekday names (monday..sunday) with an optional trailing inline IANA
+// location, e.g. "saturday, sunday Europe/Berlin". A nil Days on an
+// Upstream means every day — today's behavior. Unknown names and an
+// empty value fail at yaml parse; a days-only member (no window:)
+// whose value carries no inline location fails validation (fail-closed,
+// so a days-only member can never silently resolve its weekday in UTC
+// and drift from its sibling members' calendar).
+type Days struct {
+	// Weekdays is the allowed weekday set (spec 017).
+	Weekdays libtime.Weekdays
+	// Location is the IANA location the weekday is resolved in, from
+	// the inline value ("saturday, sunday Europe/Berlin" ->
+	// Europe/Berlin). Nil inherits the member's window location at
+	// selection time (else UTC).
+	Location *stdtime.Location
+}
+
+// UnmarshalText parses the "comma-separated weekday names, optional
+// trailing IANA location" form (spec 017 Constraints): the value is
+// split on the last whitespace and the last token is tried as a
+// stdtime.LoadLocation — if it loads it is the location and the
+// remainder is the name list; if it does not load the whole value is
+// the name list. Names are comma-separated, trimmed, and matched
+// against the 7 canonical lowercase names. An empty value and an
+// unknown name are errors, so the yaml parse fails and Load rejects
+// the config.
+//
+// No ctx here: UnmarshalText is the encoding.TextUnmarshaler entry
+// point, whose signature is fixed by the stdlib (`UnmarshalText([]byte)
+// error`) — yaml.v3's decode path has no ctx-propagating variant, so
+// caller cancellation is not observable at parse time anyway. The
+// context.Background() arguments below feed bborbe/errors.New/Errorf,
+// which require a ctx first arg purely as error metadata (tracing), not
+// as a cancellation point. This mirrors the spec-014 precedent
+// libtime.TimeOfDay.UnmarshalText (bborbe/time v1.27.9).
+func (d *Days) UnmarshalText(text []byte) error {
+	value := strings.TrimSpace(string(text))
+	if value == "" {
+		return errors.New(
+			context.Background(),
+			"days: value is required — comma-separated weekday names (monday..sunday) with an optional trailing IANA location",
+		)
+	}
+	names := value
+	if idx := strings.LastIndexAny(value, " \t"); idx >= 0 {
+		if loc, err := stdtime.LoadLocation(strings.TrimSpace(value[idx+1:])); err == nil {
+			d.Location = loc
+			names = strings.TrimSpace(value[:idx])
+		}
+	}
+	var weekdays libtime.Weekdays
+	for _, part := range strings.Split(names, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return errors.New(context.Background(), "days: empty weekday name in list")
+		}
+		weekday, ok := weekdayNames[name]
+		if !ok {
+			return errors.Errorf(
+				context.Background(),
+				"days: unknown weekday name %q (use monday..sunday)",
+				name,
+			)
+		}
+		weekdays = append(weekdays, weekday)
+	}
+	d.Weekdays = weekdays
+	return nil
+}
+
+// Contains reports whether the weekday of now is in the allowed set.
+// The weekday is resolved in the attached IANA location, in precedence
+// order: the inline days location, else the member's window from/until
+// location, else UTC — so the boundary is the location's calendar,
+// never the router host's local day (spec 017 DB 3). window may be
+// nil; callers only invoke this on a non-nil Days (a nil Days means
+// all days and is never consulted).
+func (d *Days) Contains(now libtime.DateTime, window *Window) bool {
+	loc := d.Location
+	if loc == nil && window != nil {
+		loc = window.From.Location
+	}
+	if loc == nil && window != nil {
+		loc = window.Until.Location
+	}
+	if loc == nil {
+		loc = stdtime.UTC
+	}
+	return d.Weekdays.Contains(libtime.Weekday(now.Time().In(loc).Weekday()))
+}
+
 // Upstream is one server in a provider's pool. When a provider
 // declares an `upstreams:` list, every /v1/* request for that
 // provider is dispatched to exactly one member: a request carrying an
@@ -266,6 +383,15 @@ type Upstream struct {
 	// pinning and least-loaded selection (spec 014). Absent = always
 	// eligible, today's behavior.
 	Window *Window `yaml:"window,omitempty"`
+	// Days, when set, restricts this member's eligibility to a weekday
+	// subset: a comma-separated list of lowercase English weekday names
+	// (monday..sunday) with an optional trailing inline IANA location,
+	// e.g. "saturday, sunday Europe/Berlin". A member whose weekday is
+	// not in the set is excluded from session pinning and least-loaded
+	// selection (spec 017). Absent = every day, today's behavior. A
+	// member with days: but no window: must carry the inline location —
+	// validation rejects one without it.
+	Days *Days `yaml:"days,omitempty"`
 }
 
 // ModelPoolMember is one candidate of a model pool: the provider to
@@ -367,6 +493,12 @@ func (c *Config) Validate(ctx context.Context) error {
 					)
 				}
 			}
+			if up.Days != nil && up.Window == nil && up.Days.Location == nil {
+				return errors.New(ctx, fmt.Sprintf(
+					"provider %q: days without a window requires an inline location (e.g. \"saturday, sunday Europe/Berlin\")",
+					name,
+				))
+			}
 		}
 		for _, pattern := range prov.Models {
 			select {
@@ -414,9 +546,11 @@ func (c *Config) Validate(ctx context.Context) error {
 //     the two forms are mutually exclusive (spec 012).
 //   - A provider-level window combined with an `upstreams:` list is rejected
 //     (spec 014) — windows live on pool members, not on the provider.
+//   - A provider-level days combined with an `upstreams:` list is rejected
+//     (spec 017) — days live on pool members, not on the provider.
 //   - A provider with no `upstreams` is synthesized into a one-entry pool
-//     carrying its provider-level token, caps, and window with Weight 1,
-//     written back into c.Providers.
+//     carrying its provider-level token, caps, window, and days with
+//     Weight 1, written back into c.Providers.
 //   - Every explicitly-declared entry with Weight 0 gets Weight 1 (with a
 //     plain int field yaml.v3 cannot distinguish `weight: 0` from an absent
 //     key, so 0 is the default, not a misconfiguration).
@@ -443,6 +577,12 @@ func (c *Config) normalizeUpstreams(ctx context.Context) error {
 				name,
 			))
 		}
+		if prov.Days != nil && len(prov.Upstreams) > 0 {
+			return errors.New(ctx, fmt.Sprintf(
+				"provider %q: days applies only to the legacy upstream form; set days on each upstreams entry instead",
+				name,
+			))
+		}
 		if len(prov.Upstreams) == 0 {
 			prov.Upstreams = []Upstream{{
 				Upstream:                 prov.Upstream,
@@ -451,6 +591,7 @@ func (c *Config) normalizeUpstreams(ctx context.Context) error {
 				MaxConcurrentRequests:    prov.MaxConcurrentRequests,
 				MaxConcurrentWaitSeconds: prov.MaxConcurrentWaitSeconds,
 				Window:                   prov.Window,
+				Days:                     prov.Days,
 			}}
 		}
 		for i := range prov.Upstreams {
@@ -471,11 +612,11 @@ func (c *Config) normalizeUpstreams(ctx context.Context) error {
 // UpstreamList returns the pool of upstreams this provider routes to:
 // the configured Upstreams when present, else the legacy single
 // upstream synthesized as a one-entry pool with Weight 1, the
-// provider-level caps, and the provider-level window. Config.Validate
-// already normalizes Load-ed configs, so this is always the configured
-// list there; the fallback keeps programmatically-built configs (tests
-// and direct CreateRouterFromConfig callers that bypass Load) working
-// with the legacy single-upstream form.
+// provider-level caps, window, and days. Config.Validate already
+// normalizes Load-ed configs, so this is always the configured list
+// there; the fallback keeps programmatically-built configs (tests and
+// direct CreateRouterFromConfig callers that bypass Load) working with
+// the legacy single-upstream form.
 func (p Provider) UpstreamList() []Upstream {
 	if len(p.Upstreams) > 0 {
 		return p.Upstreams
@@ -487,6 +628,7 @@ func (p Provider) UpstreamList() []Upstream {
 		MaxConcurrentRequests:    p.MaxConcurrentRequests,
 		MaxConcurrentWaitSeconds: p.MaxConcurrentWaitSeconds,
 		Window:                   p.Window,
+		Days:                     p.Days,
 	}}
 }
 

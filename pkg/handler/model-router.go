@@ -338,7 +338,7 @@ func newModelRouter(
 			if presentedKey := PresentedApiKeyFromContext(r.Context()); presentedKey != "" {
 				for _, route := range routes {
 					if containsString(route.AllowedApiKeys, presentedKey) {
-						if !windowEligible(route.Handler) {
+						if !windowEligible(r.Context(), route.Handler) {
 							// The key-pinned provider has no eligible member: fall
 							// through to the glob walk / default (spec 014 DB 4).
 							closedProvider = route.ProviderName
@@ -361,7 +361,7 @@ func newModelRouter(
 				if !ok {
 					continue
 				}
-				if !windowEligible(route.Handler) {
+				if !windowEligible(r.Context(), route.Handler) {
 					if closedProvider == "" {
 						closedProvider = route.ProviderName
 					}
