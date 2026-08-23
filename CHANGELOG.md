@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update github.com/bborbe/http to v1.26.24
+
 ## v0.44.0
 
 - feat: wire the spec-017 weekday `days:` filter into the shipped spec-014 eligibility path — `handler.UpstreamMember` gains `Days *pkg.Days` (`pkg/handler/upstream-pool-handler.go`), and `memberEligible` becomes the window AND days conjunction `(window absent OR window.Contains(now)) AND (days absent OR days.Contains(now))`, so a member whose weekday is not in its `days:` set is excluded from session pinning and keyless least-loaded selection alike (the weekday resolves in the member's attached IANA location — the inline days location, else the window from/until location, else UTC — never the router host's local day); a provider whose pool has no eligible member (window AND days both exclude now) falls through to the next matching provider or `default_provider` with the unchanged V(2) `[route] provider=<p> window=closed -> <fallback>` line — eligibility, never an error or 429, no model-pool or router changes; the factory (`pkg/factory/factory.go`) copies each member's `Days` onto the runtime pool member (the same `*pkg.Days` copy as `Window`), so a `days:` change applies on SIGHUP when the reloader rebuilds the pool tree; fixed-clock Ginkgo rows prove the weekend all-day (Sat+Sun Berlin, ineligible Mon-Fri), three-member complementary (weekend/day/night, one eligible member per day+time with the distinct 16/50/50 limiter caps traveling with each member), offset-boundary (UTC Friday evening = Berlin Saturday), and location-boundary (Europe/Berlin vs UTC at a shared instant) behaviors through the real dispatch path.
