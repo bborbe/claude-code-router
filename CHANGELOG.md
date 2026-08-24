@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.44.3
 
 - docs: document the dark-factory ↔ router auth model in `docs/dark-factory-integration.md` and `docs/config.md` — `ANTHROPIC_AUTH_TOKEN` (the router's `allowedApiKeys` registry key) is the router-path carrier for local Docker containers, which arrive at the host loopback and bypass the key gate; the router swaps the token outbound for the provider's real key (`seibert-dark-factory` → vLLM) or passes it through for Anthropic subscriptions; truly remote (non-loopback) callers must present the registry key as `x-api-key` via `ANTHROPIC_API_KEY`.
 
