@@ -21,9 +21,9 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/bborbe/collection v1.20.23 // indirect
 	github.com/bborbe/kv v1.21.11 // indirect
-	github.com/bborbe/math v1.4.0 // indirect
+	github.com/bborbe/math v1.4.4 // indirect
 	github.com/bborbe/parse v1.10.21 // indirect
-	github.com/bborbe/sentry v1.9.26 // indirect
+	github.com/bborbe/sentry v1.9.27 // indirect
 	github.com/bborbe/validation v1.4.22 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -49,4 +49,6 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-exclude cloud.google.com/go v0.26.0
+exclude (
+	cloud.google.com/go v0.26.0
+)
