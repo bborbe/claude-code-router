@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update go module dependencies
+
 ## v0.44.1
 
 - chore: update Go to 1.27.0 and github.com/bborbe/argument/v2 to v2.12.36, github.com/bborbe/errors to v1.5.20, github.com/bborbe/http to v1.26.23, github.com/bborbe/log to v1.6.23, github.com/bborbe/run to v1.9.37, github.com/bborbe/service to v1.10.9, github.com/bborbe/time to v1.27.10
