@@ -19,9 +19,9 @@ require (
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
-	github.com/bborbe/collection v1.20.23 // indirect
+	github.com/bborbe/collection v1.20.24 // indirect
 	github.com/bborbe/kv v1.21.11 // indirect
-	github.com/bborbe/math v1.4.4 // indirect
+	github.com/bborbe/math v1.4.5 // indirect
 	github.com/bborbe/parse v1.10.21 // indirect
 	github.com/bborbe/sentry v1.9.27 // indirect
 	github.com/bborbe/validation v1.4.22 // indirect
