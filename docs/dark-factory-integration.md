@@ -7,7 +7,7 @@ Route dark-factory's YOLO containers through the host's claude-code-router for a
 Without this integration, the operator maintains the same MiniMax / DeepSeek / Ollama tokens in **two** config files:
 
 - `~/.claude-code-router/config.yaml` — what interactive `claude-obsidian-*.sh` sessions use
-- `~/.dark-factory/config.yaml` — what dark-factory passes into its YOLO containers
+- `~/.config/dark-factory/config.yaml` (XDG; legacy `~/.dark-factory/config.yaml`) — what dark-factory passes into its YOLO containers
 
 Two side effects:
 
@@ -21,6 +21,8 @@ With this integration, the container sets `ANTHROPIC_BASE_URL=http://host.docker
 ### 1. Router listens on `0.0.0.0`, not `127.0.0.1`
 
 Containers reach the host via `host.docker.internal`, which resolves to a **non-loopback** IP (e.g. `192.168.65.254` on Docker Desktop). A `127.0.0.1`-bound socket refuses those connections.
+
+**Auth implication (verified 2026-08-24):** despite the non-loopback destination, Docker Desktop delivers container traffic to the host **loopback**, so the router's `allowedApiKeys` gate (see [config.md § Routing by API key](config.md#routing-by-api-key)) treats container requests as loopback and does **not** enforce the key. That is why the container carries `ANTHROPIC_AUTH_TOKEN` (step 4) and still authenticates. On runtimes where container traffic arrives non-loopback (raw Linux `dockerd`, a remote host), the gate DOES apply and the caller must present the key as `x-api-key` instead.
 
 ```diff
  # ~/Library/LaunchAgents/de.bborbe.claude-code-router.plist
@@ -75,14 +77,21 @@ Applied in two places:
 ### 4. Dark-factory config points at the router
 
 ```yaml
-# ~/.dark-factory/config.yaml
+# ~/.config/dark-factory/config.yaml  (XDG; legacy path ~/.dark-factory/config.yaml)
 env:
   ANTHROPIC_BASE_URL: http://host.docker.internal:8788
+  ANTHROPIC_AUTH_TOKEN: <ROUTER_REGISTRY_KEY>   # the router's allowedApiKeys key (see step 5 / config.md)
   # ANTHROPIC_BASE_URL: https://api.minimax.io/anthropic   # keep commented — fallback if router is down
-  # ANTHROPIC_API_KEY: <YOUR_ROUTING_KEY>   # the router's registry key; sent as x-api-key, routes the container's traffic to the key's provider and authenticates it
+  # ANTHROPIC_API_KEY: <real-provider-key>   # only needed for the direct-upstream fallback, never the router path
 ```
 
-The two commented-out lines are deliberate: a 30-second swap-back to a direct upstream if the router is unreachable — point `ANTHROPIC_BASE_URL` at the provider and set `ANTHROPIC_API_KEY` to a real provider key.
+`ANTHROPIC_AUTH_TOKEN` is the carrier for the router path:
+
+- **Value** — the router's `allowedApiKeys` registry key (the same value the registry and a key-pinned provider like `seibert-dark-factory` hold in `~/.claude-code-router/config.yaml`).
+- **Why it is needed** — dark-factory's `validateClaudeAuth` skips the Claude OAuth check when the merged container env carries both `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. Without the token the container falls through to the `~/.claude-yolo` OAuth file check and generation fails with `Claude OAuth token missing or expired` even though no Claude OAuth is involved.
+- **How it flows** — Claude Code sends it as `Authorization: Bearer <key>`. From a Docker container (host loopback, see step 1) the router's key gate does not apply; the router then replaces the outbound `Authorization` with the provider's real `token:` (e.g. the vLLM key for `seibert-dark-factory`) or passes the client header through for an Anthropic-subscription provider.
+
+The two commented-out lines are deliberate: a 30-second swap-back to a direct upstream if the router is unreachable — point `ANTHROPIC_BASE_URL` at the provider and set `ANTHROPIC_API_KEY` to a real provider key. `ANTHROPIC_API_KEY` is **not** the router-path carrier: it is only for that direct-upstream fallback and for genuinely remote (non-loopback) callers, who must present the registry key as `x-api-key`.
 
 ### 5. Router config has the provider entries for whatever models dark-factory will request
 
@@ -149,6 +158,7 @@ tail -f /tmp/claude-code-router.log
 | Container's claude returns `connection refused` | Router still bound to `127.0.0.1` (step 1 not applied OR plist not reloaded via bootout/bootstrap) | `lsof -nP -iTCP:8788 -sTCP:LISTEN` — must show `*:8788`, not `127.0.0.1:8788` |
 | Container's claude returns `dial: no such host: host.docker.internal` (Linux raw dockerd only) | Dark-factory's spawner lacks `--add-host` (Linux portability bug; tracked separately) | Workaround: pass `--add-host` via Docker daemon defaults OR run interactive via `scripts/yolo-run.sh` (which has the flag) |
 | Router log shows the `[route]` line but `502 Bad Gateway` response | Router can't reach the upstream provider — wrong token, wrong upstream URL, or upstream is down | Check the router's stderr for `upstream error: ...`; verify the provider entry in `~/.claude-code-router/config.yaml` |
+| Router log shows `auth rejected` for a container's request | The runtime delivers container traffic non-loopback (raw Linux `dockerd`, remote host), so the `allowedApiKeys` gate applies and the container presented no `x-api-key` | Give the container `ANTHROPIC_API_KEY` set to the router's registry key (sent as `x-api-key`) alongside `ANTHROPIC_AUTH_TOKEN`; on macOS Docker Desktop this does not occur |
 
 ## Related
 
