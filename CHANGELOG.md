@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update github.com/bborbe/errors to v1.5.21, github.com/bborbe/log to v1.6.25
+
 ## v0.44.4
 
 - chore: update go module dependencies
