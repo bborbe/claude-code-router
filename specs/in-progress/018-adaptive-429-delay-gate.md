@@ -126,3 +126,15 @@ Rationale: prompt 1 establishes the config contract, the gate behavior, the metr
 ## Do-Nothing Option
 
 The router keeps forwarding at full rate into a provider in a 429 wall (z.ai `glm-5.3-flash[1m]`, observed 2026-08-26: one 200 per ~10s amid a wall of 429s), and immediate client retries keep re-storming an upstream already refusing work. The concurrency limiter caps simultaneous requests but does not react to observed rate-limit responses. Cost: every time any provider enters a rate-limited state, the storm window extends — wasted upstream capacity, wasted client retry tokens, and a longer effective outage. Deferring the change keeps paying that cost each time it happens; the fix is one bounded Go handler plus a two-line per-provider config flip, off by default.
+
+## Verification Result
+
+**Verified:** 2026-08-27T19:17:38Z (HEAD dd9e342)
+**Binary:** installed dark-factory CLI (spec lifecycle); feature binary built from HEAD dd9e342 for the live run (standalone on 127.0.0.1:18788, not the installed router)
+**Scenario:** no scenario file (spec Non-goal: no e2e scenario) — structural + live: full Go suite, AC greps, standalone run of the feature binary through config→factory→gate against a fake upstream returning 429
+**Evidence:**
+- `make test` PASS (pkg / pkg/factory / pkg/handler / pkg/reloader all ok); `make precommit` PASS ("ready to commit"); tree clean after
+- AC greps: config_test.go throttle429Threshold x8; config.md x6; config.example.yaml x1; metrics.md x2; CHANGELOG `## Unreleased` bullet x1
+- Live storm: `[throttle] provider=test state=on` after 3rd 429; paced `delay=1s`→`2s`→`4s` (AIMD x2); request latency 1.002s/2.003s/4.002s vs 1ms pre-gate; upstream 429 body passed through unchanged (never retried)
+- Live recovery: after 60s clean window `[throttle] provider=test state=off`; next request latency=0s, no pacing line
+**Verdict:** PASS
