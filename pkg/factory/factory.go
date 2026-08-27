@@ -165,6 +165,11 @@ func providerKeys(ctx context.Context, cfg *pkg.Config) []string {
 // (spec DB 5).
 const defaultMaxConcurrentWaitSeconds = 30
 
+// defaultThrottleMaxDelaySeconds is the pacing-delay upper bound applied
+// when an enabled provider's throttleMaxDelaySeconds is absent, 0, or
+// negative (spec DB 4).
+const defaultThrottleMaxDelaySeconds = 30
+
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
 // config: per-provider upstream pools (each member its own reverse proxy,
 // token-swap transport, and concurrency limiter), a model-name dispatcher
@@ -201,6 +206,13 @@ func CreateRouterFromConfig(
 	upCaps := make(map[string][]int, len(cfg.Providers))
 	upInFlight := make(map[string][]func() int, len(cfg.Providers))
 	var routes []handler.ModelRoute
+
+	// Metrics must exist before the per-provider loop so the throttle gate
+	// can receive metrics.ThrottledTotal (spec 018). NewMetrics is
+	// side-effect-free (builds collectors, pre-initializes aliases), so
+	// building it earlier changes nothing for the Register call and the
+	// model router, both of which keep referencing metrics below.
+	metrics := handler.NewMetrics(cfg.Aliases)
 
 	for _, name := range providerKeys(ctx, cfg) {
 		select {
@@ -285,6 +297,26 @@ func CreateRouterFromConfig(
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
+		// The adaptive 429 delay gate wraps the provider's pool handler
+		// (spec 018): an enabled provider (Throttle429Threshold > 0) paces
+		// requests destined for this pool while it is under sustained 429
+		// pressure; a disabled provider returns the pool handler unchanged.
+		// The value stored in providerHandlers[name] is the wrapped
+		// handler, so both glob-routed and default-provider traffic pass
+		// through the gate. A negative or absent ThrottleMaxDelaySeconds
+		// resolves to the 30s default.
+		maxDelaySeconds := prov.ThrottleMaxDelaySeconds
+		if maxDelaySeconds <= 0 {
+			maxDelaySeconds = defaultThrottleMaxDelaySeconds
+		}
+		providerHandler = handler.NewThrottleGate(
+			providerHandler,
+			name,
+			prov.Throttle429Threshold,
+			time.Duration(maxDelaySeconds)*time.Second,
+			o.currentDateTime.Now,
+			metrics.ThrottledTotal,
+		)
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
 			select {
@@ -328,7 +360,6 @@ func CreateRouterFromConfig(
 		return nil, err
 	}
 
-	metrics := handler.NewMetrics(cfg.Aliases)
 	if err := metrics.Register(o.metricsRegisterer); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}

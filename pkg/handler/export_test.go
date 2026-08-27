@@ -8,6 +8,8 @@ package handler
 import (
 	"context"
 	"net/http"
+
+	libtime "github.com/bborbe/time"
 )
 
 // TraceTTLFromEnv exposes traceTTLFromEnv for handler_test.
@@ -61,3 +63,23 @@ func LiftSystemMessages(ctx context.Context, body []byte) ([]byte, int, error) {
 func MatchesAnyPattern(patterns []string, model string) bool {
 	return matchesAnyPattern(patterns, model)
 }
+
+// ThrottleGateObserve drives the detector of a real throttle gate with a
+// single observed response status at the given clock time (spec 018): the
+// AIMD and recovery rows drive the detector directly so a growing pacing
+// delay never sleeps wall-clock. h must be a real gate (threshold > 0);
+// the disabled path returns next unchanged and has no gate.
+func ThrottleGateObserve(h http.Handler, status int, at libtime.DateTime) {
+	g, ok := h.(interface {
+		observe(status int, at libtime.DateTime)
+	})
+	if !ok {
+		panic("ThrottleGateObserve: handler is not a real throttle gate")
+	}
+	g.observe(status, at)
+}
+
+// ThrottleMaxPacedRequests exposes the bounded pacing-queue capacity so
+// the overflow row can saturate the queue deterministically (spec 018
+// DB 3).
+var ThrottleMaxPacedRequests = throttleMaxPacedRequests

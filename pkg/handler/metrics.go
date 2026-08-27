@@ -36,8 +36,10 @@ var LatencyBucketsSeconds = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 // `4xx_bad_request`/`5xx_upstream`/`5xx_router`), one HistogramVec for
 // request latency labeled by provider + model with LLM-shaped buckets,
 // one CounterVec for alias resolutions (operator-side observability
-// for `/model qwen`-style short names), and one CounterVec for token
-// counts labeled by provider + model + direction (`input`/`output`).
+// for `/model qwen`-style short names), one CounterVec for token
+// counts labeled by provider + model + direction (`input`/`output`),
+// and one CounterVec for requests delayed (paced) by the adaptive 429
+// delay gate, labeled by provider (spec 018).
 //
 // Cardinality budget: 5 providers × ~15 active models × 7 status_classes
 // = 525 series ceiling for the requests counter (~450 in practice because
@@ -50,6 +52,7 @@ type Metrics struct {
 	RequestDuration  *prometheus.HistogramVec
 	AliasResolutions *prometheus.CounterVec
 	TokensTotal      *prometheus.CounterVec
+	ThrottledTotal   *prometheus.CounterVec
 }
 
 // NewMetrics constructs the four collectors but does NOT register
@@ -94,6 +97,13 @@ func NewMetrics(aliases map[string]string) *Metrics {
 			},
 			[]string{"provider", "model", "direction"},
 		),
+		ThrottledTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ccrouter_throttled_total",
+				Help: "Number of /v1/* requests delayed (paced) by the adaptive 429 delay gate before forwarding, labeled by provider. Paced = the request waited the pacing delay and was forwarded; overflow 429s and non-paced requests do not increment it.",
+			},
+			[]string{"provider"},
+		),
 	}
 	for alias, resolved := range aliases {
 		m.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
@@ -106,7 +116,7 @@ func NewMetrics(aliases map[string]string) *Metrics {
 // production. Returns the first registration error (if any) so caller
 // can decide whether to abort startup.
 func (m *Metrics) Register(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal} {
+	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.ThrottledTotal} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}
