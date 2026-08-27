@@ -1014,6 +1014,81 @@ providers:
 		})
 	})
 
+	Context("throttle429Threshold", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave the fields zero, so every fixture goes through Load, not
+		// struct literals (spec 018 AC 1/2).
+		loadProvider := func(extra string) (*pkgcfg.Config, error) {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    models: ["claude-*"]
+` + extra)
+			return pkgcfg.Load(context.Background(), p)
+		}
+
+		It(
+			"loads both fields when a provider sets throttle429Threshold and throttleMaxDelaySeconds",
+			func() {
+				cfg, err := loadProvider(`
+    throttle429Threshold: 3
+    throttleMaxDelaySeconds: 30
+`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(3))
+				Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(30))
+			},
+		)
+
+		It("leaves both fields 0 when a provider sets neither — identical to today", func() {
+			cfg, err := loadProvider(``)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
+		})
+
+		It("loads only throttle429Threshold, leaving throttleMaxDelaySeconds 0", func() {
+			cfg, err := loadProvider(`
+    throttle429Threshold: 3
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(3))
+			// 0 resolves to the 30s default at wiring, not at load.
+			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
+		})
+
+		It("loads a negative throttle429Threshold with no error", func() {
+			cfg, err := loadProvider(`
+    throttle429Threshold: -1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			// The factory resolves <= 0 to disabled at wiring.
+			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(-1))
+		})
+
+		It("loads a negative throttleMaxDelaySeconds with no error", func() {
+			cfg, err := loadProvider(`
+    throttleMaxDelaySeconds: -1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			// The factory resolves <= 0 to the 30s default at wiring.
+			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(-1))
+		})
+
+		It("loads explicit zeroes as valid — disabled / default-resolved respectively", func() {
+			cfg, err := loadProvider(`
+    throttle429Threshold: 0
+    throttleMaxDelaySeconds: 0
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
+		})
+	})
+
 	Context("upstreams", func() {
 		It("loads a legacy single upstream with provider caps as a one-entry pool", func() {
 			p := write(`

@@ -207,6 +207,23 @@ type Provider struct {
 	// Providers that declare an upstreams: list carry days per entry —
 	// setting a provider-level days AND upstreams: is rejected.
 	Days *Days `yaml:"days,omitempty"`
+	// Throttle429Threshold, when > 0, enables the adaptive 429 delay gate
+	// for this provider (spec 018): once the windowed count of 429
+	// responses from the upstream within the 60s observation window reaches
+	// this threshold, subsequent /v1/* requests to this provider are
+	// delayed before forwarding (AIMD pacing), giving a rate-limited
+	// upstream a breathing window to recover. The 429'd request itself is
+	// never retried — only subsequent requests are paced. Absent, 0, or
+	// negative disables the gate: no delay, no pacing 429, no throttled
+	// counter, byte-for-byte current behavior. Read at provider level only
+	// — NOT copied onto upstream members (unlike MaxConcurrentRequests).
+	Throttle429Threshold int `yaml:"throttle429Threshold,omitempty"`
+	// ThrottleMaxDelaySeconds is the upper bound of the pacing delay while
+	// throttled (spec 018): the delay starts at 1s and doubles on each
+	// observed 429, never exceeding this value. Only consulted on an
+	// enabled provider (Throttle429Threshold > 0); absent, 0, or negative
+	// resolves to the 30s default at wiring.
+	ThrottleMaxDelaySeconds int `yaml:"throttleMaxDelaySeconds,omitempty"`
 }
 
 // Window is an optional per-upstream time-of-day eligibility window

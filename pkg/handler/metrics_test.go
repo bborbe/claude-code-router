@@ -25,12 +25,34 @@ var _ = Describe("Metrics", func() {
 		Expect(m.RequestDuration).NotTo(BeNil())
 		Expect(m.AliasResolutions).NotTo(BeNil())
 		Expect(m.TokensTotal).NotTo(BeNil())
+		Expect(m.ThrottledTotal).NotTo(BeNil())
 	})
 
 	It("Register against a fresh registry succeeds", func() {
 		reg := prometheus.NewRegistry()
 		Expect(m.Register(reg)).To(Succeed())
 	})
+
+	It(
+		"registers the throttled counter so /metrics exposes it — empty before traffic",
+		func() {
+			reg := prometheus.NewRegistry()
+			Expect(m.Register(reg)).To(Succeed())
+
+			// CollectAndCount is callable without panic and reports no series
+			// pre-traffic (no per-provider pre-initialization).
+			Expect(testutil.CollectAndCount(m.ThrottledTotal)).To(Equal(0))
+
+			// Locking the Register collector-loop boundary: a same-named
+			// counter must collide on registration, proving ThrottledTotal is
+			// in the loop that /metrics scrapes.
+			dup := prometheus.NewCounterVec(
+				prometheus.CounterOpts{Name: "ccrouter_throttled_total", Help: "dup"},
+				[]string{"provider"},
+			)
+			Expect(reg.Register(dup)).To(HaveOccurred())
+		},
+	)
 
 	It("second Register against the same registry returns an error", func() {
 		reg := prometheus.NewRegistry()
