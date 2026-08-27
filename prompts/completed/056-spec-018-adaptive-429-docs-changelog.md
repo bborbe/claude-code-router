@@ -1,7 +1,13 @@
 ---
-status: draft
+status: completed
 spec: [018-adaptive-429-delay-gate]
+summary: 'Documented the per-provider 429 delay gate (throttle429Threshold/throttleMaxDelaySeconds) in docs/config.md, docs/config.example.yaml, docs/metrics.md (ccrouter_throttled_total counter) and added a feat entry under a new ## Unreleased in CHANGELOG.md; make precommit green.'
+execution_id: claude-code-router-adaptive-429-exec-056-spec-018-adaptive-429-docs-changelog
+dark-factory-version: dev
 created: "2026-08-27T19:01:00Z"
+queued: "2026-08-27T19:08:52Z"
+started: "2026-08-27T19:08:55Z"
+completed: "2026-08-27T19:11:58Z"
 branch: dark-factory/adaptive-429-delay-gate
 ---
 

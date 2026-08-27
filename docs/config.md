@@ -43,6 +43,8 @@ providers:
     # allowedApiKeys: # optional; list of keys that route to THIS provider, overriding model-glob selection (see ## Routing by API key)
     # maxConcurrentRequests: 8   # optional; cap concurrent /v1/* requests to THIS provider (see ## Concurrency limit). Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # throttle429Threshold: 3   # optional; enable adaptive pacing: once the 60s-windowed count of upstream 429s reaches this, subsequent /v1/* requests to THIS provider are delayed before forwarding (see ## 429 delay gate). Absent or 0 or negative = disabled.
+    # throttleMaxDelaySeconds: 30 # optional; upper bound of the pacing delay while throttled (default 30)
     # window:                    # optional; legacy single-upstream form only — applies to the implicit single member (see ## Time-of-day windows). Cannot be combined with an upstreams: list.
     #   from: "08:00 Europe/Berlin"
     #   until: "18:00 Europe/Berlin"
@@ -188,6 +190,29 @@ providers:
 - **SIGHUP applies changes.** Both fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider limiters, so a changed cap (or its removal) is live without a restart.
 - **Observability is unchanged.** No new metrics. A router-issued 429 appears in the existing `[req] ... status=429` log line and the existing `4xx_rate_limited` class of `ccrouter_requests_total` — the same class as an upstream's own 429.
 - **Suggested use.** `vllm.seibert.tools` enforces its own per-user ceiling of 8 concurrent requests. Set `maxConcurrentRequests: 8` on both seibert vllm providers (`seibert-vllm-default` and `seibert-dark-factory`) so the router queues instead of the upstream rejecting.
+
+## 429 delay gate
+
+An optional per-provider gate paces `/v1/*` requests into a provider whose upstream is under a sustained 429 wall, instead of re-storming an upstream already refusing work. Two fields turn it on:
+
+```yaml
+providers:
+  <provider-key>:
+    upstream: <URL>
+    throttle429Threshold: 3     # optional; enable adaptive pacing: once the 60s-windowed count of upstream 429s reaches this, subsequent /v1/* requests to THIS provider are delayed before forwarding (see below). Absent or 0 or negative = disabled.
+    throttleMaxDelaySeconds: 30  # optional; upper bound of the pacing delay while throttled (default 30)
+```
+
+- **Feature-off by default.** `throttle429Threshold` absent, `0`, or negative means disabled — no pacing, no added latency, byte-for-byte today's behavior. Existing configs are unaffected.
+- **What the gate does.** Once the windowed count of upstream 429 responses within the fixed 60s observation window reaches `throttle429Threshold`, the provider enters throttle and every subsequent `/v1/*` request to it waits the current pacing delay before the router forwards it. The 429'd request itself is never retried — the response passes through unchanged; the status is observed only to adjust future pacing.
+- **The AIMD dynamics**, all bounded and fixed (not configurable): on entry the delay is 1s; each observed 429 doubles it (×2), capped at `throttleMaxDelaySeconds`; each clean 60s window (no 429) halves it (÷2); when it decays below 1s the provider exits throttle and requests forward undelayed.
+- **The bounded pacing queue.** While throttled, at most 32 requests wait their pacing turn; a request that cannot be paced within the max delay is answered HTTP 429 with the same Anthropic-shaped `rate_limit_error` JSON body as the concurrency limiter (`{"type":"error","error":{"type":"rate_limit_error",...}}`), never a 5xx and never a hang. A client that disconnects while waiting is never forwarded and holds no slot.
+- **Per-provider independence.** Each provider's throttle state is its own — throttling one provider neither delays nor blocks another, even when two providers share one upstream.
+- **Provider-level only.** Unlike `maxConcurrentRequests` / `maxConcurrentWaitSeconds`, the throttle knobs are read at provider level only and are NOT copied onto `upstreams:` pool members — a throttle field on a member is silently ignored (set both on the provider block).
+- **Validation is lenient.** A negative `throttle429Threshold` is treated as disabled and a negative `throttleMaxDelaySeconds` as the 30s default — the config always loads, never fail-closed.
+- **SIGHUP applies changes.** Both fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider gates, so changed values are live without a restart. Throttle state is in-memory per provider, so a reload resets a throttled provider to not-throttled; it re-accumulates the window on the next 429s — reversible by design.
+- **Observability.** Entry/exit log lines `[throttle] provider=<name> state=on` / `state=off` at INFO, each paced request at glog `-v` ≥ 4, and the model router's existing `[req] ... latency=` includes the pacing delay. A new additive counter `ccrouter_throttled_total{provider}` counts paced requests (see `docs/metrics.md`); the `status_class` enum and `4xx_rate_limited` classification are unchanged — an upstream 429 still lands in `4xx_rate_limited`.
+- **Suggested use.** Observed live 2026-08-26, z.ai `glm-5.3-flash[1m]` (provider `zai/0`) entered a sustained 429 wall. Set `throttle429Threshold: 3` and `throttleMaxDelaySeconds: 30` on that provider so the router paces traffic into the breathing window instead of re-storming an upstream already refusing work. The zero=disabled regression check: on a benign provider, `throttle429Threshold: 0` keeps traffic flowing with no `[throttle]` lines and no added latency.
 
 ## Upstream pools
 

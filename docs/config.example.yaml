@@ -58,6 +58,8 @@ providers:
     # maxConcurrentRequests: 8 on each seibert vllm provider that points at it.
     # maxConcurrentRequests: 8     # optional; cap concurrent /v1/* requests to this provider. Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
+    # throttle429Threshold: 3   # optional; enable adaptive pacing for a rate-limited provider (see docs/config.md ## 429 delay gate). Absent or 0 or negative = disabled.
+    # throttleMaxDelaySeconds: 30 # optional; upper bound of the pacing delay while throttled (default 30)
     # upstreams:                   # optional; alternative to `upstream:` — a pool of servers (see docs/config.md ## Upstream pools).
     #   - upstream: http://localhost:11434
     #     token: "ollama"
