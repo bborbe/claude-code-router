@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-08-27T18:31:43Z"
 generating: "2026-08-27T18:32:19Z"
 prompted: "2026-08-27T18:51:40Z"
 verifying: "2026-08-27T19:08:41Z"
+completed: "2026-08-27T19:24:05Z"
 branch: dark-factory/adaptive-429-delay-gate
 ---
 
