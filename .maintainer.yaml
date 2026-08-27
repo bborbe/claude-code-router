@@ -16,5 +16,7 @@ release:
   changelogRewrite: false
 prReviewer:
   autoApprove: true
+autoMerge:
+  trivial: true
 goUpdate:
   autoUpdate: true
