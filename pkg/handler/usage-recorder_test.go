@@ -247,6 +247,36 @@ var _ = Describe("extractUsage", func() {
 			Expect(usage.Output).To(Equal("99"))
 		})
 
+		It(
+			"extracts cache_read and cache_creation from the Anthropic message_start usage block",
+			func() {
+				tail := []byte(
+					"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1,\"cache_read_input_tokens\":5000,\"cache_creation_input_tokens\":200}}}\n\n" +
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":17}}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "text/event-stream", "")
+				Expect(usage.Input).To(Equal("10"))
+				Expect(usage.Output).To(Equal("17"))
+				Expect(usage.CacheRead).To(Equal("5000"))
+				Expect(usage.CacheCreation).To(Equal("200"))
+			},
+		)
+
+		It(
+			"reports zero cache when the SSE usage block has no cache fields (backward compatible)",
+			func() {
+				tail := []byte(
+					"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42,\"output_tokens\":1}}}\n\n" +
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":8}}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "text/event-stream", "")
+				Expect(usage.Input).To(Equal("42"))
+				Expect(usage.Output).To(Equal("8"))
+				Expect(usage.CacheRead).To(Equal("0"))
+				Expect(usage.CacheCreation).To(Equal("0"))
+			},
+		)
+
 		It("extracts usage when terminal event fits in tail buffer with filler", func() {
 			// Build a tail that is exactly TailBufferBytes: filler + terminal event.
 			// Use distinct numbers: input=7, output=3.
@@ -303,6 +333,29 @@ var _ = Describe("extractUsage", func() {
 			Expect(usage.Input).To(Equal("100"))
 			Expect(usage.Output).To(Equal("5"))
 		})
+
+		It("extracts cache_read and cache_creation from a JSON usage block", func() {
+			tail := []byte(
+				`{"usage":{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":9000,"cache_creation_input_tokens":300}}`,
+			)
+			usage := handler.ExtractUsage(tail, "application/json", "")
+			Expect(usage.Input).To(Equal("100"))
+			Expect(usage.Output).To(Equal("5"))
+			Expect(usage.CacheRead).To(Equal("9000"))
+			Expect(usage.CacheCreation).To(Equal("300"))
+		})
+
+		It(
+			"reports zero cache when a JSON usage block has no cache fields (backward compatible)",
+			func() {
+				tail := []byte(`{"usage":{"input_tokens":100,"output_tokens":5}}`)
+				usage := handler.ExtractUsage(tail, "application/json", "")
+				Expect(usage.Input).To(Equal("100"))
+				Expect(usage.Output).To(Equal("5"))
+				Expect(usage.CacheRead).To(Equal("0"))
+				Expect(usage.CacheCreation).To(Equal("0"))
+			},
+		)
 
 		It("returns noUsage when usage block is absent", func() {
 			tail := []byte(`{"ok":true}`)

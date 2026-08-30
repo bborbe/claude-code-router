@@ -258,6 +258,63 @@ var _ = Describe("Metrics", func() {
 		})
 	})
 
+	Context("ObserveCacheTokens", func() {
+		It("increments read-direction series with positive count", func() {
+			m.ObserveCacheTokens("anthropic-subscription", "claude-opus-5", "read", 5000)
+			Expect(
+				testutil.ToFloat64(
+					m.CacheTokensTotal.WithLabelValues(
+						"anthropic-subscription",
+						"claude-opus-5",
+						"read",
+					),
+				),
+			).To(Equal(float64(5000)))
+		})
+
+		It("increments creation-direction series with positive count", func() {
+			m.ObserveCacheTokens("anthropic-subscription", "claude-opus-5", "creation", 200)
+			Expect(
+				testutil.ToFloat64(
+					m.CacheTokensTotal.WithLabelValues(
+						"anthropic-subscription",
+						"claude-opus-5",
+						"creation",
+					),
+				),
+			).To(Equal(float64(200)))
+		})
+
+		It("accumulates repeated Adds on the same tuple", func() {
+			m.ObserveCacheTokens("p", "m", "read", 100)
+			m.ObserveCacheTokens("p", "m", "read", 50)
+			Expect(
+				testutil.ToFloat64(m.CacheTokensTotal.WithLabelValues("p", "m", "read")),
+			).To(Equal(float64(150)))
+		})
+
+		It("drops zero count without creating a series", func() {
+			m.ObserveCacheTokens("p", "m", "read", 0)
+			Expect(testutil.CollectAndCount(m.CacheTokensTotal)).To(Equal(0))
+		})
+
+		It("drops negative count without creating a series", func() {
+			m.ObserveCacheTokens("p", "m", "read", -1)
+			Expect(testutil.CollectAndCount(m.CacheTokensTotal)).To(Equal(0))
+		})
+
+		It("drops unknown direction (sideways) without creating a series", func() {
+			m.ObserveCacheTokens("p", "m", "sideways", 5)
+			Expect(testutil.CollectAndCount(m.CacheTokensTotal)).To(Equal(0))
+		})
+
+		It("drops the input direction without touching ccrouter_tokens_total", func() {
+			m.ObserveCacheTokens("p", "m", "input", 5)
+			Expect(testutil.CollectAndCount(m.CacheTokensTotal)).To(Equal(0))
+			Expect(testutil.CollectAndCount(m.TokensTotal)).To(Equal(0))
+		})
+	})
+
 	Context("UnknownModelLabel constant", func() {
 		It("resolves to '_unknown_' (leading + trailing underscore)", func() {
 			Expect(handler.UnknownModelLabel).To(Equal("_unknown_"))

@@ -207,8 +207,10 @@ func (t *tailBuffer) Tail() []byte {
 // string is the "no data" signal — a real zero-token count from the
 // upstream is reported as "0" (the extractor reports what it parsed).
 type TokenUsage struct {
-	Input  string
-	Output string
+	Input         string
+	Output        string
+	CacheRead     string
+	CacheCreation string
 }
 
 // noUsage is the sentinel returned when no parseable usage was found.
@@ -310,10 +312,14 @@ func ExtractUsage(tail []byte, contentType, contentEncoding string) (usage Token
 
 // usagePresence tracks whether a usage field was found (vs. absent/null).
 type usagePresence struct {
-	inputPresent  bool
-	outputPresent bool
-	input         int
-	output        int
+	inputPresent         bool
+	outputPresent        bool
+	cacheReadPresent     bool
+	cacheCreationPresent bool
+	input                int
+	output               int
+	cacheRead            int
+	cacheCreation        int
 }
 
 // scanSSEEvent scans tail for the LAST occurrence of eventMarker
@@ -379,20 +385,29 @@ func scanSSEEvent(tail []byte, eventMarker []byte) (usagePresence, bool) {
 		return usagePresence{}, false
 	}
 
-	// Parse the usage integers.
+	// Parse the usage integers. cache_read_input_tokens and
+	// cache_creation_input_tokens are Anthropic's prompt-cache counts;
+	// other providers omit them (zero value -> dropped by the observer's
+	// zero-drop rule).
 	var usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens          int `json:"input_tokens"`
+		OutputTokens         int `json:"output_tokens"`
+		CacheReadInputTokens int `json:"cache_read_input_tokens"`
+		CacheCreationTokens  int `json:"cache_creation_input_tokens"`
 	}
 	if err := json.Unmarshal(usageRaw, &usage); err != nil {
 		return usagePresence{}, false
 	}
 
 	return usagePresence{
-		inputPresent:  true,
-		outputPresent: true,
-		input:         usage.InputTokens,
-		output:        usage.OutputTokens,
+		inputPresent:         true,
+		outputPresent:        true,
+		cacheReadPresent:     true,
+		cacheCreationPresent: true,
+		input:                usage.InputTokens,
+		output:               usage.OutputTokens,
+		cacheRead:            usage.CacheReadInputTokens,
+		cacheCreation:        usage.CacheCreationTokens,
 	}, true
 }
 
@@ -424,8 +439,10 @@ func extractUsageSSE(tail []byte) TokenUsage {
 	// Anthropic splits: input in start, output in delta. But if start
 	// has no usage and delta does carry input_tokens, promote it.
 	var (
-		inStr  string
-		outStr string
+		inStr          string
+		outStr         string
+		cacheReadStr   string
+		cacheCreateStr string
 	)
 	if inputTokens.inputPresent {
 		inStr = strconv.Itoa(inputTokens.input)
@@ -435,10 +452,27 @@ func extractUsageSSE(tail []byte) TokenUsage {
 	if outputTokens.outputPresent {
 		outStr = strconv.Itoa(outputTokens.output)
 	}
+	// Cache counts ride on the message_start usage block (and may also
+	// appear in a single-event shape); prefer start, fall back to delta.
+	if inputTokens.cacheReadPresent {
+		cacheReadStr = strconv.Itoa(inputTokens.cacheRead)
+	} else if outputTokens.cacheReadPresent {
+		cacheReadStr = strconv.Itoa(outputTokens.cacheRead)
+	}
+	if inputTokens.cacheCreationPresent {
+		cacheCreateStr = strconv.Itoa(inputTokens.cacheCreation)
+	} else if outputTokens.cacheCreationPresent {
+		cacheCreateStr = strconv.Itoa(outputTokens.cacheCreation)
+	}
 	if inStr == "" && outStr == "" {
 		return noUsage
 	}
-	return TokenUsage{Input: inStr, Output: outStr}
+	return TokenUsage{
+		Input:         inStr,
+		Output:        outStr,
+		CacheRead:     cacheReadStr,
+		CacheCreation: cacheCreateStr,
+	}
 }
 
 // extractUsageJSON parses tail as a JSON object with a top-level `usage` field.
@@ -454,17 +488,22 @@ func extractUsageJSON(tail []byte) TokenUsage {
 		return noUsage
 	}
 
-	// Second pass: parse the inner input_tokens/output_tokens.
+	// Second pass: parse the inner input_tokens/output_tokens plus the
+	// Anthropic prompt-cache counts (absent for non-Anthropic providers).
 	var usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens          int `json:"input_tokens"`
+		OutputTokens         int `json:"output_tokens"`
+		CacheReadInputTokens int `json:"cache_read_input_tokens"`
+		CacheCreationTokens  int `json:"cache_creation_input_tokens"`
 	}
 	if err := json.Unmarshal(usageCheck.Usage, &usage); err != nil {
 		return noUsage
 	}
 
 	return TokenUsage{
-		Input:  strconv.Itoa(usage.InputTokens),
-		Output: strconv.Itoa(usage.OutputTokens),
+		Input:         strconv.Itoa(usage.InputTokens),
+		Output:        strconv.Itoa(usage.OutputTokens),
+		CacheRead:     strconv.Itoa(usage.CacheReadInputTokens),
+		CacheCreation: strconv.Itoa(usage.CacheCreationTokens),
 	}
 }

@@ -52,6 +52,7 @@ type Metrics struct {
 	RequestDuration  *prometheus.HistogramVec
 	AliasResolutions *prometheus.CounterVec
 	TokensTotal      *prometheus.CounterVec
+	CacheTokensTotal *prometheus.CounterVec
 	ThrottledTotal   *prometheus.CounterVec
 }
 
@@ -97,6 +98,13 @@ func NewMetrics(aliases map[string]string) *Metrics {
 			},
 			[]string{"provider", "model", "direction"},
 		),
+		CacheTokensTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ccrouter_cache_tokens_total",
+				Help: "Total number of cached LLM tokens observed on successful (2xx) /v1/* responses, labeled by provider, model, and direction (read|creation). cache_read counts tokens served from a reused prompt cache; cache_creation counts tokens written into the cache. Kept separate from ccrouter_tokens_total so billed (fresh input + output) and true (fresh + cache + output) usage stay distinguishable.",
+			},
+			[]string{"provider", "model", "direction"},
+		),
 		ThrottledTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "ccrouter_throttled_total",
@@ -116,7 +124,7 @@ func NewMetrics(aliases map[string]string) *Metrics {
 // production. Returns the first registration error (if any) so caller
 // can decide whether to abort startup.
 func (m *Metrics) Register(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.ThrottledTotal} {
+	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}
@@ -159,6 +167,26 @@ func (m *Metrics) ObserveTokens(provider, model, direction string, count int) {
 		return
 	}
 	m.TokensTotal.WithLabelValues(provider, model, direction).Add(float64(count))
+}
+
+// ObserveCacheTokens increments the ccrouter_cache_tokens_total counter
+// by count for the given (provider, model, direction) tuple. Drop rules
+// mirror ObserveTokens:
+//
+//   - count <= 0                                (zero-drop rule)
+//   - direction is not "read" or "creation"     (bounded-enum rule)
+//
+// Kept as a separate observer (not an extension of ObserveTokens's
+// input|output enum) so the existing ccrouter_tokens_total contract is
+// unchanged — cache is a distinct metric, never merged into input.
+func (m *Metrics) ObserveCacheTokens(provider, model, direction string, count int) {
+	if count <= 0 {
+		return
+	}
+	if direction != "read" && direction != "creation" {
+		return
+	}
+	m.CacheTokensTotal.WithLabelValues(provider, model, direction).Add(float64(count))
 }
 
 // ObserveAliasResolution increments the alias counter on each hit;
