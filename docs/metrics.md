@@ -21,11 +21,14 @@ scrape_configs:
 | `ccrouter_request_duration_seconds` | `provider`, `model` | histogram | `0.842` (p95 bucket) |
 | `ccrouter_alias_resolutions_total` | `alias`, `resolved` | counter | `1` |
 | `ccrouter_tokens_total` | `provider`, `model`, `direction` | counter | `42` (input) / `17` (output) |
+| `ccrouter_cache_tokens_total` | `provider`, `model`, `direction` | counter | `5000` (read) / `200` (creation) |
 | `ccrouter_throttled_total` | `provider` | counter | `1` (per paced request) |
 
 `status_class` is one of `2xx`, `3xx`, `4xx_auth` (401/403), `4xx_rate_limited` (429), `4xx_bad_request` (all other 4xx — including the router-side 413 body-too-large and 400 body-read-failed early returns), `5xx_upstream` (5xx from the upstream provider), `5xx_router` (5xx from a router-side rejection — currently the alias-rewrite-failed path), or the raw status code for out-of-range values. The `5xx_upstream`/`5xx_router` split is driven by an `isRouterError` argument at the `ObserveRequest` call site — see `pkg/handler/metrics.go`. Cardinality ceiling: 5 providers × 15 models × 7 status classes = 525 request-counter series (~450 in practice — some (provider, model, status_class) tuples never fire) + 5 × 15 × 2 directions = 150 tokens-counter series + 5 × 15 × len(buckets) = 750 histogram bucket series + alias counter bounded by YAML config = ~1.5k total. Operators sizing Prometheus retention should plan for the ~1.5k combined-series ceiling.
 
 `direction` on `ccrouter_tokens_total` is bounded to `input` or `output`; any other direction value is dropped at `ObserveTokens` and never reaches Prometheus. Non-2xx responses do not increment `ccrouter_tokens_total` (token counting is a strict success-path observation — a failed upstream call does not carry a trustworthy usage object).
+
+`ccrouter_cache_tokens_total` is the prompt-cache counterpart, kept **separate** from `ccrouter_tokens_total` so billed (fresh input + output) and true (fresh + cache + output) usage stay distinguishable. `direction` is bounded to `read` (tokens served from a reused prompt cache — Anthropic `cache_read_input_tokens`) or `creation` (tokens written into the cache — Anthropic `cache_creation_input_tokens`); any other value is dropped at `ObserveCacheTokens`. Non-Anthropic providers emit no cache fields, so their cache series stay at zero (never created — the zero-drop rule applies). Same success-path rule as the tokens counter.
 
 `model` on all `ccrouter_*` series resolves through a sentinel chain (post-alias resolved model → pre-alias original model → `_unknown_`), so no `model=""` empty label ever reaches Prometheus. The `_unknown_` sentinel also appears as the `provider` label value on the three router-side early-return paths (body-too-large, body-read-failed, alias-rewrite-failed) where routing never resolved a provider.
 

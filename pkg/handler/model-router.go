@@ -555,6 +555,8 @@ func resolveModelLabel(resolvedModel, origModel string) string {
 func recordTokensFromUsage(metrics *Metrics, provider, model string, usage TokenUsage) {
 	recordTokenDirection(metrics, provider, model, "input", usage.Input)
 	recordTokenDirection(metrics, provider, model, "output", usage.Output)
+	recordCacheTokenDirection(metrics, provider, model, "read", usage.CacheRead)
+	recordCacheTokenDirection(metrics, provider, model, "creation", usage.CacheCreation)
 }
 
 func recordTokenDirection(metrics *Metrics, provider, model, direction, raw string) {
@@ -567,6 +569,21 @@ func recordTokenDirection(metrics *Metrics, provider, model, direction, raw stri
 		return
 	}
 	metrics.ObserveTokens(provider, model, direction, n)
+}
+
+// recordCacheTokenDirection mirrors recordTokenDirection but feeds the
+// separate ccrouter_cache_tokens_total counter (directions read|creation),
+// keeping cache tokens out of ccrouter_tokens_total's input|output enum.
+func recordCacheTokenDirection(metrics *Metrics, provider, model, direction, raw string) {
+	if raw == "" || raw == "-" {
+		return
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		glog.V(2).Infof("[tokens] parse %s=%q failed: %v", direction, raw, err)
+		return
+	}
+	metrics.ObserveCacheTokens(provider, model, direction, n)
 }
 
 // containsString reports whether s is in list. It is a plain linear scan
