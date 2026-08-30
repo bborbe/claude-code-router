@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.46.0
 
 - feat: add a separate `ccrouter_cache_tokens_total{direction="read"|"creation"}` counter so prompt-cache usage is observable — the router now parses Anthropic's `cache_read_input_tokens` / `cache_creation_input_tokens` from the response usage (SSE and JSON) and records them on a counter distinct from `ccrouter_tokens_total`, fixing the input undercount for cached Anthropic sessions (per-model tables previously showed more output than input for opus/sonnet because cached input was dropped); existing `ccrouter_tokens_total{direction="input"|"output"}` series are unchanged, and the cache counter is kept separate so billed vs true usage stay distinguishable; non-Anthropic providers (e.g. Seibert vLLM) emit no cache fields and create no cache series; documented in `docs/metrics.md` (new counter row + note).
 
