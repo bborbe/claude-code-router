@@ -437,33 +437,33 @@ func extractUsageSSE(tail []byte) TokenUsage {
 	outputTokens, _ := scanSSEEvent(tail, []byte("event: message_delta"))
 
 	// Anthropic splits: input in start, output in delta. But if start
-	// has no usage and delta does carry input_tokens, promote it.
+	// has no usage — or reports a present-zero placeholder — and delta
+	// carries a positive input_tokens, promote it.
 	var (
 		inStr          string
 		outStr         string
 		cacheReadStr   string
 		cacheCreateStr string
 	)
-	if inputTokens.inputPresent {
-		inStr = strconv.Itoa(inputTokens.input)
-	} else if outputTokens.inputPresent && outputTokens.input > 0 {
-		inStr = strconv.Itoa(outputTokens.input)
-	}
+	inStr = preferPositive(
+		inputTokens.inputPresent, inputTokens.input,
+		outputTokens.inputPresent, outputTokens.input,
+	)
 	if outputTokens.outputPresent {
 		outStr = strconv.Itoa(outputTokens.output)
 	}
 	// Cache counts ride on the message_start usage block (and may also
 	// appear in a single-event shape); prefer start, fall back to delta.
-	if inputTokens.cacheReadPresent {
-		cacheReadStr = strconv.Itoa(inputTokens.cacheRead)
-	} else if outputTokens.cacheReadPresent {
-		cacheReadStr = strconv.Itoa(outputTokens.cacheRead)
-	}
-	if inputTokens.cacheCreationPresent {
-		cacheCreateStr = strconv.Itoa(inputTokens.cacheCreation)
-	} else if outputTokens.cacheCreationPresent {
-		cacheCreateStr = strconv.Itoa(outputTokens.cacheCreation)
-	}
+	// Same present-zero rule as input: vLLM zeroes them in message_start
+	// and reports the real counts in the terminal message_delta.
+	cacheReadStr = preferPositive(
+		inputTokens.cacheReadPresent, inputTokens.cacheRead,
+		outputTokens.cacheReadPresent, outputTokens.cacheRead,
+	)
+	cacheCreateStr = preferPositive(
+		inputTokens.cacheCreationPresent, inputTokens.cacheCreation,
+		outputTokens.cacheCreationPresent, outputTokens.cacheCreation,
+	)
 	if inStr == "" && outStr == "" {
 		return noUsage
 	}
@@ -472,6 +472,35 @@ func extractUsageSSE(tail []byte) TokenUsage {
 		Output:        outStr,
 		CacheRead:     cacheReadStr,
 		CacheCreation: cacheCreateStr,
+	}
+}
+
+// preferPositive picks the count to report for a field that may appear in
+// both the message_start and the terminal message_delta usage blocks.
+//
+// Anthropic puts the real input/cache counts in message_start and omits them
+// from message_delta. Seibert's vLLM (Anthropic-compatible) does the opposite:
+// message_start carries a *present* all-zero usage block and the real
+// cumulative counts arrive in message_delta (verified 2026-09-01 against
+// vllm.seibert.tools). Trusting a present-zero start therefore undercounted
+// every vLLM-backed stream to in=0.
+//
+// Precedence: positive start -> positive delta -> present start (zero) ->
+// "" (start absent). The delta is only ever consulted for a POSITIVE value:
+// the presence flags mean "the usage block parsed", not "this field was in
+// the JSON", so a message_delta without an input_tokens field still reports
+// present-with-zero. Falling back to that zero would turn the documented
+// "only message_delta survived" case (in=-) into a bogus in=0.
+func preferPositive(startPresent bool, start int, deltaPresent bool, delta int) string {
+	switch {
+	case startPresent && start > 0:
+		return strconv.Itoa(start)
+	case deltaPresent && delta > 0:
+		return strconv.Itoa(delta)
+	case startPresent:
+		return strconv.Itoa(start)
+	default:
+		return ""
 	}
 }
 
