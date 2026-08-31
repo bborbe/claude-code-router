@@ -511,6 +511,31 @@ var _ = Describe("extractUsage", func() {
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
+
+		It(
+			"promotes real input/cache from message_delta when message_start reports present-zero usage (vLLM streaming shape)",
+			func() {
+				// vLLM's Anthropic-compatible endpoint emits message_start with a
+				// *present* usage block of zeros and carries the real cumulative
+				// counts in the terminal message_delta (verified live 2026-09-01
+				// against vllm.seibert.tools). The router must prefer the positive
+				// delta values over the present-zero start values, else in_tok
+				// undercounts to 0 on every vLLM-backed stream.
+				tail := []byte(
+					"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"deepseek-v4-flash\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n\n" +
+						"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n" +
+						"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"The\"}}\n\n" +
+						"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":137,\"output_tokens\":16,\"cache_read_input_tokens\":1024,\"cache_creation_input_tokens\":0}}\n\n" +
+						"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+				)
+				usage := handler.ExtractUsage(tail, "text/event-stream", "")
+				Expect(usage.Input).To(Equal("137"))
+				Expect(usage.Output).To(Equal("16"))
+				Expect(usage.CacheRead).To(Equal("1024"))
+				Expect(usage.CacheCreation).To(Equal("0"))
+			},
+		)
 	})
 
 	Describe("reverse-proxy tee reception (spec 005 root cause b)", func() {
