@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: SIGHUP config reload no longer freezes the visible `ccrouter_*` counters — `/metrics` now serves the active handler tree's own Prometheus registerer (`promhttp.HandlerFor`) instead of the hard-wired startup `DefaultRegisterer`, so a reloaded handler's fresh counters are scraped immediately without a process restart; the per-reload registry is seeded with the standard Go + process collectors (`go_gc_*`, `process_*`) so those series stay exposed across reloads. Previously the reload rebuilt the handler on a throwaway registry `/metrics` never scraped, freezing counters at pre-reload values until a full restart (observed live 2026-09-03: 827 requests served after a reload went uncounted).
+
 ## v0.46.1
 
 - fix: report real input and prompt-cache tokens for providers that send a present-but-zero `usage` block in `message_start` and the real cumulative counts in the terminal `message_delta` (Seibert vLLM's Anthropic-compatible streaming shape) — the SSE extractor previously trusted any *present* `input_tokens` in `message_start`, so every vLLM-backed stream recorded `ccrouter_tokens_total{direction="input"} = 0` and no `ccrouter_cache_tokens_total` series at all, while output was counted correctly (in-cluster Octopus routers showed `in_tok = 0` on all stages); the extractor now prefers a positive value over a present-zero one for `input_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`, falling back to the `message_start` value (including a genuine zero) when neither event reports a positive count; Anthropic's own split-event shape (input in start, output in delta) is unchanged, the "only `message_delta` survived the tail buffer" case still logs `in=-` rather than a bogus `in=0`, and the JSON (non-streaming) path is untouched.
