@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.46.2
 
 - fix: SIGHUP config reload no longer freezes the visible `ccrouter_*` counters — `/metrics` now serves the active handler tree's own Prometheus registerer (`promhttp.HandlerFor`) instead of the hard-wired startup `DefaultRegisterer`, so a reloaded handler's fresh counters are scraped immediately without a process restart; the per-reload registry is seeded with the standard Go + process collectors (`go_gc_*`, `process_*`) so those series stay exposed across reloads. Previously the reload rebuilt the handler on a throwaway registry `/metrics` never scraped, freezing counters at pre-reload values until a full restart (observed live 2026-09-03: 827 requests served after a reload went uncounted).
 
