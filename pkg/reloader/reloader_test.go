@@ -181,6 +181,67 @@ var _ = Describe("Reloader", func() {
 			Expect(len(rel.ConfigSnapshot().Providers)).To(Equal(2))
 		})
 
+		It("serves the reloaded handler's metrics after Reload", func() {
+			tmpFile := filepath.Join(tmpDir, "config.yaml")
+			Expect(os.WriteFile(tmpFile, []byte(configYAML(map[string]struct {
+				Upstream string
+				Token    string
+				Models   []string
+			}{
+				"anthropic": {Upstream: "https://api.anthropic.com", Models: []string{"claude-*"}},
+			}, "anthropic")), 0o600)).To(Succeed())
+
+			// Sentinel registered on the startup (DefaultRegisterer) registry.
+			// If /metrics kept serving the startup registry after a reload,
+			// this series would survive — the regression this spec guards
+			// against (fresh counters must be scraped, not the frozen ones).
+			prometheus.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{
+				Name: "ccr_reload_test_startup_sentinel",
+			}))
+
+			initialCfg := &pkg.Config{
+				Router: pkg.Router{DefaultProvider: "anthropic"},
+				Providers: map[string]pkg.Provider{
+					"anthropic": {
+						Upstream: "https://api.anthropic.com",
+						Models:   []string{"claude-*"},
+					},
+				},
+			}
+			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Before reload: /metrics serves the startup registry, sentinel present.
+			rec := httptest.NewRecorder()
+			initialHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(rec.Body.String()).To(ContainSubstring("ccr_reload_test_startup_sentinel"))
+
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(factory.NewReloadRegistry()),
+					)
+				},
+			)
+			rel.SeedConfig(initialCfg)
+			Expect(rel.Reload(context.Background())).To(Succeed())
+
+			// After reload: /metrics serves the reloaded handler's registry —
+			// startup sentinel gone, go/process collectors still present
+			// (NewReloadRegistry seeds them), ccrouter_* still exposed.
+			rec2 := httptest.NewRecorder()
+			rel.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			Expect(rec2.Code).To(Equal(http.StatusOK))
+			body := rec2.Body.String()
+			Expect(body).NotTo(ContainSubstring("ccr_reload_test_startup_sentinel"))
+			Expect(body).To(ContainSubstring("go_gc_duration_seconds"))
+		})
+
 		It("rejects invalid YAML and keeps old config", func() {
 			tmpFile := filepath.Join(tmpDir, "config.yaml")
 

@@ -21,6 +21,7 @@ import (
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bborbe/claude-code-router/pkg"
@@ -83,18 +84,35 @@ func CreateServer(ctx context.Context, listen, configPath string) (librun.Func, 
 			// On SIGHUP reload, CreateRouterFromConfig re-runs metrics.Register. At
 			// startup (the direct call above) collectors registered on DefaultRegisterer;
 			// a second Register on the same registerer returns AlreadyRegisteredError,
-			// which master made fatal. Re-registering on a throwaway registry avoids
-			// the duplicate error so the handler tree rebuilds against the new config.
-			// Trade-off: the reload's fresh counters are not scraped by /metrics (which
-			// is wired to DefaultRegisterer), so ccrouter_* metrics go stale after a
-			// reload until a full process restart. Acceptable for a local one-operator
-			// proxy where reloads are rare config edits; routing itself is unaffected.
-			return CreateRouterFromConfig(ctx, cfg, WithMetricsRegisterer(prometheus.NewRegistry()))
+			// which master made fatal. Re-registering on a per-reload registry avoids
+			// the duplicate error, and /metrics is wired to the active handler's own
+			// registerer (buildMux → promhttp.HandlerFor), so the reloaded handler's
+			// fresh counters are scraped immediately — no restart, no stale ccrouter_*
+			// series. The per-reload registry is seeded with the standard Go + process
+			// collectors (NewReloadRegistry) so go_gc_* / process_* series stay
+			// exposed across reloads.
+			return CreateRouterFromConfig(ctx, cfg, WithMetricsRegisterer(NewReloadRegistry()))
 		},
 	)
 	reloader.SeedConfig(cfg)
 	go reloader.RunSighupLoop(ctx)
 	return libhttp.NewServer(listen, reloader, streamingServerTimeouts), nil
+}
+
+// NewReloadRegistry returns the Prometheus registry a reloaded handler tree
+// registers its ccrouter_* collectors on. A bare prometheus.NewRegistry() is
+// empty; seeding it with the standard Go + process collectors (the set
+// DefaultRegisterer carries at startup) keeps go_gc_* / process_* series
+// exposed on /metrics across reloads. /metrics serves the active handler's
+// own registerer (buildMux → promhttp.HandlerFor), so the reloaded counters
+// are scraped immediately after the handler swap.
+func NewReloadRegistry() *prometheus.Registry {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	return reg
 }
 
 // traceDir returns the fixed trace directory path.
@@ -379,7 +397,20 @@ func CreateRouterFromConfig(
 	// every provider's allowedApiKeys. The auth middleware (empty set ⇒ no-op)
 	// and the model router (key routing, prompt 3) both consume this set.
 	authKeys := cfg.AllowedApiKeySet()
-	mux := buildMux(modelRouter, cfg.Trace, authKeys)
+	// /metrics serves the registerer this handler tree registered its
+	// ccrouter_* collectors on (DefaultRegisterer at startup, the fresh
+	// per-reload registry after a SIGHUP) so the scraped series always match
+	// the active handler. Every supported registerer is a *prometheus.Registry,
+	// which is also a prometheus.Gatherer; the fallback chain keeps /metrics
+	// on the default registry (then an empty one) for exotic test seams.
+	gatherer, ok := o.metricsRegisterer.(prometheus.Gatherer)
+	if !ok {
+		gatherer, ok = prometheus.DefaultRegisterer.(prometheus.Gatherer)
+		if !ok {
+			gatherer = prometheus.NewRegistry()
+		}
+	}
+	mux := buildMux(modelRouter, gatherer, cfg.Trace, authKeys)
 	return mux, nil
 }
 
@@ -505,18 +536,21 @@ func providerSaturated(caps []int, inflights []func() int) bool {
 // upstream.
 func buildMux(
 	modelRouter http.Handler,
+	metricsGatherer prometheus.Gatherer,
 	trace bool,
 	allowedKeys map[string]struct{},
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", handler.NewHealthzHandler())
 	mux.Handle("/readiness", libhttp.NewPrintHandler("OK"))
-	// /metrics uses the global default registry (matches go-skeleton
-	// convention) so process-level series (go_gc_*, go_memstats_*,
-	// process_*) get included alongside the ccrouter_* application
-	// series — useful for spotting GC pressure / memory growth on a
-	// long-running router daemon.
-	mux.Handle("/metrics", promhttp.Handler())
+	// /metrics serves the active handler tree's own registerer
+	// (DefaultRegisterer at startup, the fresh per-reload registry after a
+	// SIGHUP) so the ccrouter_* application series always match the handler
+	// that is serving requests. The startup default carries the go_* /
+	// process_* series (useful for spotting GC pressure / memory growth on a
+	// long-running router daemon); the per-reload registry is seeded with the
+	// same set (NewReloadRegistry) so those series survive reloads too.
+	mux.Handle("/metrics", promhttp.HandlerFor(metricsGatherer, promhttp.HandlerOpts{}))
 	// The four state-changing admin routes are loopback-only: a non-loopback
 	// caller gets HTTP 403 before any handler logic runs, so a remote attacker
 	// can never toggle tracing, force GC, or change log levels even when they
