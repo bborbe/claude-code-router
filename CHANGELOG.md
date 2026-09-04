@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.46.3
 
 - chore: update github.com/bborbe/argument/v2 to v2.13.2, github.com/bborbe/errors to v1.6.0, github.com/bborbe/http to v1.26.25, github.com/bborbe/run to v1.10.2, github.com/bborbe/service to v1.10.11, github.com/bborbe/time to v1.27.12, github.com/onsi/gomega to v1.43.0, github.com/prometheus/client_model to v0.6.3
 
