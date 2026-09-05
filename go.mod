@@ -8,7 +8,7 @@ require (
 	github.com/bborbe/http v1.26.25
 	github.com/bborbe/log v1.6.25
 	github.com/bborbe/run v1.10.2
-	github.com/bborbe/service v1.10.11
+	github.com/bborbe/service v1.10.12
 	github.com/bborbe/time v1.27.12
 	github.com/golang/glog v1.2.5
 	github.com/onsi/ginkgo/v2 v2.32.1
@@ -32,7 +32,7 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/pprof v0.0.0-20260902005441-ca85771921e4 // indirect
+	github.com/google/pprof v0.0.0-20260903180319-d6c3cb2f37ec // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -49,4 +49,6 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-exclude cloud.google.com/go v0.26.0
+exclude (
+	cloud.google.com/go v0.26.0
+)
