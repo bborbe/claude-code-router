@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.47.0
 
 - feat: add .reviewignore for the PR size gate
 
