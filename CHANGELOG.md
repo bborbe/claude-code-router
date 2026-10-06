@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.47.1
 
 - fix: `leastLoaded` reads each eligible member's in-flight count exactly once into a snapshot slice, instead of once to find the minimum and again to collect the ties. The count is a live semaphore gauge, so a change between the two reads left no member matching the minimum, the tie slice came back empty, and `(rr-1) % uint64(len(ties))` panicked with `integer divide by zero` (observed 2026-10-06 17:57:07 at `upstream-pool-handler.go:251`), dropping the request that hit the race. Adds a Ginkgo regression test that drives 1000 keyless requests through a member whose `InFlight` changes on every read, and fails against the pre-fix code.
 
