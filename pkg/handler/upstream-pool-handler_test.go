@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -240,4 +241,32 @@ var _ = Describe("UpstreamPoolHandler", func() {
 		pool.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
 		Expect(only.invocations()).To(Equal(2))
 	})
+
+	It(
+		"regression: a load that changes on every read never panics leastLoaded with integer divide by zero",
+		func() {
+			// The production InFlight is a live semaphore gauge, so it can
+			// change between two reads of the same member. Pre-fix,
+			// leastLoaded read it once to find the minimum and again to
+			// collect the ties; a change in between left no member matching
+			// the minimum, ties came back empty, and
+			// (rr-1) % uint64(len(ties)) divided by zero — the 2026-10-06
+			// panic at upstream-pool-handler.go:251.
+			var reads int64
+			varying := func() int { return int(atomic.AddInt64(&reads, 1)) }
+			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
+				{Upstream: "https://a", Handler: a, Weight: 1, InFlight: varying},
+				{Upstream: "https://b", Handler: b, Weight: 1, InFlight: varying},
+			})
+
+			for i := 0; i < 1000; i++ {
+				rec := httptest.NewRecorder()
+				Expect(func() {
+					pool.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+				}).NotTo(Panic(), "leastLoaded panicked on keyless request %d", i)
+				// The request landed on exactly one of the eligible members.
+				Expect(a.invocations() + b.invocations()).To(Equal(i + 1))
+			}
+		},
+	)
 })

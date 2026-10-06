@@ -220,31 +220,47 @@ func (p *upstreamPoolHandler) pinSlot(ctx context.Context, sessionID string) int
 // counter, cycled by the tie count) so equally-loaded members share
 // keyless traffic instead of stacking on the first-declared one. Members
 // whose window excludes "now" are not considered (spec 014).
+//
+// Each eligible member's load is read exactly once, into a snapshot: the
+// count is a live semaphore gauge, so a second read while collecting the
+// ties could observe a different value and leave no member matching the
+// minimum — an empty tie slice, and a divide-by-zero on the modulo below.
+// Every later step reads the snapshot, so the minimum is always present in
+// it and the tie slice is never empty.
 func (p *upstreamPoolHandler) leastLoaded(ctx context.Context) int {
 	idx := p.eligibleIndices(ctx)
 	if len(idx) == 0 {
 		return 0
 	}
-	min := p.inFlight(idx[0])
-	for i := 1; i < len(idx); i++ {
+	loads := make([]int, len(idx))
+	for i, mi := range idx {
 		select {
 		case <-ctx.Done():
 			return 0
 		default:
 		}
-		if load := p.inFlight(idx[i]); load < min {
+		loads[i] = p.inFlight(mi)
+	}
+	min := loads[0]
+	for _, load := range loads[1:] {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
+		if load < min {
 			min = load
 		}
 	}
 	ties := make([]int, 0, len(idx))
-	for _, mi := range idx {
+	for i, load := range loads {
 		select {
 		case <-ctx.Done():
 			return 0
 		default:
 		}
-		if p.inFlight(mi) == min {
-			ties = append(ties, mi)
+		if load == min {
+			ties = append(ties, idx[i])
 		}
 	}
 	rr := atomic.AddUint64(&p.rr, 1)
