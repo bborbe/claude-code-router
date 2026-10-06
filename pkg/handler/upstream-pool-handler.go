@@ -243,12 +243,22 @@ func (p *upstreamPoolHandler) leastLoaded(ctx context.Context) int {
 	}
 	min := loads[0]
 	for _, load := range loads[1:] {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		if load < min {
 			min = load
 		}
 	}
 	ties := make([]int, 0, len(idx))
 	for i, load := range loads {
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+		}
 		if load == min {
 			ties = append(ties, idx[i])
 		}
