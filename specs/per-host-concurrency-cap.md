@@ -21,6 +21,7 @@ The router config can cap the concurrent `/v1/*` requests reaching one upstream 
 ## Non-goals
 
 - No change to the per-provider and per-member `maxConcurrentRequests` / `maxConcurrentWaitSeconds` semantics. They keep their own independent budgets; the host cap is an additional, coarser bound layered over them.
+- This **deliberately reverses** a non-goal of spec 011 — *"No shared/global semaphore across providers — caps are per-provider and independent, even when two providers share one upstream"* (`specs/completed/011-max-concurrent-requests.md`). That non-goal was right for a per-provider throttle and is precisely what this spec supersedes: the host cap is the shared bound it excluded. Spec 011's per-provider and per-member caps stay in force and are not relaxed or removed, so a reader should not read the two specs as contradictory — 011 bounds one provider, this bounds one server.
 - No automatic discovery or derivation of host caps from provider config. A host is capped only when the operator names it; every other host stays unlimited.
 - No change to auth, model routing, alias resolution, key routing, system-lift, or body handling.
 - No start-rate limiting, no latency-based backoff, no circuit breaker, no 5xx throttle.
@@ -38,7 +39,7 @@ The router config can cap the concurrent `/v1/*` requests reaching one upstream 
 - [ ] Per-member caps still enforced inside the host cap: a member cap below the host cap still queues at the member level. Evidence: `go test -count=1 ./pkg/factory/` passes (new row asserts a member cap of 2 under a host cap of 8 admits 2).
 - [ ] In-flight gauge: `/metrics` exposes a gauge `ccrouter_upstream_inflight` labelled by `host`, reporting that host's current in-flight request count — the shared semaphore's occupancy where a cap is configured, the in-flight count where none is. Evidence: `go test -count=1 ./pkg/handler/` passes (new row asserts the collector reports occupancy 0 at rest, 1 while a request is held in flight, and 0 after it returns) and `grep -c 'ccrouter_upstream_inflight' pkg/handler/metrics.go` returns ≥1.
 - [ ] Reload: a second `CreateRouterFromConfig` call with a changed host cap builds a host limiter enforcing the new value, and a host removed from `upstreamHostLimits` becomes unlimited. Evidence: `go test -count=1 ./pkg/factory/` passes (new row asserts both directions across two builds, mirroring the SIGHUP reloader path).
-- [ ] Docs: `docs/config.md` documents `upstreamHostLimits` and the gauge, and `docs/config.example.yaml` shows a host-cap block. Evidence: `grep -c 'upstreamHostLimits' docs/config.md docs/config.example.yaml` returns ≥1 for each file, and `grep -c 'ccrouter_upstream_inflight' docs/config.md` returns ≥1.
+- [ ] Docs: `docs/config.md` documents the `upstreamHostLimits` schema keys, their absent/zero/negative semantics and the gauge; `docs/config.example.yaml` shows a host-cap block; and `docs/metrics.md` documents the new series in its Series table with a cardinality note, as specs 007 and 018 did for the series they added. Evidence: `grep -c 'upstreamHostLimits' docs/config.md docs/config.example.yaml` returns ≥1 for each file, and `grep -c 'ccrouter_upstream_inflight' docs/config.md docs/metrics.md` returns ≥1 for each file.
 - [ ] Docs no longer assert the reversed design: the statements that caps are independent even when two providers share one upstream are rewritten to describe the host cap. Evidence: `grep -n 'independent' docs/config.md` returns no line asserting that two providers sharing one upstream cannot be jointly capped.
 - [ ] CHANGELOG: `CHANGELOG.md` has a bullet under `## Unreleased` mentioning `upstreamHostLimits`. Evidence: `sed -n '/^## Unreleased/,/^## /p' CHANGELOG.md | grep -c upstreamHostLimits` returns ≥1.
 - [ ] **Post-Deploy (Rung-2):** the live router enforces the host cap — a burst of 16 concurrent requests to `seibert-vllm-default` peaks `ccrouter_upstream_inflight{host="vllm.seibert.tools"}` at the configured cap and never exceeds it, and a control burst with the host cap absent peaks at 16. Evidence: `curl -fsS http://127.0.0.1:8788/metrics | grep 'ccrouter_upstream_inflight{host="vllm.seibert.tools"}'` sampled every 200 ms during the burst peaks at the configured value, not at 16.
@@ -84,6 +85,13 @@ The router config can cap the concurrent `/v1/*` requests reaching one upstream 
 - The reloader (`pkg/reloader`) rebuilds host limiters through the same factory path as provider limiters; no reloader-specific host-cap code.
 - Go style, error wrapping (`github.com/bborbe/errors`), GoDoc on exported items, and the Ginkgo/Gomega test conventions of the repo apply unchanged.
 
+## Assumptions
+
+- One host limiter can be built per distinct host inside the existing factory loop and shared by every provider and pool member resolving to that host, without restructuring that loop's per-upstream iteration.
+- The existing `NewConcurrencyLimiter` can serve as the host budget unchanged — its queue, wait and 429 semantics are what the host cap needs, so no second queueing mechanism is written.
+- The host key derived from an upstream URL is stable for the life of a config, so a limiter built at reload time keys the same host that a request resolves at dispatch time.
+- Provider and pool-member upstreams are already parsed at config load (`normalizeUpstreams`), so host derivation adds no new parsing path.
+
 ## Failure Modes
 
 | Trigger | Expected behavior | Recovery | Detection | Reversibility |
@@ -95,6 +103,8 @@ The router config can cap the concurrent `/v1/*` requests reaching one upstream 
 | Two upstreams differ only by port | They key separately (`host:port`) and are capped independently | Operator names each key explicitly | The two hosts report separate `ccrouter_upstream_inflight` series | n/a — configuration choice |
 | Config names a host no provider resolves to | The entry loads and is inert; no limiter is built for it | None required; the operator may remove the dead entry | The host has no `ccrouter_upstream_inflight` series | Reversible via config |
 | A host is removed from `upstreamHostLimits` on reload | The host becomes unlimited on the rebuilt handler tree; in-flight requests finish on the old tree | None required | The gauge still reports the host, now below any cap | Reversible via config + SIGHUP |
+| Sustained arrival above the host cap | The queue is bounded by arrival rate × wait window, matching the provider-level limiter; memory grows with the queue, not without limit | Operator lowers the cap or the wait window, or raises the host's capacity | `ccrouter_upstream_inflight` pinned at the cap with 429s rising | Reversible via config + SIGHUP |
+| A request goroutine dies mid-request while holding a host slot | The slot is released by the limiter's `defer`, so the budget is not permanently reduced | None required | `ccrouter_upstream_inflight` returns to 0 after the failure and stays there | Reversible — a leaked slot is the failure; no state to undo |
 
 ## Security / Abuse
 
@@ -104,9 +114,11 @@ The gauge label is the upstream host, which is operator-configured infrastructur
 
 | # | Prompt focus | Covers DBs | Covers ACs | Depends on |
 |---|---|---|---|---|
-| 1 | `upstreamHostLimits` schema, host-key derivation, lenient validation, and the factory wiring that builds one shared host limiter per host outside the per-member limiter | 1, 2, 3, 6, 8 | 1, 2, 3, 4, 7, 9 | — |
+| 1 | `upstreamHostLimits` schema, host-key derivation, lenient validation, and the factory wiring that builds one shared host limiter per host outside the per-member limiter | 1, 2, 3, 4, 5, 6, 8 | 1, 2, 3, 4, 5, 6, 7, 9 | — |
 | 2 | `ccrouter_upstream_inflight{host=...}` gauge, wired to the host limiter's occupancy and present for uncapped hosts | 7 | 8 | prompt 1 (needs the limiter) |
-| 3 | Docs (`docs/config.md`, `docs/config.example.yaml`) rewriting the independent-caps statements, plus the `## Unreleased` CHANGELOG bullet | — | 10, 11, 12 | prompts 1, 2 |
+| 3 | Docs (`docs/config.md`, `docs/config.example.yaml`, `docs/metrics.md`) rewriting the independent-caps statements and documenting the series, plus the `## Unreleased` CHANGELOG bullet | — | 10, 11, 12 | prompts 1, 2 |
+
+AC 13 is the operator-run Post-Deploy burst — no prompt covers it; it runs on the host after release.
 
 Rationale: prompt 1 establishes the host limiter and its config contract, which is the load-bearing change; prompt 2 adds the observable on top of it; prompt 3 is documentation that must describe the shipped shape, so it follows both.
 
