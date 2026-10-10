@@ -1,5 +1,5 @@
 ---
-status: generating
+status: approved
 approved: "2026-10-10T13:03:27Z"
 generating: "2026-10-10T13:03:28Z"
 branch: dark-factory/per-host-concurrency-cap
