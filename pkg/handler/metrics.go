@@ -40,9 +40,12 @@ var LatencyBucketsSeconds = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 // for `/model qwen`-style short names), one CounterVec for token
 // counts labeled by provider + model + direction (`input`/`output`),
 // one CounterVec for requests delayed (paced) by the adaptive 429
-// delay gate, labeled by provider (spec 018), and one InFlight
-// collector exporting the current + 60 s-peak in-flight request count
-// per provider.
+// delay gate, labeled by provider (spec 018), one InFlight collector
+// exporting the current + 60 s-peak in-flight request count per
+// provider, and four further additive collectors observing the
+// per-provider cold-start admission gate (spec 019): delayed and
+// refused cold-request counters, an in-flight cold-token gauge, and a
+// cold time-to-first-token histogram.
 //
 // Cardinality budget: 5 providers × ~15 active models × 7 status_classes
 // = 525 series ceiling for the requests counter (~450 in practice because
@@ -58,7 +61,14 @@ type Metrics struct {
 	TokensTotal      *prometheus.CounterVec
 	CacheTokensTotal *prometheus.CounterVec
 	ThrottledTotal   *prometheus.CounterVec
-	InFlight         *InFlight
+	// The four cold-start admission collectors (spec 019) are additive:
+	// they observe the per-provider cold-start gate and never change the
+	// existing request/latency/token series or the status_class enum.
+	ColdAdmissionDelayedTotal *prometheus.CounterVec
+	ColdAdmissionRefusedTotal *prometheus.CounterVec
+	ColdTokensInFlight        *prometheus.GaugeVec
+	ColdTTFTSeconds           *prometheus.HistogramVec
+	InFlight                  *InFlight
 }
 
 // NewMetrics constructs the collectors but does NOT register them. Call
@@ -122,6 +132,35 @@ func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTi
 			},
 			[]string{"provider"},
 		),
+		ColdAdmissionDelayedTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ccrouter_cold_admission_delayed_total",
+				Help: "Number of cold /v1/* requests the cold-start admission gate admitted only after waiting in the bounded queue (blocked by the prefill budget or the new-session rate), labeled by provider. A request admitted immediately and a warm request do not increment it.",
+			},
+			[]string{"provider"},
+		),
+		ColdAdmissionRefusedTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ccrouter_cold_admission_refused_total",
+				Help: "Number of cold /v1/* requests the cold-start admission gate refused with HTTP 429 (the bounded queue was full, or the max wait elapsed), labeled by provider. A client that disconnects while waiting is never counted.",
+			},
+			[]string{"provider"},
+		),
+		ColdTokensInFlight: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "ccrouter_cold_tokens_in_flight",
+				Help: "Cold-prefill tokens currently reserved by the cold-start admission gate, labeled by provider. Rises while a cold request holds its reservation and returns to zero as the reservation is released on the first content delta (or when the handler returns).",
+			},
+			[]string{"provider"},
+		),
+		ColdTTFTSeconds: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "ccrouter_cold_ttft_seconds",
+				Help:    "Time to first token (seconds) for cold /v1/* requests, measured from admission to the first content delta in the response stream, labeled by provider. Warm requests are not observed.",
+				Buckets: LatencyBucketsSeconds,
+			},
+			[]string{"provider"},
+		),
 		InFlight: NewInFlight(currentDateTime),
 	}
 	for alias, resolved := range aliases {
@@ -135,7 +174,7 @@ func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTi
 // production. Returns the first registration error (if any) so caller
 // can decide whether to abort startup.
 func (m *Metrics) Register(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.InFlight} {
+	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds, m.InFlight} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}

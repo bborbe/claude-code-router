@@ -45,6 +45,9 @@ providers:
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
     # throttle429Threshold: 3   # optional; enable adaptive pacing: once the 60s-windowed count of upstream 429s reaches this, subsequent /v1/* requests to THIS provider are delayed before forwarding (see ## 429 delay gate). Absent or 0 or negative = disabled.
     # throttleMaxDelaySeconds: 30 # optional; upper bound of the pacing delay while throttled (default 30)
+    # coldPrefillBudgetTokens: 65536 # optional; enable cold-start admission: ceiling on in-flight cold-prefill tokens for THIS provider (see ## Cold-start admission gate). Absent or 0 or negative = budget check off.
+    # coldSessionWindowSeconds: 600 # optional; window deciding whether a session is new; absent or 0 or negative = 600 (default 600)
+    # newSessionRatePerMinute: 4 # optional; cap on newly-seen session ids admitted per minute; absent or 0 or negative = rate check off.
     # window:                    # optional; legacy single-upstream form only — applies to the implicit single member (see ## Time-of-day windows). Cannot be combined with an upstreams: list.
     #   from: "08:00 Europe/Berlin"
     #   until: "18:00 Europe/Berlin"
@@ -213,6 +216,34 @@ providers:
 - **SIGHUP applies changes.** Both fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider gates, so changed values are live without a restart. Throttle state is in-memory per provider, so a reload resets a throttled provider to not-throttled; it re-accumulates the window on the next 429s — reversible by design.
 - **Observability.** Entry/exit log lines `[throttle] provider=<name> state=on` / `state=off` at INFO, each paced request at glog `-v` ≥ 4, and the model router's existing `[req] ... latency=` includes the pacing delay. A new additive counter `ccrouter_throttled_total{provider}` counts paced requests (see `docs/metrics.md`); the `status_class` enum and `4xx_rate_limited` classification are unchanged — an upstream 429 still lands in `4xx_rate_limited`.
 - **Suggested use.** Observed live 2026-08-26, z.ai `glm-5.3-flash[1m]` (provider `zai/0`) entered a sustained 429 wall. Set `throttle429Threshold: 3` and `throttleMaxDelaySeconds: 30` on that provider so the router paces traffic into the breathing window instead of re-storming an upstream already refusing work. The zero=disabled regression check: on a benign provider, `throttle429Threshold: 0` keeps traffic flowing with no `[throttle]` lines and no added latency.
+
+## Cold-start admission gate
+
+An optional per-provider gate admits new sessions into a provider whose backend has a throughput ceiling on cold prefill — the expensive first pass over an uncached context. A burst of brand-new sessions each carrying a large uncached context can push a backend past that ceiling even when the request count itself looks modest; this gate is the server-side admission point for that burst. It sits inside the 429 delay gate — see ## 429 delay gate — so a request the throttle gate is pacing waits there first and only then reaches the cold gate. Three fields turn it on:
+
+```yaml
+providers:
+  <provider-key>:
+    upstream: <URL>
+    coldPrefillBudgetTokens: 65536  # optional; enable cold-start admission: ceiling on in-flight cold-prefill tokens for THIS provider (see below). Absent or 0 or negative = budget check off.
+    coldSessionWindowSeconds: 600   # optional; window deciding whether a session is new; absent or 0 or negative = 600 (default 600)
+    newSessionRatePerMinute: 4      # optional; cap on newly-seen session ids admitted per minute; absent or 0 or negative = rate check off.
+```
+
+- **Feature-off by default.** When `coldPrefillBudgetTokens` and `newSessionRatePerMinute` are both absent, `0`, or negative, the gate is a no-op and the request path is byte-for-byte identical to a release without it. Either check alone enables the gate. Existing configs are unaffected.
+- **`coldPrefillBudgetTokens` — the prefill ceiling.** The ceiling on the total estimated in-flight cold-prefill tokens the router admits for this provider at once. **Default: off** — absent, `0`, or negative disables the budget check (the rate check, if enabled, still applies).
+- **`coldSessionWindowSeconds` — the new-session window.** The window that decides whether a session is new. **Default: 600 seconds** — absent, `0`, or negative resolves to 600 at wiring, and it is only consulted while the gate is enabled.
+- **`newSessionRatePerMinute` — the new-session rate cap.** The cap on newly-seen session ids admitted per minute, with a **fixed burst of 2** admitted immediately before the per-minute refill applies. **Default: off** — absent, `0`, or negative disables the rate check (the budget check, if enabled, still applies).
+- **Cold vs warm.** A request whose `x-session-id` (read from the request context) was last seen inside the window is WARM and is never held — no wait, no reservation, no new behaviour. A request whose id is absent, unknown, or last seen outside the window is COLD and is charged a prefill estimate.
+- **The estimate.** A cold request's prefill cost estimate is its request body size divided by 3.5 (the router computes this with integer arithmetic). A body whose size is unknown (a chunked request with a negative `Content-Length`) yields an estimate of zero and forwards with no reservation.
+- **What the gate does.** A cold request is admitted while its estimate fits the remaining budget and the rate allowance allows it. The excess waits in a bounded queue; a request that cannot be admitted within the max wait — or that arrives when the queue is full — is answered HTTP 429 with the same static Anthropic-shaped `rate_limit_error` body as the concurrency limiter (`{"type":"error","error":{"type":"rate_limit_error",...}}`) and an integer `Retry-After` header in the range 1–60, so the client's own backoff retries cleanly. Never a 5xx, never a dropped request. The refusal body is the existing static generic constant — it carries no queue depth, provider name, upstream URL, or session-identifying value.
+- **The reservation is released on the first content delta.** Budget is released the moment the response stream emits its first content delta — the point at which prefill has finished — not on a timer and not at message start. It is also released when the response ends or the client disconnects, so a stream end or an upstream error frees it too. A client that disconnects while waiting never holds a queue slot or a reservation.
+- **Fixed internal constants (not knobs).** The rate burst (2), the bounded queue capacity (32), the max queue wait (30 seconds), the estimate divisor (3.5), and the `Retry-After` clamp (1–60 seconds) are fixed internals. They are documented here as defaults and are NOT configurable — no per-model or per-session budget, no circuit breaker, no new `status_class` value, no persistent queue.
+- **Provider-level only.** The three knobs are read at provider level only and are NOT copied onto `upstreams:` pool members — a cold knob on a member is silently ignored (the same rule the ## 429 delay gate section states; set the knobs on the provider block).
+- **Validation is lenient.** A negative budget or rate disables that check while the other still applies; a negative (or zero) window falls back to 600 seconds. No value fails `config.Load` — the config always loads, never fail-closed.
+- **SIGHUP applies changes.** All three fields live in the same config that hot-reloads on SIGHUP — the reloader rebuilds the per-provider gates, so changed values are live without a restart. Admission state is in-memory, so a reload resets the window, the budget, and the rate bucket; they re-accumulate from the next requests — reversible by design.
+- **Observability.** Each delayed and each refused cold request emits one INFO line: `[coldgate] provider=<name> decision=delayed reason=<budget|rate>` or `[coldgate] provider=<name> decision=refused reason=<budget|rate|queue_full|timeout>`. Raw session ids are never logged. Four additive series are documented in `docs/metrics.md`; the `status_class` enum and `4xx_rate_limited` classification are unchanged — a refusal still lands in `4xx_rate_limited`.
+- **Suggested use.** A provider backing a fleet with a single large-context model: set `coldPrefillBudgetTokens` to the backend's cold-prefill ceiling, leave `coldSessionWindowSeconds` at its 600 default, and set `newSessionRatePerMinute` to the number of new sessions per minute the backend can absorb. Established sessions are never held, so an in-progress conversation pays no admission latency.
 
 ## Upstream pools
 

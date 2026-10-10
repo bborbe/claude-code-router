@@ -224,6 +224,32 @@ type Provider struct {
 	// enabled provider (Throttle429Threshold > 0); absent, 0, or negative
 	// resolves to the 30s default at wiring.
 	ThrottleMaxDelaySeconds int `yaml:"throttleMaxDelaySeconds,omitempty"`
+	// ColdPrefillBudgetTokens, when > 0, enables the per-provider cold-start
+	// admission gate (spec 019): the ceiling on in-flight cold-prefill tokens
+	// the router admits for this provider at once. A request counts as cold
+	// when its session id (from the request context) was last seen outside
+	// the session window, and carries a prefill estimate of its body size
+	// divided by 3.5 (integer arithmetic). Cold requests are admitted while
+	// their estimate fits the budget; the excess waits in a bounded queue and
+	// is then refused with HTTP 429. Absent, 0, or negative disables the
+	// budget check — byte-for-byte current behaviour when the rate is also
+	// absent/0/negative. Read at provider level only — NOT copied onto
+	// upstream members (unlike MaxConcurrentRequests).
+	ColdPrefillBudgetTokens int `yaml:"coldPrefillBudgetTokens,omitempty"`
+	// ColdSessionWindowSeconds is the window that decides whether a session
+	// is new (spec 019): a request whose session id was last seen inside this
+	// window is warm and is never held; a request whose id is absent,
+	// unknown, or last seen outside the window is cold. Absent, 0, or
+	// negative resolves to the 600-second default at wiring. Read at provider
+	// level only.
+	ColdSessionWindowSeconds int `yaml:"coldSessionWindowSeconds,omitempty"`
+	// NewSessionRatePerMinute, when > 0, caps how many newly-seen session ids
+	// this provider admits per minute (spec 019), with a fixed burst of 2
+	// admitted immediately. A first request for an id beyond that allowance
+	// waits in the same bounded queue as a budget-blocked request. Absent, 0,
+	// or negative disables the rate check. Read at provider level only — NOT
+	// copied onto upstream members.
+	NewSessionRatePerMinute int `yaml:"newSessionRatePerMinute,omitempty"`
 }
 
 // Window is an optional per-upstream time-of-day eligibility window

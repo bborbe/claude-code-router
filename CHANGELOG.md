@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add per-provider cold-start admission gate. Three optional provider knobs — `coldPrefillBudgetTokens` (ceiling on in-flight cold-prefill tokens), `coldSessionWindowSeconds` (window deciding whether a session is new, default 600), and `newSessionRatePerMinute` (cap on newly-seen session ids per minute, fixed burst 2) — hold cold requests in a bounded queue (capacity 32, max wait 30s) and refuse the excess with HTTP 429 and an integer `Retry-After` (1–60) instead of overloading a backend whose cold-prefill throughput is capped. Warm sessions are never held, and the reservation is released on the first content delta. Adds four additive series `ccrouter_cold_admission_delayed_total`, `ccrouter_cold_admission_refused_total`, `ccrouter_cold_tokens_in_flight`, and `ccrouter_cold_ttft_seconds`; the `status_class` enum is unchanged.
+
 ## v0.48.0
 
 - feat: export `ccrouter_inflight_requests{provider}` (current parallel requests per provider) and `ccrouter_inflight_requests_peak{provider}` (max over a sliding 60 s window, never reset on read) via a new `handler.InFlight` collector, wired into `Metrics` and incremented around every upstream dispatch in `NewModelRouter` — the count comes back down on success, upstream error, client cancel, and a panic in the handler, and router-side early returns never touch it.

@@ -188,6 +188,38 @@ const defaultMaxConcurrentWaitSeconds = 30
 // negative (spec DB 4).
 const defaultThrottleMaxDelaySeconds = 30
 
+// coldGateHandler wraps a provider's upstream pool handler in the per-provider
+// cold-start admission gate (spec 019), wired to the four additive collectors.
+// A provider with both cold knobs absent, 0, or negative gets the pool handler
+// unchanged from NewColdStartGate (its no-op path), so an unconfigured router
+// is byte-for-byte unchanged. The max-wait argument is 0 so the handler's own
+// default is the single source of truth (a factory copy would silently shadow
+// a later change), and a non-positive session window likewise resolves to the
+// handler's 600-second default. now is the router's injected clock.
+func coldGateHandler(
+	next http.Handler,
+	name string,
+	prov pkg.Provider,
+	now func() libtime.DateTime,
+	metrics *handler.Metrics,
+) http.Handler {
+	return handler.NewColdStartGate(
+		next,
+		name,
+		prov.ColdPrefillBudgetTokens,
+		time.Duration(prov.ColdSessionWindowSeconds)*time.Second,
+		prov.NewSessionRatePerMinute,
+		0,
+		now,
+		handler.ColdGateMetrics{
+			Delayed:        metrics.ColdAdmissionDelayedTotal,
+			Refused:        metrics.ColdAdmissionRefusedTotal,
+			TokensInFlight: metrics.ColdTokensInFlight,
+			TTFT:           metrics.ColdTTFTSeconds,
+		},
+	)
+}
+
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
 // config: per-provider upstream pools (each member its own reverse proxy,
 // token-swap transport, and concurrency limiter), a model-name dispatcher
@@ -315,6 +347,17 @@ func CreateRouterFromConfig(
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
+		// The cold-start admission gate wraps the provider's pool handler
+		// (spec 019) BEFORE the throttle gate, so the existing 429 delay
+		// gate stays outermost and cold admission is the last gate before
+		// the pool.
+		providerHandler = coldGateHandler(
+			providerHandler,
+			name,
+			prov,
+			o.currentDateTime.Now,
+			metrics,
+		)
 		// The adaptive 429 delay gate wraps the provider's pool handler
 		// (spec 018): an enabled provider (Throttle429Threshold > 0) paces
 		// requests destined for this pool while it is under sustained 429

@@ -150,9 +150,7 @@ func (g *throttleGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Pacing queue saturated: could not acquire a slot within the max
 		// delay. Answer HTTP 429 with the static generic body — never a 5xx,
 		// never internal state.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(limiter429Body))
+		writeRateLimited(w, 0)
 	case <-r.Context().Done():
 		// Client disconnected while waiting for a pacing slot: return
 		// without acquiring and without forwarding.

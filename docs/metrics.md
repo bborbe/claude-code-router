@@ -23,6 +23,10 @@ scrape_configs:
 | `ccrouter_tokens_total` | `provider`, `model`, `direction` | counter | `42` (input) / `17` (output) |
 | `ccrouter_cache_tokens_total` | `provider`, `model`, `direction` | counter | `5000` (read) / `200` (creation) |
 | `ccrouter_throttled_total` | `provider` | counter | `1` (per paced request) |
+| `ccrouter_cold_admission_delayed_total` | `provider` | counter | `1` (per delayed cold request) |
+| `ccrouter_cold_admission_refused_total` | `provider` | counter | `1` (per refused cold request) |
+| `ccrouter_cold_tokens_in_flight` | `provider` | gauge | `4096` (in-flight cold tokens) |
+| `ccrouter_cold_ttft_seconds` | `provider` | histogram | `0.842` (p95 bucket) |
 | `ccrouter_inflight_requests` | `provider` | gauge | `3` (currently executing) |
 | `ccrouter_inflight_requests_peak` | `provider` | gauge | `5` (max over the last 60 s) |
 
@@ -35,6 +39,8 @@ scrape_configs:
 `model` on all `ccrouter_*` series resolves through a sentinel chain (post-alias resolved model → pre-alias original model → `_unknown_`), so no `model=""` empty label ever reaches Prometheus. The `_unknown_` sentinel also appears as the `provider` label value on the three router-side early-return paths (body-too-large, body-read-failed, alias-rewrite-failed) where routing never resolved a provider.
 
 `ccrouter_throttled_total` counts requests the 429 delay gate actually delayed before forwarding (`throttle429Threshold` enabled — see `docs/config.md ## 429 delay gate`); overflow 429s and non-paced requests do not increment it. `provider` is bounded by the YAML config like the other provider-labeled series. The counter is additive — the `status_class` 7-value enum is unchanged, and upstream 429s still record through `4xx_rate_limited`.
+
+The four `ccrouter_cold_*` series observe the per-provider cold-start admission gate (see `docs/config.md ## Cold-start admission gate`). `ccrouter_cold_admission_delayed_total` counts cold requests the gate delayed (waited, then admitted) and `ccrouter_cold_admission_refused_total` counts cold requests it refused; a warm request and a cold request admitted immediately increment neither. `ccrouter_cold_tokens_in_flight` rises while cold requests hold their reservation and returns to zero as budget is released on the first content delta (or when the handler returns). `ccrouter_cold_ttft_seconds` observes cold time from dispatch to the first content delta. All four are additive — the `status_class` 7-value enum is unchanged, and a refusal still records through `4xx_rate_limited`.
 
 `ccrouter_inflight_requests` is the current number of requests dispatched to the provider and not yet returned — incremented immediately before the provider handler is invoked and decremented on every exit, including success, upstream error, client cancel, and a panic in the handler. The provider handler wraps the 429 throttle gate (pacing delay) and the per-upstream concurrency limiters (queue wait, overflow 429), so the gauge counts requests that are **queued, paced, or executing** — not just those with an open upstream socket. A value above the sum of the provider's `maxConcurrentRequests` therefore means requests are queueing (or waiting on the pacing delay) rather than running. The gauge is incremented on the dispatch path only; the router-side early returns (body too large, body read failed, alias/pool/`[1m]` rewrite failed) never dispatch upstream and never touch it.
 

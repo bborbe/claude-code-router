@@ -6,6 +6,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -16,6 +17,24 @@ import (
 // queue depth, the upstream URL, or the provider name (no internal state
 // leaked).
 const limiter429Body = `{"type":"error","error":{"type":"rate_limit_error","message":"too many concurrent requests, please retry"}}`
+
+// writeRateLimited answers a request the gate could not admit: HTTP 429 with
+// the static Anthropic-shaped limiter429Body. It never writes a 5xx and never
+// leaks internal state — the body is a fixed constant carrying no queue depth,
+// provider name, upstream URL, or session-identifying value.
+//
+// retryAfterSeconds > 0 adds an integer Retry-After header; 0 omits it, which
+// is the shape the concurrency limiter and the throttle gate have always used
+// and which the cold-start gate overrides with its clamped 1–60. Shared by all
+// three so the envelope and the header write cannot drift apart.
+func writeRateLimited(w http.ResponseWriter, retryAfterSeconds int) {
+	w.Header().Set("Content-Type", "application/json")
+	if retryAfterSeconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+	}
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write([]byte(limiter429Body))
+}
 
 // NewConcurrencyLimiter returns a handler that caps how many /v1/*
 // requests reach next at the same time. When maxConcurrentRequests is
@@ -78,9 +97,7 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-l.sem }()
 		l.next.ServeHTTP(w, r)
 	case <-timer.C:
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(limiter429Body))
+		writeRateLimited(w, 0)
 	case <-r.Context().Done():
 		// Client disconnected while queued: return without acquiring a
 		// slot and without forwarding. No response write is needed — the

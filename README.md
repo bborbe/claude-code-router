@@ -74,6 +74,8 @@ Local HTTP router for Claude Code. Forwards `/v1/*` requests to one of several L
 
    Full schema reference: [docs/config.md](docs/config.md). Add more providers (or remove the ones you don't use) by following the same block shape.
 
+   Optional per-provider knobs tune admission and pacing without any code change: `maxConcurrentRequests` / `maxConcurrentWaitSeconds` cap concurrency, `throttle429Threshold` / `throttleMaxDelaySeconds` pace a provider whose upstream is under a 429 wall, and `coldPrefillBudgetTokens` / `coldSessionWindowSeconds` / `newSessionRatePerMinute` admit new sessions only while the backend's cold-prefill ceiling allows it — see [docs/config.md](docs/config.md) for each block.
+
    **Config edits are hot-reloadable** — after editing `config.yaml`, send SIGHUP to the running router to pick up the change without a process restart (in-flight requests are preserved):
 
    ```bash
