@@ -15,6 +15,8 @@ package pkg
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -40,7 +42,7 @@ type Config struct {
 	// The key is operator config read only at wiring — never from client
 	// input — and flows only in the outbound Authorization header, never
 	// into logs or trace files (redacted like every other token).
-	DefaultToken string `yaml:"default_token,omitempty"  display:"length"`
+	DefaultToken string `yaml:"default_token,omitempty"      display:"length"`
 	// Aliases maps a short operator-typed model name to the full
 	// model string the upstream expects. Resolved single-hop before
 	// glob-routing: a request body `{"model":"qwen"}` becomes
@@ -76,7 +78,16 @@ type Config struct {
 	// are equivalent and all mean: no key enforcement and no key routing —
 	// the /v1/* path behaves exactly as it does today. Keys are literal
 	// strings, like provider token: fields.
-	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty" display:"length"`
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"     display:"length"`
+	// UpstreamHostLimits caps concurrency per upstream HOST (spec 019),
+	// keyed by the host key UpstreamHostKey derives from an upstream URL
+	// (lowercased host, plus ":port" only for a non-default port). Every
+	// provider and pool member resolving to a named host draws from that
+	// host's one shared budget; a host not named here is unlimited. Keys
+	// are matched by exact string equality. A key naming a host no
+	// provider resolves to loads and is inert. Nil / empty = no host caps,
+	// byte-for-byte today's behavior.
+	UpstreamHostLimits map[string]HostLimit `yaml:"upstreamHostLimits,omitempty"`
 	// ProviderOrder records the provider keys in YAML declaration order,
 	// captured during unmarshal. Go maps cannot preserve iteration order, but
 	// the router's "walk providers in declaration order, first glob match
@@ -409,6 +420,42 @@ type Upstream struct {
 	// member with days: but no window: must carry the inline location —
 	// validation rejects one without it.
 	Days *Days `yaml:"days,omitempty"`
+}
+
+// HostLimit caps the concurrent /v1/* requests reaching one upstream
+// host, summed across every provider and pool member whose upstream
+// resolves to that host (spec 019). The fields carry the same
+// absent/zero/negative semantics as the provider-level fields:
+// MaxConcurrentRequests absent, 0, or negative = unlimited (the host is
+// never queued and the router never issues a host-cap 429);
+// MaxConcurrentWaitSeconds absent, 0, or negative resolves to the 30s
+// default at wiring. Validation is lenient — no value fails Load.
+type HostLimit struct {
+	MaxConcurrentRequests    int `yaml:"maxConcurrentRequests,omitempty"`
+	MaxConcurrentWaitSeconds int `yaml:"maxConcurrentWaitSeconds,omitempty"`
+}
+
+// UpstreamHostKey returns the upstreamHostLimits key an upstream URL
+// resolves to (spec 019): the URL's host name lowercased, with the port
+// appended as host:port only when it is explicit and not the scheme's
+// default (80 for http, 443 for https). The path is ignored, so
+// "https://vllm.seibert.tools" and "https://vllm.seibert.tools/v1" both
+// key "vllm.seibert.tools", and "http://127.0.0.1:8317" keys
+// "127.0.0.1:8317". IPv6 literals keep their brackets when a port is
+// appended (net.JoinHostPort).
+func UpstreamHostKey(u *url.URL) string {
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	switch {
+	case port == "":
+		return host
+	case port == "80" && u.Scheme == "http":
+		return host
+	case port == "443" && u.Scheme == "https":
+		return host
+	default:
+		return net.JoinHostPort(host, port)
+	}
 }
 
 // ModelPoolMember is one candidate of a model pool: the provider to

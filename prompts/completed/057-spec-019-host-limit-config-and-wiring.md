@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-per-host-concurrency-cap]
+summary: 'Added per-upstream-host concurrency cap (spec 019): lenient upstreamHostLimits config map, UpstreamHostKey derivation, a shared HostLimiter reusing the concurrency limiter over one semaphore, factory wiring composing it outside every per-member limiter, plus config/handler/factory tests.'
+execution_id: claude-code-router-hostcap-exec-057-spec-019-host-limit-config-and-wiring
+dark-factory-version: v0.196.0
 created: "2026-10-10T15:30:08Z"
 queued: "2026-10-10T16:10:53Z"
+started: "2026-10-10T16:12:38Z"
+completed: "2026-10-10T16:17:37Z"
 ---
 
 # Per-host concurrency cap: upstreamHostLimits config, host-key derivation, shared host limiter wiring

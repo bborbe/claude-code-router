@@ -1014,6 +1014,82 @@ providers:
 		})
 	})
 
+	Context("upstreamHostLimits", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave the map nil, so every fixture goes through Load, not struct
+		// literals (spec 019 AC 1/2). The extra YAML is appended at TOP
+		// level (zero indent) — upstreamHostLimits is a Config-level key.
+		loadProvider := func(extra string) (*pkgcfg.Config, error) {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://vllm.seibert.tools
+    models: ["claude-*"]
+` + extra)
+			return pkgcfg.Load(context.Background(), p)
+		}
+
+		It("loads one host cap with no error", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  vllm.seibert.tools:
+    maxConcurrentRequests: 8
+    maxConcurrentWaitSeconds: 30
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits["vllm.seibert.tools"]).To(Equal(pkgcfg.HostLimit{
+				MaxConcurrentRequests:    8,
+				MaxConcurrentWaitSeconds: 30,
+			}))
+		})
+
+		It("leaves the map empty when the key is absent — identical to today", func() {
+			cfg, err := loadProvider(``)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits).To(BeEmpty())
+		})
+
+		It("loads negative values with no error and preserves them", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  vllm.seibert.tools:
+    maxConcurrentRequests: -1
+    maxConcurrentWaitSeconds: -1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			// The factory resolves <= 0 to unlimited / the 30s default at
+			// wiring; the behavioral fallback is asserted in the handler and
+			// wiring tests.
+			Expect(cfg.UpstreamHostLimits["vllm.seibert.tools"]).To(Equal(pkgcfg.HostLimit{
+				MaxConcurrentRequests:    -1,
+				MaxConcurrentWaitSeconds: -1,
+			}))
+		})
+
+		It("loads explicit zeroes with no error", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  vllm.seibert.tools:
+    maxConcurrentRequests: 0
+    maxConcurrentWaitSeconds: 0
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits["vllm.seibert.tools"]).To(Equal(pkgcfg.HostLimit{}))
+		})
+
+		It("loads a key naming a host no provider uses — inert", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  unused.example:
+    maxConcurrentRequests: 1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits).To(HaveKey("unused.example"))
+		})
+	})
+
 	Context("throttle429Threshold", func() {
 		// These are yaml-boundary tests: a wrong yaml tag would silently
 		// leave the fields zero, so every fixture goes through Load, not
