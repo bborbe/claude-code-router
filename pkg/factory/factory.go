@@ -262,7 +262,7 @@ func CreateRouterFromConfig(
 	// side-effect-free (builds collectors, pre-initializes aliases), so
 	// building it earlier changes nothing for the Register call and the
 	// model router, both of which keep referencing metrics below.
-	metrics := handler.NewMetrics(cfg.Aliases)
+	metrics := handler.NewMetrics(cfg.Aliases, o.currentDateTime)
 
 	for _, name := range providerKeys(ctx, cfg) {
 		select {

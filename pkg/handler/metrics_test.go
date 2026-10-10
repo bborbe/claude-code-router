@@ -17,7 +17,7 @@ var _ = Describe("Metrics", func() {
 	var m *handler.Metrics
 
 	BeforeEach(func() {
-		m = handler.NewMetrics(nil)
+		m = handler.NewMetrics(nil, testDateTime)
 	})
 
 	It("NewMetrics returns non-nil collectors", func() {
@@ -26,6 +26,7 @@ var _ = Describe("Metrics", func() {
 		Expect(m.AliasResolutions).NotTo(BeNil())
 		Expect(m.TokensTotal).NotTo(BeNil())
 		Expect(m.ThrottledTotal).NotTo(BeNil())
+		Expect(m.InFlight).NotTo(BeNil())
 	})
 
 	It("Register against a fresh registry succeeds", func() {
@@ -190,13 +191,13 @@ var _ = Describe("Metrics", func() {
 			aliasMetrics := handler.NewMetrics(map[string]string{
 				"qwen": "qwen-coder",
 				"m3":   "MiniMax-M3-highspeed",
-			})
+			}, testDateTime)
 			Expect(testutil.CollectAndCount(aliasMetrics.AliasResolutions)).To(Equal(2))
 		})
 
 		It("creates no series and does not panic when aliases is nil", func() {
 			var m *handler.Metrics
-			Expect(func() { m = handler.NewMetrics(nil) }).NotTo(Panic())
+			Expect(func() { m = handler.NewMetrics(nil, testDateTime) }).NotTo(Panic())
 			Expect(testutil.CollectAndCount(m.AliasResolutions)).To(Equal(0))
 		})
 	})

@@ -7,6 +7,7 @@ package handler
 import (
 	"strconv"
 
+	libtime "github.com/bborbe/time"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -38,18 +39,21 @@ var LatencyBucketsSeconds = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 // one CounterVec for alias resolutions (operator-side observability
 // for `/model qwen`-style short names), one CounterVec for token
 // counts labeled by provider + model + direction (`input`/`output`),
-// and one CounterVec for requests delayed (paced) by the adaptive 429
-// delay gate, labeled by provider (spec 018). Four further additive
-// collectors observe the per-provider cold-start admission gate (spec
-// 019): delayed and refused cold-request counters, an in-flight
-// cold-token gauge, and a cold time-to-first-token histogram.
+// one CounterVec for requests delayed (paced) by the adaptive 429
+// delay gate, labeled by provider (spec 018), one InFlight collector
+// exporting the current + 60 s-peak in-flight request count per
+// provider, and four further additive collectors observing the
+// per-provider cold-start admission gate (spec 019): delayed and
+// refused cold-request counters, an in-flight cold-token gauge, and a
+// cold time-to-first-token histogram.
 //
 // Cardinality budget: 5 providers × ~15 active models × 7 status_classes
 // = 525 series ceiling for the requests counter (~450 in practice because
 // some tuples never fire); 5 × 15 × 2 = 150 series for the tokens
 // counter; histogram adds 5×15×len(buckets) = 750 series; aliases
-// counter bounded by the YAML config (≤10). Total ~1.5k series — fine
-// for a local Prometheus scrape.
+// counter bounded by the YAML config (≤10); the in-flight gauges add
+// 2 series per provider (10). Total ~1.5k series — fine for a local
+// Prometheus scrape.
 type Metrics struct {
 	RequestsTotal    *prometheus.CounterVec
 	RequestDuration  *prometheus.HistogramVec
@@ -64,12 +68,13 @@ type Metrics struct {
 	ColdAdmissionRefusedTotal *prometheus.CounterVec
 	ColdTokensInFlight        *prometheus.GaugeVec
 	ColdTTFTSeconds           *prometheus.HistogramVec
+	InFlight                  *InFlight
 }
 
-// NewMetrics constructs the four collectors but does NOT register
-// them. Call Register on a *prometheus.Registry to expose them; that
-// split lets tests verify behavior against a fresh registry per spec
-// without colliding on the global default registry.
+// NewMetrics constructs the collectors but does NOT register them. Call
+// Register on a *prometheus.Registry to expose them; that split lets tests
+// verify behavior against a fresh registry per spec without colliding on
+// the global default registry.
 //
 // aliases is used to pre-initialize the alias_resolutions counter so
 // that `rate(...) > X` alerts evaluate to 0 (not no-data) for aliases
@@ -77,7 +82,12 @@ type Metrics struct {
 // map yields zero iterations. TokensTotal is NOT pre-initialized: there
 // is no closed set of (provider, model, direction) tuples known at
 // boot; cardinality is bounded by real traffic.
-func NewMetrics(aliases map[string]string) *Metrics {
+//
+// currentDateTime is the clock the InFlight collector uses to bucket its
+// 60 s peak window; the caller supplies it (never a fresh
+// libtime.NewCurrentDateTime() built here) so the peak window and the
+// router's request timing share one clock.
+func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTimeGetter) *Metrics {
 	m := &Metrics{
 		RequestsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -151,6 +161,7 @@ func NewMetrics(aliases map[string]string) *Metrics {
 			},
 			[]string{"provider"},
 		),
+		InFlight: NewInFlight(currentDateTime),
 	}
 	for alias, resolved := range aliases {
 		m.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
@@ -163,7 +174,7 @@ func NewMetrics(aliases map[string]string) *Metrics {
 // production. Returns the first registration error (if any) so caller
 // can decide whether to abort startup.
 func (m *Metrics) Register(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds} {
+	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds, m.InFlight} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}

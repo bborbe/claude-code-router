@@ -59,7 +59,7 @@ var _ = Describe("ColdStartGate observability", func() {
 	// fresh registry, so the rows exercise NewMetrics and Register too.
 	newRegisteredMetrics := func() (*handler.Metrics, *prometheus.Registry) {
 		reg := prometheus.NewRegistry()
-		m := handler.NewMetrics(nil)
+		m := handler.NewMetrics(nil, testDateTime)
 		Expect(m.Register(reg)).To(Succeed())
 		return m, reg
 	}
