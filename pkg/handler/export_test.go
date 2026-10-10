@@ -83,3 +83,7 @@ func ThrottleGateObserve(h http.Handler, status int, at libtime.DateTime) {
 // the overflow row can saturate the queue deterministically (spec 018
 // DB 3).
 var ThrottleMaxPacedRequests = throttleMaxPacedRequests
+
+// ColdGateQueueCapacity exposes the bounded queue capacity so the
+// queue-full row can saturate it deterministically (spec 019).
+var ColdGateQueueCapacity = coldGateQueueCapacity

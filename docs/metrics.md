@@ -23,6 +23,10 @@ scrape_configs:
 | `ccrouter_tokens_total` | `provider`, `model`, `direction` | counter | `42` (input) / `17` (output) |
 | `ccrouter_cache_tokens_total` | `provider`, `model`, `direction` | counter | `5000` (read) / `200` (creation) |
 | `ccrouter_throttled_total` | `provider` | counter | `1` (per paced request) |
+| `ccrouter_cold_admission_delayed_total` | `provider` | counter | `1` (per delayed cold request) |
+| `ccrouter_cold_admission_refused_total` | `provider` | counter | `1` (per refused cold request) |
+| `ccrouter_cold_tokens_in_flight` | `provider` | gauge | `4096` (in-flight cold tokens) |
+| `ccrouter_cold_ttft_seconds` | `provider` | histogram | `0.842` (p95 bucket) |
 | `ccrouter_upstream_inflight` | `host` | gauge | `8` (at an 8-slot host cap) |
 | `ccrouter_inflight_requests` | `provider` | gauge | `3` (currently executing) |
 | `ccrouter_inflight_requests_peak` | `provider` | gauge | `5` (max over the last 60 s) |
@@ -36,6 +40,8 @@ scrape_configs:
 `model` on all `ccrouter_*` series resolves through a sentinel chain (post-alias resolved model → pre-alias original model → `_unknown_`), so no `model=""` empty label ever reaches Prometheus. The `_unknown_` sentinel also appears as the `provider` label value on the three router-side early-return paths (body-too-large, body-read-failed, alias-rewrite-failed) where routing never resolved a provider.
 
 `ccrouter_throttled_total` counts requests the 429 delay gate actually delayed before forwarding (`throttle429Threshold` enabled — see `docs/config.md ## 429 delay gate`); overflow 429s and non-paced requests do not increment it. `provider` is bounded by the YAML config like the other provider-labeled series. The counter is additive — the `status_class` 7-value enum is unchanged, and upstream 429s still record through `4xx_rate_limited`.
+
+The four `ccrouter_cold_*` series observe the per-provider cold-start admission gate (see `docs/config.md ## Cold-start admission gate`). `ccrouter_cold_admission_delayed_total` counts cold requests the gate delayed (waited, then admitted) and `ccrouter_cold_admission_refused_total` counts cold requests it refused; a warm request and a cold request admitted immediately increment neither. `ccrouter_cold_tokens_in_flight` rises while cold requests hold their reservation and returns to zero as budget is released on the first content delta (or when the handler returns). `ccrouter_cold_ttft_seconds` observes cold time from dispatch to the first content delta. All four are additive — the `status_class` 7-value enum is unchanged, and a refusal still records through `4xx_rate_limited`.
 
 `ccrouter_upstream_inflight` is the current number of `/v1/*` requests in flight to one upstream host, summed across every provider and pool member whose upstream resolves to it, read live at scrape time. For a host capped in `upstreamHostLimits` (see `docs/config.md ## Upstream host limits`) it is the shared semaphore's occupancy and never exceeds the cap; for an uncapped host it is the live in-flight count. Every host the router serves has a series, uncapped hosts included; a config entry naming a host no provider uses has none. `host` is the operator-configured upstream host key (the lowercased host of the upstream URL, plus `:port` only for a non-default port) — never a request header or client value, so a client cannot influence the label. Cardinality is one series per distinct upstream host in the config, bounded by the YAML config like the other config-bounded labels and typically a handful. The series is additive; all existing series are unchanged.
 

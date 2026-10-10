@@ -188,6 +188,38 @@ const defaultMaxConcurrentWaitSeconds = 30
 // negative (spec DB 4).
 const defaultThrottleMaxDelaySeconds = 30
 
+// coldGateHandler wraps a provider's upstream pool handler in the per-provider
+// cold-start admission gate (spec 019), wired to the four additive collectors.
+// A provider with both cold knobs absent, 0, or negative gets the pool handler
+// unchanged from NewColdStartGate (its no-op path), so an unconfigured router
+// is byte-for-byte unchanged. The max-wait argument is 0 so the handler's own
+// default is the single source of truth (a factory copy would silently shadow
+// a later change), and a non-positive session window likewise resolves to the
+// handler's 600-second default. now is the router's injected clock.
+func coldGateHandler(
+	next http.Handler,
+	name string,
+	prov pkg.Provider,
+	now func() libtime.DateTime,
+	metrics *handler.Metrics,
+) http.Handler {
+	return handler.NewColdStartGate(
+		next,
+		name,
+		prov.ColdPrefillBudgetTokens,
+		time.Duration(prov.ColdSessionWindowSeconds)*time.Second,
+		prov.NewSessionRatePerMinute,
+		0,
+		now,
+		handler.ColdGateMetrics{
+			Delayed:        metrics.ColdAdmissionDelayedTotal,
+			Refused:        metrics.ColdAdmissionRefusedTotal,
+			TokensInFlight: metrics.ColdTokensInFlight,
+			TTFT:           metrics.ColdTTFTSeconds,
+		},
+	)
+}
+
 // CreateRouterFromConfig builds the HTTP handler tree from a parsed
 // config: per-provider upstream pools (each member its own reverse proxy,
 // token-swap transport, and concurrency limiter), a model-name dispatcher
@@ -244,92 +276,32 @@ func CreateRouterFromConfig(
 		default:
 		}
 		prov := cfg.Providers[name]
-		upstreams := prov.UpstreamList()
-		members := make([]handler.UpstreamMember, 0, len(upstreams))
-		caps := make([]int, 0, len(upstreams))
-		inflights := make([]func() int, 0, len(upstreams))
-		for _, up := range upstreams {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-			upstream, err := url.Parse(up.Upstream)
-			if err != nil {
-				return nil, errors.Wrapf(
-					ctx,
-					err,
-					"provider %q: parse upstream %q",
-					name,
-					up.Upstream,
-				)
-			}
-			// Effective outbound token (spec 015): the member's own token wins (for
-			// legacy single-upstream configs normalizeUpstreams/UpstreamList already
-			// copied the provider-level token onto this member), else the top-level
-			// default_token, else empty — an empty effective token keeps the
-			// auth-swap no-op contract (client Authorization passes through).
-			token := up.Token
-			if token == "" {
-				token = cfg.DefaultToken
-			}
-			// Auth-swap OUTER, logging INNER: the V(3) [upstream.headers] line (inside
-			// the logging roundtripper) must reflect the SWAPPED outbound
-			// Authorization — the operator evidence of which effective token went out
-			// (spec 015 AC 2, <redacted len=N> distinguishes the global key from an
-			// override key). With logging outer the line would show the client's
-			// pre-swap header instead. An empty token returns the logging transport
-			// unchanged (passthrough), identical to today's no-op wiring.
-			transport := handler.NewAuthSwapTransport(
-				handler.NewLoggingRoundTripper(
-					handler.DefaultProxyTransport(),
-					liblog.SamplerList{
-						liblog.NewSampleTime(time.Second),
-						liblog.NewSamplerGlogLevel(5),
-					},
-					libtime.NewCurrentDateTime(),
-				),
-				token,
-			)
-			proxy := handler.NewAnthropicProxyHandler(upstream, transport)
-			waitSeconds := up.MaxConcurrentWaitSeconds
-			if waitSeconds <= 0 {
-				waitSeconds = defaultMaxConcurrentWaitSeconds
-			}
-			memberHandler := handler.NewConcurrencyLimiter(
-				proxy,
-				up.MaxConcurrentRequests,
-				time.Duration(waitSeconds)*time.Second,
-			)
-			var inFlight func() int
-			if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
-				inFlight = limiter.InFlight
-			}
-			// Host cap OUTSIDE the per-member limiter (spec 019): a request takes
-			// its host slot first, then its member slot. inFlight above was
-			// captured from the unwrapped member limiter on purpose — least-loaded
-			// selection and model-pool saturation read the MEMBER's occupancy,
-			// not the host's.
-			memberHandler = hostLimiterFor(
-				hostLimiters,
-				cfg.UpstreamHostLimits,
-				pkg.UpstreamHostKey(upstream),
-			).Wrap(memberHandler)
-			caps = append(caps, up.MaxConcurrentRequests)
-			inflights = append(inflights, inFlight)
-			members = append(members, handler.UpstreamMember{
-				Upstream: up.Upstream,
-				Handler:  memberHandler,
-				Weight:   up.Weight,
-				InFlight: inFlight,
-				Window:   up.Window,
-				Days:     up.Days,
-				Now:      o.currentDateTime.Now,
-			})
+		members, caps, inflights, err := buildUpstreamMembers(
+			ctx,
+			name,
+			prov,
+			cfg.DefaultToken,
+			cfg.UpstreamHostLimits,
+			o.currentDateTime,
+			hostLimiters,
+		)
+		if err != nil {
+			return nil, err
 		}
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
+		// The cold-start admission gate wraps the provider's pool handler
+		// (spec 019) BEFORE the throttle gate, so the existing 429 delay
+		// gate stays outermost and cold admission is the last gate before
+		// the pool.
+		providerHandler = coldGateHandler(
+			providerHandler,
+			name,
+			prov,
+			o.currentDateTime.Now,
+			metrics,
+		)
 		// The adaptive 429 delay gate wraps the provider's pool handler
 		// (spec 018): an enabled provider (Throttle429Threshold > 0) paces
 		// requests destined for this pool while it is under sustained 429
@@ -430,6 +402,110 @@ func CreateRouterFromConfig(
 	}
 	mux := buildMux(modelRouter, gatherer, cfg.Trace, authKeys)
 	return mux, nil
+}
+
+// buildUpstreamMembers resolves one provider's upstreams into runtime pool
+// members plus the parallel cap and in-flight slices the model pools read
+// (spec 013): caps[i] is upstream i's MaxConcurrentRequests and inflights[i]
+// its live in-flight counter (nil for an uncapped member). Each member is
+// wrapped by its own concurrency limiter and then, outermost, by the shared
+// per-host limiter for its upstream host (spec 019) — a request takes its host
+// slot before its member slot. hostLimiters is mutated in place: the first
+// member resolving to a host creates that host's limiter, so every member
+// across every provider resolving to the same host draws from one budget.
+func buildUpstreamMembers(
+	ctx context.Context,
+	name string,
+	prov pkg.Provider,
+	defaultToken string,
+	hostLimits map[string]pkg.HostLimit,
+	now libtime.CurrentDateTimeGetter,
+	hostLimiters map[string]*handler.HostLimiter,
+) ([]handler.UpstreamMember, []int, []func() int, error) {
+	upstreams := prov.UpstreamList()
+	members := make([]handler.UpstreamMember, 0, len(upstreams))
+	caps := make([]int, 0, len(upstreams))
+	inflights := make([]func() int, 0, len(upstreams))
+	for _, up := range upstreams {
+		select {
+		case <-ctx.Done():
+			return nil, nil, nil, ctx.Err()
+		default:
+		}
+		upstream, err := url.Parse(up.Upstream)
+		if err != nil {
+			return nil, nil, nil, errors.Wrapf(
+				ctx,
+				err,
+				"provider %q: parse upstream %q",
+				name,
+				up.Upstream,
+			)
+		}
+		// Effective outbound token (spec 015): the member's own token wins (for
+		// legacy single-upstream configs normalizeUpstreams/UpstreamList already
+		// copied the provider-level token onto this member), else the top-level
+		// default_token, else empty — an empty effective token keeps the
+		// auth-swap no-op contract (client Authorization passes through).
+		token := up.Token
+		if token == "" {
+			token = defaultToken
+		}
+		// Auth-swap OUTER, logging INNER: the V(3) [upstream.headers] line (inside
+		// the logging roundtripper) must reflect the SWAPPED outbound
+		// Authorization — the operator evidence of which effective token went out
+		// (spec 015 AC 2, <redacted len=N> distinguishes the global key from an
+		// override key). With logging outer the line would show the client's
+		// pre-swap header instead. An empty token returns the logging transport
+		// unchanged (passthrough), identical to today's no-op wiring.
+		transport := handler.NewAuthSwapTransport(
+			handler.NewLoggingRoundTripper(
+				handler.DefaultProxyTransport(),
+				liblog.SamplerList{
+					liblog.NewSampleTime(time.Second),
+					liblog.NewSamplerGlogLevel(5),
+				},
+				libtime.NewCurrentDateTime(),
+			),
+			token,
+		)
+		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
+		waitSeconds := up.MaxConcurrentWaitSeconds
+		if waitSeconds <= 0 {
+			waitSeconds = defaultMaxConcurrentWaitSeconds
+		}
+		memberHandler := handler.NewConcurrencyLimiter(
+			proxy,
+			up.MaxConcurrentRequests,
+			time.Duration(waitSeconds)*time.Second,
+		)
+		var inFlight func() int
+		if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
+			inFlight = limiter.InFlight
+		}
+		// Host cap OUTSIDE the per-member limiter (spec 019): a request takes
+		// its host slot first, then its member slot. inFlight above was
+		// captured from the unwrapped member limiter on purpose — least-loaded
+		// selection and model-pool saturation read the MEMBER's occupancy,
+		// not the host's.
+		memberHandler = hostLimiterFor(
+			hostLimiters,
+			hostLimits,
+			pkg.UpstreamHostKey(upstream),
+		).Wrap(memberHandler)
+		caps = append(caps, up.MaxConcurrentRequests)
+		inflights = append(inflights, inFlight)
+		members = append(members, handler.UpstreamMember{
+			Upstream: up.Upstream,
+			Handler:  memberHandler,
+			Weight:   up.Weight,
+			InFlight: inFlight,
+			Window:   up.Window,
+			Days:     up.Days,
+			Now:      now.Now,
+		})
+	}
+	return members, caps, inflights, nil
 }
 
 // registerUpstreamInFlight registers the ccrouter_upstream_inflight{host}
