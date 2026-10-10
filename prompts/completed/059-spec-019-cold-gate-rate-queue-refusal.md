@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-cold-start-admission-gate]
+summary: Added the per-minute new-session rate check, bounded queue with fixed 30s max wait, and the 429 refusal with a clamped Retry-After to the cold-start admission gate, with Ginkgo rows for rate, queue-full, timeout, no-5xx, and per-provider independence.
+execution_id: claude-code-router-cold-start-admission-exec-059-spec-019-cold-gate-rate-queue-refusal
+dark-factory-version: v0.196.0
 created: "2026-10-10T14:08:35Z"
 queued: "2026-10-10T15:02:15Z"
+started: "2026-10-10T15:12:36Z"
+completed: "2026-10-10T15:21:11Z"
 branch: dark-factory/cold-start-admission-gate
 ---
 
