@@ -60,6 +60,11 @@ providers:
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
     # throttle429Threshold: 3   # optional; enable adaptive pacing for a rate-limited provider (see docs/config.md ## 429 delay gate). Absent or 0 or negative = disabled.
     # throttleMaxDelaySeconds: 30 # optional; upper bound of the pacing delay while throttled (default 30)
+    # Cold-start admission gate (optional; see docs/config.md ## Cold-start admission gate).
+    # Admit new sessions only while the backend's cold-prefill ceiling allows it.
+    # coldPrefillBudgetTokens: 65536 # optional; ceiling on in-flight cold-prefill tokens for THIS provider. Absent or 0 or negative = budget check off.
+    # coldSessionWindowSeconds: 600 # optional; window deciding whether a session is new (default 600)
+    # newSessionRatePerMinute: 4 # optional; cap on newly-seen session ids admitted per minute. Absent or 0 or negative = rate check off.
     # upstreams:                   # optional; alternative to `upstream:` — a pool of servers (see docs/config.md ## Upstream pools).
     #   - upstream: http://localhost:11434
     #     token: "ollama"

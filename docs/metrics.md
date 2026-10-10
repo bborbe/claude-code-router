@@ -23,6 +23,10 @@ scrape_configs:
 | `ccrouter_tokens_total` | `provider`, `model`, `direction` | counter | `42` (input) / `17` (output) |
 | `ccrouter_cache_tokens_total` | `provider`, `model`, `direction` | counter | `5000` (read) / `200` (creation) |
 | `ccrouter_throttled_total` | `provider` | counter | `1` (per paced request) |
+| `ccrouter_cold_admission_delayed_total` | `provider` | counter | `1` (per delayed cold request) |
+| `ccrouter_cold_admission_refused_total` | `provider` | counter | `1` (per refused cold request) |
+| `ccrouter_cold_tokens_in_flight` | `provider` | gauge | `4096` (in-flight cold tokens) |
+| `ccrouter_cold_ttft_seconds` | `provider` | histogram | `0.842` (p95 bucket) |
 
 `status_class` is one of `2xx`, `3xx`, `4xx_auth` (401/403), `4xx_rate_limited` (429), `4xx_bad_request` (all other 4xx — including the router-side 413 body-too-large and 400 body-read-failed early returns), `5xx_upstream` (5xx from the upstream provider), `5xx_router` (5xx from a router-side rejection — currently the alias-rewrite-failed path), or the raw status code for out-of-range values. The `5xx_upstream`/`5xx_router` split is driven by an `isRouterError` argument at the `ObserveRequest` call site — see `pkg/handler/metrics.go`. Cardinality ceiling: 5 providers × 15 models × 7 status classes = 525 request-counter series (~450 in practice — some (provider, model, status_class) tuples never fire) + 5 × 15 × 2 directions = 150 tokens-counter series + 5 × 15 × len(buckets) = 750 histogram bucket series + alias counter bounded by YAML config = ~1.5k total. Operators sizing Prometheus retention should plan for the ~1.5k combined-series ceiling.
 
@@ -33,6 +37,8 @@ scrape_configs:
 `model` on all `ccrouter_*` series resolves through a sentinel chain (post-alias resolved model → pre-alias original model → `_unknown_`), so no `model=""` empty label ever reaches Prometheus. The `_unknown_` sentinel also appears as the `provider` label value on the three router-side early-return paths (body-too-large, body-read-failed, alias-rewrite-failed) where routing never resolved a provider.
 
 `ccrouter_throttled_total` counts requests the 429 delay gate actually delayed before forwarding (`throttle429Threshold` enabled — see `docs/config.md ## 429 delay gate`); overflow 429s and non-paced requests do not increment it. `provider` is bounded by the YAML config like the other provider-labeled series. The counter is additive — the `status_class` 7-value enum is unchanged, and upstream 429s still record through `4xx_rate_limited`.
+
+The four `ccrouter_cold_*` series observe the per-provider cold-start admission gate (see `docs/config.md ## Cold-start admission gate`). `ccrouter_cold_admission_delayed_total` counts cold requests the gate delayed (waited, then admitted) and `ccrouter_cold_admission_refused_total` counts cold requests it refused; a warm request and a cold request admitted immediately increment neither. `ccrouter_cold_tokens_in_flight` rises while cold requests hold their reservation and returns to zero as budget is released on the first content delta (or when the handler returns). `ccrouter_cold_ttft_seconds` observes cold time from dispatch to the first content delta. All four are additive — the `status_class` 7-value enum is unchanged, and a refusal still records through `4xx_rate_limited`.
 
 ## Grafana queries
 

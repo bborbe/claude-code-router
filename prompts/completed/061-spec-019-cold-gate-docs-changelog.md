@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-cold-start-admission-gate]
+summary: Documented the per-provider cold-start admission gate (three knobs, fixed constants, refusal semantics, four metrics series) in docs/config.md, docs/config.example.yaml, docs/metrics.md, README.md, and CHANGELOG.md without touching Go source
+execution_id: claude-code-router-cold-start-admission-exec-061-spec-019-cold-gate-docs-changelog
+dark-factory-version: v0.196.0
 created: "2026-10-10T14:08:35Z"
 queued: "2026-10-10T15:02:15Z"
+started: "2026-10-10T15:31:04Z"
+completed: "2026-10-10T15:36:21Z"
 branch: dark-factory/cold-start-admission-gate
 ---
 

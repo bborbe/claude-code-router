@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add per-provider cold-start admission gate. Three optional provider knobs — `coldPrefillBudgetTokens` (ceiling on in-flight cold-prefill tokens), `coldSessionWindowSeconds` (window deciding whether a session is new, default 600), and `newSessionRatePerMinute` (cap on newly-seen session ids per minute, fixed burst 2) — hold cold requests in a bounded queue (capacity 32, max wait 30s) and refuse the excess with HTTP 429 and an integer `Retry-After` (1–60) instead of overloading a backend whose cold-prefill throughput is capped. Warm sessions are never held, and the reservation is released on the first content delta. Adds four additive series `ccrouter_cold_admission_delayed_total`, `ccrouter_cold_admission_refused_total`, `ccrouter_cold_tokens_in_flight`, and `ccrouter_cold_ttft_seconds`; the `status_class` enum is unchanged.
+
 ## v0.47.3
 
 - build: restore a green `make precommit`. Three independent, pre-existing breakages had left the repo's CI red and dark-factory's preflight refusing to start, each masked by the one before it. (1) `GOLANGCI_LINT_VERSION` v2.13.1 -> v2.14.0: v2.13.1's bundled type-checker caps at export-data version 4 while the Go 1.27 toolchain emits version 5, so `make lint` failed on every file with `could not load export data: internal error in importing "internal/goarch"`. (2) `golang.org/x/net` v0.59.0 -> v0.60.0, clearing 5 HTTP/2 advisories reported by `make vulncheck`. (3) the `go` directive 1.27.1 -> 1.27.2, clearing 9 Go stdlib advisories reported by `make osv-scanner`, with the Dockerfile's `golang:1.27.1` bumped in lockstep so the build stage does not run a toolchain older than the module directive.
