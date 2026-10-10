@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-cold-start-admission-gate]
+summary: Added the four additive cold-start Prometheus series and [coldgate] INFO lines, and wired the per-provider cold-start gate between the upstream pool handler and the 429 delay gate so admission runs on the request path and hot-reloads with the config.
+execution_id: claude-code-router-cold-start-admission-exec-060-spec-019-cold-gate-metrics-logs-wiring
+dark-factory-version: v0.196.0
 created: "2026-10-10T14:08:35Z"
 queued: "2026-10-10T15:02:15Z"
+started: "2026-10-10T15:21:12Z"
+completed: "2026-10-10T15:31:02Z"
 branch: dark-factory/cold-start-admission-gate
 ---
 

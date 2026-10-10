@@ -12,6 +12,7 @@ import (
 	stdtime "time"
 
 	libtime "github.com/bborbe/time"
+	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -256,10 +257,13 @@ func (g *coldStartGate) admit(
 	g.mu.Unlock()
 	// A request admitted after waiting was delayed by the budget or the rate
 	// (blockedReason is "budget" or "rate"); a request the warm re-check
-	// admitted was not, and carries no charge. The same reason feeds the
-	// delayed log line a later prompt adds.
-	if !warm && blockedReason != "" && g.metrics.Delayed != nil {
-		g.metrics.Delayed.WithLabelValues(g.provider).Inc()
+	// admitted was not, and carries no charge. The reason is a fixed token —
+	// never the session id — so the log line and the counter stay safe.
+	if !warm && blockedReason != "" {
+		if g.metrics.Delayed != nil {
+			g.metrics.Delayed.WithLabelValues(g.provider).Inc()
+		}
+		glog.Infof("[coldgate] provider=%s decision=delayed reason=%s", g.provider, blockedReason)
 	}
 	<-g.queue
 	slotHeld = false
@@ -271,10 +275,12 @@ func (g *coldStartGate) admit(
 // header clamped to [1, 60]. It never writes a 5xx and never leaks internal
 // state: the body is the existing limiter429Body constant and carries no
 // queue depth, provider name, upstream URL, or session-identifying value. The
-// refused counter is incremented once when configured.
-//
-//nolint:unparam // reason is consumed by the refusal log line a later prompt adds
+// refused counter is incremented once when configured. Every refusal emits
+// one INFO line carrying the provider and the fixed reason token
+// ("queue_full" or "timeout") — never the session id, the body, or any other
+// client-controlled value.
 func (g *coldStartGate) refuse(w http.ResponseWriter, r *http.Request, reason string) {
+	glog.Infof("[coldgate] provider=%s decision=refused reason=%s", g.provider, reason)
 	// A client that already disconnected is not answered: writing would fail
 	// harmlessly on the dead connection and counting it as refused would
 	// overstate the refusal rate. The wait select races the deadline against
@@ -340,6 +346,9 @@ func (g *coldStartGate) tryAdmitLocked(
 		return false, false, "rate"
 	}
 	g.inFlightTokens += estimate
+	if g.metrics.TokensInFlight != nil {
+		g.metrics.TokensInFlight.WithLabelValues(g.provider).Add(float64(estimate))
+	}
 	if g.rate > 0 {
 		g.rateTokens--
 	}

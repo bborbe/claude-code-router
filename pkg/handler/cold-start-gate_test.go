@@ -488,7 +488,6 @@ var _ = Describe("ColdStartGate", func() {
 			clock.Now,
 			metrics,
 		)
-		gauge.WithLabelValues("p").Add(float64(200))
 		heldDone := serveAsync(
 			heldGate,
 			httptest.NewRecorder(),
