@@ -4,11 +4,9 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.47.3
 
-- fix: bump golangci-lint to v2.14.0 so `make lint` can decode Go 1.27 export data — v2.13.1 failed with `cannot decode "internal/goarch", export data version 5 is greater than maximum supported version 4`, which made `make precommit` and CI red on master
-- fix: bump the `go` directive to 1.27.2 — `osv-scanner` reported the Go 1.27.1 stdlib against nine advisories fixed in 1.27.2 (GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613, GO-2026-6617 — the same HTTP/2 set the x/net bump below clears), which made `make precommit` and CI red
-- fix: bump golang.org/x/net v0.59.0 → v0.60.0 to clear five advisories reported against v0.59.0 and fixed in v0.60.0 — GO-2026-6603 (HTTP/2 server memory exhaustion via Trailer headers), GO-2026-6610 (HTTP/2 transport accepts malformed framing headers), GO-2026-6611 (excessive CPU from repeated initial window changes), GO-2026-6612 (double flow-control refund on HTTP/2 server streams) and GO-2026-6617 (HTTP/2 server crash from an HPACK encoder race); `make vulncheck` was red on all five, which blocked `make precommit` and the dark-factory daemon preflight. No API change.
+- build: restore a green `make precommit`. Three independent, pre-existing breakages had left the repo's CI red and dark-factory's preflight refusing to start, each masked by the one before it. (1) `GOLANGCI_LINT_VERSION` v2.13.1 -> v2.14.0: v2.13.1's bundled type-checker caps at export-data version 4 while the Go 1.27 toolchain emits version 5, so `make lint` failed on every file with `could not load export data: internal error in importing "internal/goarch"`. (2) `golang.org/x/net` v0.59.0 -> v0.60.0, clearing 5 HTTP/2 advisories reported by `make vulncheck`. (3) the `go` directive 1.27.1 -> 1.27.2, clearing 9 Go stdlib advisories reported by `make osv-scanner`, with the Dockerfile's `golang:1.27.1` bumped in lockstep so the build stage does not run a toolchain older than the module directive.
 
 ## v0.47.2
 
