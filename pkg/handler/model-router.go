@@ -419,6 +419,13 @@ func newModelRouter(
 		// -> a uniform `/0` suffix, never conditionally omitted.
 		slot := &upstreamIndexSlot{}
 		r = r.WithContext(ContextWithUpstreamIndex(r.Context(), slot))
+		// In-flight gauge: Start immediately before dispatch and defer the
+		// end function so the count comes back down on every exit from the
+		// target — success, upstream error, client cancel, or a panic in the
+		// handler. The early-return paths above never reach here, so they
+		// never touch the gauge.
+		end := metrics.InFlight.Start(providerName)
+		defer end()
 		target.ServeHTTP(ur, r)
 		memberIndex := slot.index
 

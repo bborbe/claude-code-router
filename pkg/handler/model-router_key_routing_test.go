@@ -163,7 +163,7 @@ var _ = Describe("ModelRouter key routing", func() {
 	It(
 		"key match still emits the ccrouter_requests_total observation with the key-selected provider label",
 		func() {
-			m := handler.NewMetrics(nil)
+			m := handler.NewMetrics(nil, testDateTime)
 			mux = handler.NewModelRouter(
 				routes,
 				"default-fallback",
