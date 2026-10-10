@@ -1,8 +1,10 @@
 ---
-status: prompted
+status: completed
 approved: "2026-10-10T13:12:54Z"
 generating: "2026-10-10T13:54:56Z"
 prompted: "2026-10-10T14:38:29Z"
+verifying: "2026-10-10T15:42:47Z"
+completed: "2026-10-10T15:42:55Z"
 branch: dark-factory/cold-start-admission-gate
 ---
 
