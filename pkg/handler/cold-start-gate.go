@@ -7,7 +7,6 @@ package handler
 import (
 	"bytes"
 	"net/http"
-	"strconv"
 	"sync"
 	stdtime "time"
 
@@ -44,6 +43,15 @@ const (
 	// the integer Retry-After header value into [1, 60] (spec 019 DB 4).
 	coldGateRetryAfterMinSeconds = 1
 	coldGateRetryAfterMaxSeconds = 60
+	// coldGatePruneDivisor / coldGatePruneMinInterval bound how often the
+	// seen-map prune walks the map: at most once per window/coldGatePruneDivisor,
+	// and never more often than coldGatePruneMinInterval. Pruning only removes
+	// entries that have already aged out of the window, so deferring it never
+	// changes an admission decision — the window check treats a stale entry as
+	// cold either way. It only keeps the O(live sessions) walk off the
+	// per-request path.
+	coldGatePruneDivisor     = 8
+	coldGatePruneMinInterval = stdtime.Second
 )
 
 // ColdGateMetrics groups the four additive collectors the cold-start
@@ -82,9 +90,9 @@ type ColdGateMetrics struct {
 // coldGateDefaultSessionWindow; maxWait <= 0 resolves to coldGateMaxWait. now
 // is the router's injected clock and falls back to the real clock when nil.
 //
-// The gate is per provider: a later prompt constructs one instance per
-// upstream, immediately after the upstream pool handler and before the
-// throttle gate, so the existing 429 delay gate stays outermost.
+// The gate is per provider: one instance is constructed per provider,
+// immediately after the upstream pool handler and before the throttle gate,
+// so the existing 429 delay gate stays outermost.
 func NewColdStartGate(
 	next http.Handler,
 	provider string,
@@ -146,6 +154,7 @@ type coldStartGate struct {
 
 	mu             sync.Mutex
 	seen           map[string]stdtime.Time
+	lastPrune      stdtime.Time
 	inFlightTokens int
 	rateTokens     int
 	rateLastRefill stdtime.Time
@@ -153,10 +162,12 @@ type coldStartGate struct {
 }
 
 // InFlight returns the number of cold-prefill tokens currently reserved —
-// the gate's in-flight cold token count. Only valid on a real gate
-// (budgetTokens > 0); the disabled path returns next unchanged and has no
-// gate (mirrors the concurrency limiter's InFlight accessor). Tests read
-// this, not the Prometheus gauge.
+// the gate's in-flight cold token count. Only valid on a real gate: one with
+// the budget or the new-session rate enabled. Either check alone enables the
+// gate, so a gate with only the rate on is real and has no budget to spend,
+// leaving the count at 0. The disabled path (both knobs <= 0) returns next
+// unchanged and has no gate (mirrors the concurrency limiter's InFlight
+// accessor). Tests read this, not the Prometheus gauge.
 func (g *coldStartGate) InFlight() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -234,11 +245,22 @@ func (g *coldStartGate) admit(
 	}()
 	deadline := stdtime.NewTimer(g.maxWait)
 	defer deadline.Stop()
+	// A waiter blocked by the rate is woken by nobody on its own — see
+	// armRefillLocked — so it carries its own timer, re-armed on every wake.
+	var refill *stdtime.Timer
+	defer func() {
+		if refill != nil {
+			refill.Stop()
+		}
+	}()
 	for {
 		notify := g.notify
+		var refillC <-chan stdtime.Time
+		refill, refillC = g.armRefillLocked(refill, blockedReason, at)
 		g.mu.Unlock()
 		select {
 		case <-notify:
+		case <-refillC:
 		case <-deadline.C:
 			return false, false, "timeout"
 		case <-r.Context().Done():
@@ -280,21 +302,21 @@ func (g *coldStartGate) admit(
 // ("queue_full" or "timeout") — never the session id, the body, or any other
 // client-controlled value.
 func (g *coldStartGate) refuse(w http.ResponseWriter, r *http.Request, reason string) {
-	glog.Infof("[coldgate] provider=%s decision=refused reason=%s", g.provider, reason)
 	// A client that already disconnected is not answered: writing would fail
 	// harmlessly on the dead connection and counting it as refused would
 	// overstate the refusal rate. The wait select races the deadline against
-	// the request context, so a disconnect can land here.
+	// the request context, so a disconnect can land here. The log line sits
+	// below this check rather than above it, so `decision=refused` in the log
+	// counts exactly the requests the Refused counter counts — an abandoned
+	// request is neither, and is not written as a refusal.
 	if r.Context().Err() != nil {
 		return
 	}
+	glog.Infof("[coldgate] provider=%s decision=refused reason=%s", g.provider, reason)
 	if g.metrics.Refused != nil {
 		g.metrics.Refused.WithLabelValues(g.provider).Inc()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Retry-After", strconv.Itoa(g.retryAfterSeconds()))
-	w.WriteHeader(http.StatusTooManyRequests)
-	_, _ = w.Write([]byte(limiter429Body))
+	writeRateLimited(w, g.retryAfterSeconds())
 }
 
 // retryAfterSeconds is the integer Retry-After header value: the max wait in
@@ -355,7 +377,13 @@ func (g *coldStartGate) tryAdmitLocked(
 	if sessionID != "" {
 		g.seen[sessionID] = at
 	}
-	g.broadcastLocked()
+	// No broadcast here. An admission only *consumes* budget and rate — it
+	// frees nothing a waiter could be blocked on — so waking the queue would
+	// make every waiting cold request re-lock the mutex and re-run the prune
+	// walk for no possible change in its verdict. Broadcasts are
+	// emitted only where state is actually freed: the reservation release in
+	// forwardCold, plus the per-waiter rate-refill timer in admit, which is
+	// what covers a rate block.
 	return true, false, ""
 }
 
@@ -386,9 +414,78 @@ func (g *coldStartGate) refillLocked(at stdtime.Time) {
 	)
 }
 
+// rateWaitLocked returns how long until the rate bucket can yield one more
+// token, mirroring refillLocked's arithmetic exactly so the caller wakes at
+// the instant the refill would credit it. Must be called with g.mu held. It
+// returns 0 when the rate is disabled or the bucket already holds a token —
+// in both cases the rate is not what blocks the caller, so no timer is armed.
+func (g *coldStartGate) rateWaitLocked(at stdtime.Time) stdtime.Duration {
+	if g.rate <= 0 || g.rateTokens >= 1 {
+		return 0
+	}
+	perToken := stdtime.Minute / stdtime.Duration(g.rate)
+	earned := int(at.Sub(g.rateLastRefill)) * g.rate / int(stdtime.Minute)
+	next := g.rateLastRefill.Add(stdtime.Duration(earned+1) * perToken)
+	wait := next.Sub(at)
+	if wait <= 0 {
+		// Truncation in perToken can put the computed instant at or before
+		// now; wait a whole token rather than spinning on a zero-duration
+		// timer.
+		return perToken
+	}
+	return wait
+}
+
+// armRefillLocked arms the per-waiter rate-refill timer and returns the timer
+// together with the channel to select on. The channel is nil when the rate is
+// not what blocks the waiter, so the caller selects only on the broadcast and
+// the max-wait deadline. Must be called with g.mu held. refill may be nil on
+// the first call; the caller owns the timer and stops it.
+//
+// A waiter blocked by the rate is woken by nobody on its own: the bucket
+// refills lazily from request goroutines, and broadcastLocked fires only where
+// state is freed — a reservation release, which a rate block is not waiting on.
+// Without this timer such a waiter sleeps to the max-wait deadline and is
+// refused with a 429 even though a token became free well inside it (at 4/min
+// a token lands every 15s of a 30s wait).
+func (g *coldStartGate) armRefillLocked(
+	refill *stdtime.Timer,
+	blockedReason string,
+	at stdtime.Time,
+) (*stdtime.Timer, <-chan stdtime.Time) {
+	if blockedReason != "rate" {
+		return refill, nil
+	}
+	wait := g.rateWaitLocked(at)
+	if wait <= 0 {
+		return refill, nil
+	}
+	if refill == nil {
+		refill = stdtime.NewTimer(wait)
+	} else {
+		refill.Reset(wait)
+	}
+	return refill, refill.C
+}
+
 // pruneLocked drops every seen entry that has aged out of the session window
 // so the map cannot grow without bound. Must be called with g.mu held.
+//
+// The walk is O(live sessions) and runs under the same mutex that guards the
+// in-flight token count and the rate bucket, so it is amortized rather than
+// paid on every request: a call within coldGatePruneMinInterval of the last
+// real prune returns immediately. Deferring is safe because the window check
+// in tryAdmitLocked treats an expired entry as cold either way — pruning only
+// reclaims memory.
 func (g *coldStartGate) pruneLocked(at stdtime.Time) {
+	interval := g.window / coldGatePruneDivisor
+	if interval < coldGatePruneMinInterval {
+		interval = coldGatePruneMinInterval
+	}
+	if !g.lastPrune.IsZero() && at.Sub(g.lastPrune) < interval {
+		return
+	}
+	g.lastPrune = at
 	for id, last := range g.seen {
 		if at.Sub(last) >= g.window {
 			delete(g.seen, id)
@@ -396,7 +493,9 @@ func (g *coldStartGate) pruneLocked(at stdtime.Time) {
 	}
 }
 
-// broadcastLocked wakes every waiter so it re-reads the gate state. Must be
+// broadcastLocked wakes every waiter so it re-reads the gate state. Call it
+// only where state is freed — a reservation release — never on an admission,
+// which frees nothing and would wake the whole queue to no purpose. Must be
 // called with g.mu held.
 func (g *coldStartGate) broadcastLocked() {
 	close(g.notify)
@@ -424,12 +523,16 @@ func (g *coldStartGate) forwardCold(w http.ResponseWriter, r *http.Request, esti
 	dispatchAt := g.now().Time()
 	release := sync.OnceFunc(func() {
 		g.mu.Lock()
-		g.inFlightTokens -= estimate
-		if g.inFlightTokens < 0 {
-			g.inFlightTokens = 0
+		// Clamp the freed amount to what is actually reserved, and subtract
+		// exactly that from the gauge too, so the gauge and inFlightTokens
+		// never disagree and the gauge can never go negative.
+		freed := estimate
+		if g.inFlightTokens < freed {
+			freed = g.inFlightTokens
 		}
-		if g.metrics.TokensInFlight != nil {
-			g.metrics.TokensInFlight.WithLabelValues(g.provider).Sub(float64(estimate))
+		g.inFlightTokens -= freed
+		if g.metrics.TokensInFlight != nil && freed > 0 {
+			g.metrics.TokensInFlight.WithLabelValues(g.provider).Sub(float64(freed))
 		}
 		g.broadcastLocked()
 		g.mu.Unlock()
