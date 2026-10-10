@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-per-host-concurrency-cap]
+summary: 'Documented the upstreamHostLimits per-host concurrency cap and ccrouter_upstream_inflight gauge in docs/config.md, docs/config.example.yaml, docs/metrics.md, and added the CHANGELOG ## Unreleased feat bullet'
+execution_id: claude-code-router-hostcap-exec-059-spec-019-docs-changelog
+dark-factory-version: v0.196.0
 created: "2026-10-10T15:30:08Z"
 queued: "2026-10-10T16:10:53Z"
+started: "2026-10-10T16:23:04Z"
+completed: "2026-10-10T16:26:33Z"
 ---
 
 # Docs + changelog: upstreamHostLimits and ccrouter_upstream_inflight
