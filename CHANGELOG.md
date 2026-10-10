@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- build: restore a green `make precommit`. Three independent, pre-existing breakages had left the repo's CI red and dark-factory's preflight refusing to start, each masked by the one before it. (1) `GOLANGCI_LINT_VERSION` v2.13.1 -> v2.14.0: v2.13.1's bundled type-checker caps at export-data version 4 while the Go 1.27 toolchain emits version 5, so `make lint` failed on every file with `could not load export data: internal error in importing "internal/goarch"`. (2) `golang.org/x/net` v0.59.0 -> v0.60.0, clearing 5 HTTP/2 advisories reported by `make vulncheck`. (3) the `go` directive 1.27.1 -> 1.27.2, clearing 9 Go stdlib advisories reported by `make osv-scanner`, with the Dockerfile's `golang:1.27.1` bumped in lockstep so the build stage does not run a toolchain older than the module directive.
+
 ## v0.47.2
 
 - chore: update github.com/bborbe/argument/v2 to v2.13.3, github.com/bborbe/log to v1.7.1, github.com/bborbe/run to v1.11.0, github.com/bborbe/service to v1.10.14, github.com/onsi/ginkgo/v2 to v2.33.0, github.com/onsi/gomega to v1.44.0, github.com/prometheus/client_golang to v1.25.0
