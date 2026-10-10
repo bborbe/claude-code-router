@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.48.0
 
 - feat: export `ccrouter_inflight_requests{provider}` (current parallel requests per provider) and `ccrouter_inflight_requests_peak{provider}` (max over a sliding 60 s window, never reset on read) via a new `handler.InFlight` collector, wired into `Metrics` and incremented around every upstream dispatch in `NewModelRouter` — the count comes back down on success, upstream error, client cancel, and a panic in the handler, and router-side early returns never touch it.
 
