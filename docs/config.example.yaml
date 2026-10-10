@@ -16,6 +16,11 @@ trace: false
 
 # default_token: "<SHARED_OUTBOUND_KEY>"   # optional; one shared outbound key inherited by every provider / pool member with no token: of its own (see docs/config.md ## Auth). A provider's own token: overrides it. MUST stay commented — copying this example must not change behavior.
 
+# upstreamHostLimits:          # optional; cap concurrent /v1/* requests per upstream HOST, shared by every provider / pool member resolving to it (see docs/config.md ## Upstream host limits). Unnamed hosts are unlimited. MUST stay commented — copying this example must not change behavior.
+#   vllm.seibert.tools:        # key is the upstream URL's lowercased host, plus ":port" only for a non-default port
+#     maxConcurrentRequests: 8     # optional; Absent or 0 or negative = unlimited.
+#     maxConcurrentWaitSeconds: 30 # optional; how long a request waits for a host slot before HTTP 429 (default 30)
+
 providers:
 
   anthropic-subscription:
@@ -54,8 +59,10 @@ providers:
     requiresLeadingSystem:
       - "qwen3.8*"
     # Concurrency cap for this provider (optional; see docs/config.md ## Concurrency limit).
-    # Example use: stay under a shared vllm.seibert.tools per-user ceiling of 8 by setting
-    # maxConcurrentRequests: 8 on each seibert vllm provider that points at it.
+    # Example use: for a server shared by several providers, bound the server itself with a
+    # top-level upstreamHostLimits entry (see docs/config.md ## Upstream host limits) rather
+    # than capping each provider separately; a provider with a server to itself can just set
+    # maxConcurrentRequests here.
     # maxConcurrentRequests: 8     # optional; cap concurrent /v1/* requests to this provider. Absent or 0 or negative = unlimited.
     # maxConcurrentWaitSeconds: 30 # optional; how long a queued request waits for a slot before HTTP 429 (default 30)
     # throttle429Threshold: 3   # optional; enable adaptive pacing for a rate-limited provider (see docs/config.md ## 429 delay gate). Absent or 0 or negative = disabled.

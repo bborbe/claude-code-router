@@ -223,6 +223,11 @@ func CreateRouterFromConfig(
 	// provider's upstream list.
 	upCaps := make(map[string][]int, len(cfg.Providers))
 	upInFlight := make(map[string][]func() int, len(cfg.Providers))
+	// One shared HostLimiter per distinct upstream host (spec 019), keyed
+	// by pkg.UpstreamHostKey. Every member resolving to the same host —
+	// across providers and across pool members — is wrapped by the same
+	// instance, so they draw from one budget.
+	hostLimiters := make(map[string]*handler.HostLimiter)
 	var routes []handler.ModelRoute
 
 	// Metrics must exist before the per-provider loop so the throttle gate
@@ -300,6 +305,16 @@ func CreateRouterFromConfig(
 			if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
 				inFlight = limiter.InFlight
 			}
+			// Host cap OUTSIDE the per-member limiter (spec 019): a request takes
+			// its host slot first, then its member slot. inFlight above was
+			// captured from the unwrapped member limiter on purpose — least-loaded
+			// selection and model-pool saturation read the MEMBER's occupancy,
+			// not the host's.
+			memberHandler = hostLimiterFor(
+				hostLimiters,
+				cfg.UpstreamHostLimits,
+				pkg.UpstreamHostKey(upstream),
+			).Wrap(memberHandler)
 			caps = append(caps, up.MaxConcurrentRequests)
 			inflights = append(inflights, inFlight)
 			members = append(members, handler.UpstreamMember{
@@ -381,6 +396,9 @@ func CreateRouterFromConfig(
 	if err := metrics.Register(o.metricsRegisterer); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
+	if err := registerUpstreamInFlight(ctx, o.metricsRegisterer, hostLimiters); err != nil {
+		return nil, err
+	}
 	modelRouter := handler.NewModelRouterWithPools(
 		routes,
 		cfg.Router.DefaultProvider,
@@ -412,6 +430,49 @@ func CreateRouterFromConfig(
 	}
 	mux := buildMux(modelRouter, gatherer, cfg.Trace, authKeys)
 	return mux, nil
+}
+
+// registerUpstreamInFlight registers the ccrouter_upstream_inflight{host}
+// collector (spec 019) on reg: one series per distinct upstream host this
+// handler tree serves, read live from the shared host limiters. It is
+// registered on the same registerer as the tree's other ccrouter_* series,
+// so a SIGHUP reload (fresh registry) exposes the rebuilt tree's hosts.
+// hostLimiters is complete and never mutated when this runs.
+func registerUpstreamInFlight(
+	ctx context.Context,
+	reg prometheus.Registerer,
+	hostLimiters map[string]*handler.HostLimiter,
+) error {
+	if err := reg.Register(handler.NewUpstreamInFlightCollector(hostLimiters)); err != nil {
+		return errors.Wrapf(ctx, err, "register upstream inflight collector")
+	}
+	return nil
+}
+
+// hostLimiterFor returns the shared HostLimiter for hostKey, building it
+// on first use from limits[hostKey] (absent key = unlimited). A host's
+// maxConcurrentWaitSeconds <= 0 resolves to the 30s default
+// (defaultMaxConcurrentWaitSeconds), and maxConcurrentRequests <= 0
+// yields an unlimited limiter (spec 019 lenient validation).
+func hostLimiterFor(
+	hostLimiters map[string]*handler.HostLimiter,
+	limits map[string]pkg.HostLimit,
+	hostKey string,
+) *handler.HostLimiter {
+	if limiter, ok := hostLimiters[hostKey]; ok {
+		return limiter
+	}
+	limit := limits[hostKey]
+	waitSeconds := limit.MaxConcurrentWaitSeconds
+	if waitSeconds <= 0 {
+		waitSeconds = defaultMaxConcurrentWaitSeconds
+	}
+	limiter := handler.NewHostLimiter(
+		limit.MaxConcurrentRequests,
+		time.Duration(waitSeconds)*time.Second,
+	)
+	hostLimiters[hostKey] = limiter
+	return limiter
 }
 
 // buildModelPools builds the runtime model-pool table from config: for each
