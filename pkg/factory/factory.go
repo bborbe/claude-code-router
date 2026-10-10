@@ -396,6 +396,9 @@ func CreateRouterFromConfig(
 	if err := metrics.Register(o.metricsRegisterer); err != nil {
 		return nil, errors.Wrapf(ctx, err, "register metrics")
 	}
+	if err := registerUpstreamInFlight(ctx, o.metricsRegisterer, hostLimiters); err != nil {
+		return nil, err
+	}
 	modelRouter := handler.NewModelRouterWithPools(
 		routes,
 		cfg.Router.DefaultProvider,
@@ -427,6 +430,23 @@ func CreateRouterFromConfig(
 	}
 	mux := buildMux(modelRouter, gatherer, cfg.Trace, authKeys)
 	return mux, nil
+}
+
+// registerUpstreamInFlight registers the ccrouter_upstream_inflight{host}
+// collector (spec 019) on reg: one series per distinct upstream host this
+// handler tree serves, read live from the shared host limiters. It is
+// registered on the same registerer as the tree's other ccrouter_* series,
+// so a SIGHUP reload (fresh registry) exposes the rebuilt tree's hosts.
+// hostLimiters is complete and never mutated when this runs.
+func registerUpstreamInFlight(
+	ctx context.Context,
+	reg prometheus.Registerer,
+	hostLimiters map[string]*handler.HostLimiter,
+) error {
+	if err := reg.Register(handler.NewUpstreamInFlightCollector(hostLimiters)); err != nil {
+		return errors.Wrapf(ctx, err, "register upstream inflight collector")
+	}
+	return nil
 }
 
 // hostLimiterFor returns the shared HostLimiter for hostKey, building it

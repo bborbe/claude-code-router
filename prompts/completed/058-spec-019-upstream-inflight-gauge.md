@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-per-host-concurrency-cap]
+summary: Added the ccrouter_upstream_inflight{host} Prometheus gauge, read live from the shared per-host HostLimiters, with a new collector, factory registration, and handler plus end-to-end scrape tests.
+execution_id: claude-code-router-hostcap-exec-058-spec-019-upstream-inflight-gauge
+dark-factory-version: v0.196.0
 created: "2026-10-10T15:30:08Z"
 queued: "2026-10-10T16:10:53Z"
+started: "2026-10-10T16:17:38Z"
+completed: "2026-10-10T16:23:02Z"
 ---
 
 # Per-host in-flight gauge: ccrouter_upstream_inflight{host}
