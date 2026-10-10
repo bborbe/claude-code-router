@@ -31,6 +31,18 @@ const UnknownModelLabel = "_unknown_"
 // can meaningfully resolve.
 var LatencyBucketsSeconds = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
+const (
+	// upstreamInFlightMetricName is the per-upstream-host in-flight gauge
+	// (spec 019), exported by the collector in
+	// upstream-inflight-collector.go. It is a distinct series from the
+	// per-provider in-flight gauges and is registered separately from
+	// Metrics.Register so the two never collide.
+	upstreamInFlightMetricName = "ccrouter_upstream_inflight"
+	// upstreamInFlightMetricHelp is the HELP text of
+	// ccrouter_upstream_inflight.
+	upstreamInFlightMetricHelp = "Current number of /v1/* requests in flight to an upstream host, summed across every provider and pool member resolving to that host (spec 019). For a host capped in upstreamHostLimits this is the shared semaphore's occupancy and never exceeds the cap; for an uncapped host it is the live in-flight count."
+)
+
 // Metrics groups the Prometheus collectors emitted from the model
 // router: one CounterVec for request totals labeled by provider +
 // model + status_class (`2xx`/`3xx`/`4xx_auth`/`4xx_rate_limited`/

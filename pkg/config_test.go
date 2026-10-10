@@ -1014,6 +1014,82 @@ providers:
 		})
 	})
 
+	Context("upstreamHostLimits", func() {
+		// These are yaml-boundary tests: a wrong yaml tag would silently
+		// leave the map nil, so every fixture goes through Load, not struct
+		// literals (spec 019 AC 1/2). The extra YAML is appended at TOP
+		// level (zero indent) — upstreamHostLimits is a Config-level key.
+		loadProvider := func(extra string) (*pkgcfg.Config, error) {
+			p := write(`
+router:
+  default_provider: anthropic
+providers:
+  anthropic:
+    upstream: https://vllm.seibert.tools
+    models: ["claude-*"]
+` + extra)
+			return pkgcfg.Load(context.Background(), p)
+		}
+
+		It("loads one host cap with no error", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  vllm.seibert.tools:
+    maxConcurrentRequests: 8
+    maxConcurrentWaitSeconds: 30
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits["vllm.seibert.tools"]).To(Equal(pkgcfg.HostLimit{
+				MaxConcurrentRequests:    8,
+				MaxConcurrentWaitSeconds: 30,
+			}))
+		})
+
+		It("leaves the map empty when the key is absent — identical to today", func() {
+			cfg, err := loadProvider(``)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits).To(BeEmpty())
+		})
+
+		It("loads negative values with no error and preserves them", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  vllm.seibert.tools:
+    maxConcurrentRequests: -1
+    maxConcurrentWaitSeconds: -1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			// The factory resolves <= 0 to unlimited / the 30s default at
+			// wiring; the behavioral fallback is asserted in the handler and
+			// wiring tests.
+			Expect(cfg.UpstreamHostLimits["vllm.seibert.tools"]).To(Equal(pkgcfg.HostLimit{
+				MaxConcurrentRequests:    -1,
+				MaxConcurrentWaitSeconds: -1,
+			}))
+		})
+
+		It("loads explicit zeroes with no error", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  vllm.seibert.tools:
+    maxConcurrentRequests: 0
+    maxConcurrentWaitSeconds: 0
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits["vllm.seibert.tools"]).To(Equal(pkgcfg.HostLimit{}))
+		})
+
+		It("loads a key naming a host no provider uses — inert", func() {
+			cfg, err := loadProvider(`
+upstreamHostLimits:
+  unused.example:
+    maxConcurrentRequests: 1
+`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.UpstreamHostLimits).To(HaveKey("unused.example"))
+		})
+	})
+
 	Context("throttle429Threshold", func() {
 		// These are yaml-boundary tests: a wrong yaml tag would silently
 		// leave the fields zero, so every fixture goes through Load, not
@@ -1086,93 +1162,6 @@ providers:
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(0))
 			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
-		})
-	})
-
-	Context("coldPrefillBudgetTokens", func() {
-		// These are yaml-boundary tests: a wrong yaml tag would silently
-		// leave the fields zero, so every fixture goes through Load, not
-		// struct literals (spec 019 AC 1/2).
-		loadProvider := func(extra string) (*pkgcfg.Config, error) {
-			p := write(`
-router:
-  default_provider: anthropic
-providers:
-  anthropic:
-    upstream: https://api.anthropic.com
-    models: ["claude-*"]
-` + extra)
-			return pkgcfg.Load(context.Background(), p)
-		}
-
-		It("loads all three fields when a provider sets them", func() {
-			cfg, err := loadProvider(`
-    coldPrefillBudgetTokens: 65536
-    coldSessionWindowSeconds: 600
-    newSessionRatePerMinute: 4
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].ColdPrefillBudgetTokens).To(Equal(65536))
-			Expect(cfg.Providers["anthropic"].ColdSessionWindowSeconds).To(Equal(600))
-			Expect(cfg.Providers["anthropic"].NewSessionRatePerMinute).To(Equal(4))
-		})
-
-		It("leaves all three fields 0 when a provider sets none — identical to today", func() {
-			cfg, err := loadProvider(``)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].ColdPrefillBudgetTokens).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].ColdSessionWindowSeconds).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].NewSessionRatePerMinute).To(Equal(0))
-		})
-
-		It("loads only coldPrefillBudgetTokens, leaving the others 0", func() {
-			cfg, err := loadProvider(`
-    coldPrefillBudgetTokens: 65536
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].ColdPrefillBudgetTokens).To(Equal(65536))
-			// Their defaults resolve at wiring, not at load.
-			Expect(cfg.Providers["anthropic"].ColdSessionWindowSeconds).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].NewSessionRatePerMinute).To(Equal(0))
-		})
-
-		It("loads a negative coldPrefillBudgetTokens with no error", func() {
-			cfg, err := loadProvider(`
-    coldPrefillBudgetTokens: -1
-`)
-			Expect(err).NotTo(HaveOccurred())
-			// The gate resolves <= 0 to "budget check off" at wiring.
-			Expect(cfg.Providers["anthropic"].ColdPrefillBudgetTokens).To(Equal(-1))
-		})
-
-		It("loads a negative coldSessionWindowSeconds with no error", func() {
-			cfg, err := loadProvider(`
-    coldSessionWindowSeconds: -1
-`)
-			Expect(err).NotTo(HaveOccurred())
-			// The gate resolves <= 0 to the 600-second default at wiring.
-			Expect(cfg.Providers["anthropic"].ColdSessionWindowSeconds).To(Equal(-1))
-		})
-
-		It("loads a negative newSessionRatePerMinute with no error", func() {
-			cfg, err := loadProvider(`
-    newSessionRatePerMinute: -1
-`)
-			Expect(err).NotTo(HaveOccurred())
-			// The gate resolves <= 0 to "rate check off" at wiring.
-			Expect(cfg.Providers["anthropic"].NewSessionRatePerMinute).To(Equal(-1))
-		})
-
-		It("loads explicit zeroes as valid — disabled / default-resolved respectively", func() {
-			cfg, err := loadProvider(`
-    coldPrefillBudgetTokens: 0
-    coldSessionWindowSeconds: 0
-    newSessionRatePerMinute: 0
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].ColdPrefillBudgetTokens).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].ColdSessionWindowSeconds).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].NewSessionRatePerMinute).To(Equal(0))
 		})
 	})
 
