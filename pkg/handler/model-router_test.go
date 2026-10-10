@@ -31,7 +31,7 @@ import (
 // sampling behavior construct their own sampler inline.
 var alwaysSample = liblog.NewSamplerTrue()
 
-var testMetrics = handler.NewMetrics(nil)
+var testMetrics = handler.NewMetrics(nil, testDateTime)
 
 var testDateTime = libtime.NewCurrentDateTime()
 
@@ -304,7 +304,7 @@ var _ = Describe("ModelRouter", func() {
 		})
 
 		It("uses cleaned model in metrics label (no [1m] series)", func() {
-			m := handler.NewMetrics(nil)
+			m := handler.NewMetrics(nil, testDateTime)
 			dsRoutes := []handler.ModelRoute{
 				{
 					Pattern:      "deepseek-*",
@@ -832,7 +832,7 @@ var _ = Describe("ModelRouter", func() {
 		var m *handler.Metrics
 
 		BeforeEach(func() {
-			m = handler.NewMetrics(nil)
+			m = handler.NewMetrics(nil, testDateTime)
 			mux = handler.NewModelRouter(
 				routes,
 				"default-fallback",
@@ -939,7 +939,7 @@ var _ = Describe("ModelRouter", func() {
 				fallback,
 				nil,
 				alwaysSample,
-				handler.NewMetrics(nil),
+				handler.NewMetrics(nil, testDateTime),
 				testDateTime,
 			)
 			mux.ServeHTTP(spy, post(`{"model":"claude-opus-4-7"}`))
@@ -982,7 +982,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 			streamRoutes := []handler.ModelRoute{
 				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
 			}
-			m := handler.NewMetrics(nil)
+			m := handler.NewMetrics(nil, testDateTime)
 			mux := handler.NewModelRouter(
 				streamRoutes,
 				"default-fallback",
@@ -1026,7 +1026,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		jsonRoutes := []handler.ModelRoute{
 			{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: jsonHandler},
 		}
-		m := handler.NewMetrics(nil)
+		m := handler.NewMetrics(nil, testDateTime)
 		mux := handler.NewModelRouter(
 			jsonRoutes,
 			"default-fallback",
@@ -1062,7 +1062,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		erroringRoute := []handler.ModelRoute{
 			{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: erroring},
 		}
-		m := handler.NewMetrics(nil)
+		m := handler.NewMetrics(nil, testDateTime)
 		mux := handler.NewModelRouter(
 			erroringRoute,
 			"default-fallback",
@@ -1095,7 +1095,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		jsonRoutes := []handler.ModelRoute{
 			{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: jsonHandler},
 		}
-		m := handler.NewMetrics(nil)
+		m := handler.NewMetrics(nil, testDateTime)
 		mux := handler.NewModelRouter(
 			jsonRoutes,
 			"default-fallback",
@@ -1119,7 +1119,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		jsonRoutes := []handler.ModelRoute{
 			{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: jsonHandler},
 		}
-		m := handler.NewMetrics(nil)
+		m := handler.NewMetrics(nil, testDateTime)
 		mux := handler.NewModelRouter(
 			jsonRoutes,
 			"default-fallback",
@@ -1148,7 +1148,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		streamRoutes := []handler.ModelRoute{
 			{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
 		}
-		m := handler.NewMetrics(nil)
+		m := handler.NewMetrics(nil, testDateTime)
 		mux := handler.NewModelRouter(
 			streamRoutes,
 			"default-fallback",
@@ -1186,7 +1186,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 			routes := []handler.ModelRoute{
 				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: boomHandler},
 			}
-			m := handler.NewMetrics(nil)
+			m := handler.NewMetrics(nil, testDateTime)
 			mux := handler.NewModelRouter(
 				routes,
 				"default-fallback",
@@ -1221,7 +1221,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 					Handler:      smallBodyHandler,
 				},
 			}
-			m := handler.NewMetrics(nil)
+			m := handler.NewMetrics(nil, testDateTime)
 			mux := handler.NewModelRouter(
 				routes,
 				"default-fallback",
@@ -1271,7 +1271,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 			streamRoutes := []handler.ModelRoute{
 				{Pattern: "claude-*", ProviderName: "anthropic-subscription", Handler: streaming},
 			}
-			m := handler.NewMetrics(nil)
+			m := handler.NewMetrics(nil, testDateTime)
 			mux := handler.NewModelRouter(
 				streamRoutes,
 				"default-fallback",
@@ -1321,7 +1321,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 				),
 			)
 		})
-		m1 := handler.NewMetrics(nil)
+		m1 := handler.NewMetrics(nil, testDateTime)
 		streamRoutes := []handler.ModelRoute{
 			{Pattern: "MiniMax-*", ProviderName: "minimax", Handler: streaming},
 		}
@@ -1346,7 +1346,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		routes2 := []handler.ModelRoute{
 			{Pattern: "gemini-*", ProviderName: "google", Handler: streaming},
 		}
-		m2 := handler.NewMetrics(nil)
+		m2 := handler.NewMetrics(nil, testDateTime)
 		mux2 := handler.NewModelRouter(
 			routes2,
 			"default-fallback",
@@ -1363,7 +1363,7 @@ var _ = Describe("ModelRouter metrics wiring", func() {
 		).To(Equal(float64(1)))
 
 		// Sub-case 3: _unknown_ used when both resolved and orig are empty.
-		m3 := handler.NewMetrics(nil)
+		m3 := handler.NewMetrics(nil, testDateTime)
 		mux3 := handler.NewModelRouter(
 			routes2,
 			"default-fallback",
