@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.47.2
 
 - chore: update github.com/bborbe/argument/v2 to v2.13.3, github.com/bborbe/log to v1.7.1, github.com/bborbe/run to v1.11.0, github.com/bborbe/service to v1.10.14, github.com/onsi/ginkgo/v2 to v2.33.0, github.com/onsi/gomega to v1.44.0, github.com/prometheus/client_golang to v1.25.0
 
