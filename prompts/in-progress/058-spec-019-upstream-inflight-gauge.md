@@ -1,7 +1,8 @@
 ---
-spec: ["019-per-host-concurrency-cap"]
-status: draft
+status: approved
+spec: [019-per-host-concurrency-cap]
 created: "2026-10-10T15:30:08Z"
+queued: "2026-10-10T16:10:53Z"
 ---
 
 # Per-host in-flight gauge: ccrouter_upstream_inflight{host}
