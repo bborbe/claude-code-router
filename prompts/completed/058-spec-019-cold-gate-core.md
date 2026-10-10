@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-cold-start-admission-gate]
+summary: 'Added pkg/handler/cold-start-gate.go: a per-provider cold-start admission gate with context-session-id warm/cold classification, a body-size prefill estimate (bytes*2/7), budget admission that lets cold requests wait for budget to free, and reservation release on the first content_block_delta, on handler return, and on client disconnect — plus 13 Ginkgo rows covering the disabled no-op, classification, admission, and release paths.'
+execution_id: claude-code-router-cold-start-admission-exec-058-spec-019-cold-gate-core
+dark-factory-version: v0.196.0
 created: "2026-10-10T14:08:35Z"
 queued: "2026-10-10T15:02:15Z"
+started: "2026-10-10T15:05:26Z"
+completed: "2026-10-10T15:12:35Z"
 branch: dark-factory/cold-start-admission-gate
 ---
 
