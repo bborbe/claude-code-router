@@ -4,9 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## v0.51.0
+## Unreleased
 
 - feat: split the per-provider in-flight count into what is dispatched and what is queued, exported as the additive gauges `ccrouter_provider_dispatched{provider}` — the summed occupancy of the provider's pool members' concurrency limiters, i.e. the requests holding a slot, which never exceeds the sum of the eligible members' `maxConcurrentRequests` — and `ccrouter_provider_queued{provider}` — the requests blocked waiting for one of those slots. The two are disjoint by construction: `concurrencyLimiter` now counts its waiters, a request that takes a free slot on its first attempt is never counted as queued, and a client that disconnects while queued stops being counted. A provider's members are summed rather than sampled, because a provider may have several simultaneously-eligible members and one limiter's occupancy would under-report its load. `ccrouter_provider_queued` deliberately excludes the two other kinds of waiting that `ccrouter_inflight_requests{provider}` includes — the 429 pacing delay gate and the cold-start admission queue — so the split reconciles as `inflight − dispatched − queued = paced + cold-admission-delayed`. Also corrects the `handler.InFlight` GoDoc and HELP text, which described the existing gauge as counting only requests "dispatched to the provider and not yet returned" while `docs/metrics.md` documented it as counting queued, paced and executing; the two now agree, as does the series table's example gloss for that gauge. Motivated by the 2026-10-11 reading in which `ccrouter_inflight_requests{provider="seibert-vllm-default"}` read 26 against a 16-slot cap and looked like a cap breach, when the real upstream load was invisible.
+
+## v0.51.0
 
 - fix: remove the cold-start gate's fixed rate burst. The new-session token bucket now holds at most one token, so admissions are spaced by the refill interval (60s / `newSessionRatePerMinute`) rather than admitting two newly-seen session ids immediately and then refilling — at 2/min that is one new session every 30 seconds. The fixed `coldGateRateBurst` (2) becomes `coldGateRateTokenCap` (1). Only providers with `newSessionRatePerMinute` set see a behaviour change; the budget check and every other gate constant are unchanged.
 
