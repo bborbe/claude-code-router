@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [020-ttft-backpressure-and-circuit-breaker]
+summary: Added the per-provider circuit breaker in pkg/handler/circuit-breaker.go with a consecutive-failure threshold, 30s open period answering the shared 429 with Retry-After, single half-open probe, and a full Ginkgo/Gomega test suite.
+execution_id: claude-code-router-backpressure-exec-064-spec-020-circuit-breaker
+dark-factory-version: v0.196.0
 created: "2026-10-11T09:12:32Z"
 queued: "2026-10-11T10:05:40Z"
+started: "2026-10-11T10:42:11Z"
+completed: "2026-10-11T10:52:36Z"
 ---
 
 # Circuit breaker: consecutive-failure gate with open / half-open / closed
