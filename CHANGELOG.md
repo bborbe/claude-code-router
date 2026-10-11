@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.51.0
 
 - fix: remove the cold-start gate's fixed rate burst. The new-session token bucket now holds at most one token, so admissions are spaced by the refill interval (60s / `newSessionRatePerMinute`) rather than admitting two newly-seen session ids immediately and then refilling — at 2/min that is one new session every 30 seconds. The fixed `coldGateRateBurst` (2) becomes `coldGateRateTokenCap` (1). Only providers with `newSessionRatePerMinute` set see a behaviour change; the budget check and every other gate constant are unchanged.
 
