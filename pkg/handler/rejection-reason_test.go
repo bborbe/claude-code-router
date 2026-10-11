@@ -95,7 +95,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				1,
 				50*stdtime.Millisecond,
-				metrics.QueueWaitSeconds,
+				nil, metrics.QueueWaitSeconds,
 			)
 
 			var wg sync.WaitGroup
@@ -133,7 +133,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				4,
 				stdtime.Second,
-				metrics.QueueWaitSeconds,
+				nil, metrics.QueueWaitSeconds,
 			)
 
 			rec := httptest.NewRecorder()
@@ -361,7 +361,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				1,
 				stdtime.Second,
-				metrics.QueueWaitSeconds,
+				nil, metrics.QueueWaitSeconds,
 			)
 
 			var wg sync.WaitGroup
@@ -396,7 +396,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				4,
 				stdtime.Second,
-				metrics.QueueWaitSeconds,
+				nil, metrics.QueueWaitSeconds,
 			)
 
 			limiter.ServeHTTP(

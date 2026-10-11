@@ -180,12 +180,32 @@ var _ = Describe("UpstreamPoolHandler time windows", func() {
 			nightCounter := &countingHandler{}
 			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 				windowedMember(
-					"https://day", "08:00 Europe/Berlin", "18:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(dayCounter, "", 16, stdtime.Second, nil), clock,
+					"https://day",
+					"08:00 Europe/Berlin",
+					"18:00 Europe/Berlin",
+					handler.NewConcurrencyLimiter(
+						dayCounter,
+						"",
+						16,
+						stdtime.Second,
+						nil,
+						nil,
+					),
+					clock,
 				),
 				windowedMember(
-					"https://night", "18:00 Europe/Berlin", "08:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(nightCounter, "", 50, stdtime.Second, nil), clock,
+					"https://night",
+					"18:00 Europe/Berlin",
+					"08:00 Europe/Berlin",
+					handler.NewConcurrencyLimiter(
+						nightCounter,
+						"",
+						50,
+						stdtime.Second,
+						nil,
+						nil,
+					),
+					clock,
 				),
 			})
 
@@ -403,12 +423,32 @@ var _ = Describe("UpstreamPoolHandler time windows", func() {
 			nightCounter := &countingHandler{}
 			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 				windowedMember(
-					"https://day", "08:00 Europe/Berlin", "18:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(dayCounter, "", 16, stdtime.Second, nil), clock,
+					"https://day",
+					"08:00 Europe/Berlin",
+					"18:00 Europe/Berlin",
+					handler.NewConcurrencyLimiter(
+						dayCounter,
+						"",
+						16,
+						stdtime.Second,
+						nil,
+						nil,
+					),
+					clock,
 				),
 				windowedMember(
-					"https://night", "18:00 Europe/Berlin", "08:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(nightCounter, "", 50, stdtime.Second, nil), clock,
+					"https://night",
+					"18:00 Europe/Berlin",
+					"08:00 Europe/Berlin",
+					handler.NewConcurrencyLimiter(
+						nightCounter,
+						"",
+						50,
+						stdtime.Second,
+						nil,
+						nil,
+					),
+					clock,
 				),
 			})
 			_ = flag.Set("logtostderr", "true")
@@ -723,7 +763,7 @@ var _ = Describe("UpstreamPoolHandler weekday eligibility (days)", func() {
 					"",
 					50,
 					stdtime.Second,
-					nil,
+					nil, nil,
 				),
 				clock,
 				nil,
@@ -735,7 +775,7 @@ var _ = Describe("UpstreamPoolHandler weekday eligibility (days)", func() {
 					"",
 					16,
 					stdtime.Second,
-					nil,
+					nil, nil,
 				),
 				Weight: 1,
 				Window: &pkg.Window{
@@ -752,7 +792,7 @@ var _ = Describe("UpstreamPoolHandler weekday eligibility (days)", func() {
 					"",
 					50,
 					stdtime.Second,
-					nil,
+					nil, nil,
 				),
 				Weight: 1,
 				Window: &pkg.Window{

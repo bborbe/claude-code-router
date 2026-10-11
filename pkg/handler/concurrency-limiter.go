@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -81,21 +82,34 @@ func writeRateLimited(
 // contention. A nil queueWait disables the observation without changing the
 // request path, so a caller with no metrics wiring (tests) behaves exactly
 // as before.
+//
+// now is the router's injected clock and falls back to realNow when nil, the
+// same contract NewThrottleGate and NewCircuitBreaker use. It is injected
+// rather than read directly because production code outside main.go must not
+// call time.Now() — a queue wait measured from an uninjected clock cannot be
+// driven from a test. The wait is still an elapsed-time measurement, so the
+// injected getter is read twice and subtracted rather than compared to any
+// absolute instant.
 func NewConcurrencyLimiter(
 	next http.Handler,
 	provider string,
 	maxConcurrentRequests int,
 	maxConcurrentWait time.Duration,
+	now func() libtime.DateTime,
 	queueWait *prometheus.HistogramVec,
 ) http.Handler {
 	if maxConcurrentRequests <= 0 {
 		return next
+	}
+	if now == nil {
+		now = realNow
 	}
 	return &concurrencyLimiter{
 		next:      next,
 		provider:  provider,
 		sem:       make(chan struct{}, maxConcurrentRequests),
 		wait:      maxConcurrentWait,
+		now:       now,
 		queueWait: queueWait,
 	}
 }
@@ -105,6 +119,9 @@ type concurrencyLimiter struct {
 	provider string
 	sem      chan struct{}
 	wait     time.Duration
+	// now is the injected clock the queue-wait measurement reads; never nil
+	// (the constructor resolves realNow).
+	now func() libtime.DateTime
 	// queueWait is the ccrouter_queue_wait_seconds histogram, or nil when
 	// the caller wired no metrics.
 	queueWait *prometheus.HistogramVec
@@ -167,19 +184,19 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.waiters.Add(1)
-	// queuedAt is taken with the monotonic clock: this measures elapsed
-	// time inside one process, where a wall-clock reading could move
-	// backwards under an NTP step and report a negative wait.
-	queuedAt := time.Now()
+	// queuedAt is read from the injected clock and only ever subtracted from
+	// another reading of it, so the measurement is an elapsed duration and
+	// never depends on the clock's absolute value.
+	queuedAt := l.now().Time()
 
 	timer := time.NewTimer(l.wait)
 	defer timer.Stop()
 	select {
 	case l.sem <- struct{}{}:
-		l.observeQueueWait(time.Since(queuedAt))
+		l.observeQueueWait(l.now().Time().Sub(queuedAt))
 	case <-timer.C:
 		l.waiters.Add(-1)
-		l.observeQueueWait(time.Since(queuedAt))
+		l.observeQueueWait(l.now().Time().Sub(queuedAt))
 		writeRateLimited(w, r, 0, rejectionReasonQueueTimeout)
 		return
 	case <-r.Context().Done():

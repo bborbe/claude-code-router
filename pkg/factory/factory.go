@@ -526,6 +526,7 @@ func buildUpstreamMembers(
 			name,
 			up.MaxConcurrentRequests,
 			time.Duration(waitSeconds)*time.Second,
+			now.Now,
 			metrics.QueueWaitSeconds,
 		)
 		// Captured from the UNWRAPPED member limiter, before the host cap is
