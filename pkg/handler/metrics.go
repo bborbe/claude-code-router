@@ -41,6 +41,23 @@ const (
 	// upstreamInFlightMetricHelp is the HELP text of
 	// ccrouter_upstream_inflight.
 	upstreamInFlightMetricHelp = "Current number of /v1/* requests in flight to an upstream host, summed across every provider and pool member resolving to that host (spec 019). For a host capped in upstreamHostLimits this is the shared semaphore's occupancy and never exceeds the cap; for an uncapped host it is the live in-flight count."
+	// providerDispatchedMetricName is the per-provider dispatched gauge,
+	// exported by the collector in provider-inflight-collector.go. It is the
+	// dispatched half of ccrouter_inflight_requests: the summed occupancy of
+	// the provider's eligible members' concurrency limiters. Registered
+	// separately from Metrics.Register, like ccrouter_upstream_inflight, so
+	// the two never collide.
+	providerDispatchedMetricName = "ccrouter_provider_dispatched"
+	// providerDispatchedMetricHelp is the HELP text of
+	// ccrouter_provider_dispatched.
+	providerDispatchedMetricHelp = "Current number of /v1/* requests holding a concurrency slot at the provider, summed across its eligible pool members, labeled by provider. The dispatched half of ccrouter_inflight_requests, which counts queued + paced + executing: this gauge never exceeds the sum of the eligible members' maxConcurrentRequests, so a value pinned at that sum means the provider is saturated."
+	// providerQueuedMetricName is the per-provider queued gauge, exported by
+	// the collector in provider-inflight-collector.go. It is the queued half
+	// of ccrouter_inflight_requests.
+	providerQueuedMetricName = "ccrouter_provider_queued"
+	// providerQueuedMetricHelp is the HELP text of
+	// ccrouter_provider_queued.
+	providerQueuedMetricHelp = "Current number of /v1/* requests blocked waiting for a concurrency slot at the provider, summed across its eligible pool members, labeled by provider. The queued half of ccrouter_inflight_requests: it counts only requests that found every slot held, so it excludes requests held by the 429 pacing gate and by the cold-start admission queue."
 )
 
 // Metrics groups the Prometheus collectors emitted from the model

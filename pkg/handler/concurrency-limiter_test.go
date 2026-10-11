@@ -50,6 +50,38 @@ func (b *blockingHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// gatedHandler blocks every request on its own release channel, so a test can
+// let one request through while another is still being served. blockingHandler
+// cannot express that: it releases every request at once, which leaves no
+// window in which the first request has returned and the second is mid-flight.
+type gatedHandler struct {
+	gates chan chan struct{}
+}
+
+func newGatedHandler() *gatedHandler {
+	return &gatedHandler{gates: make(chan chan struct{}, 100)}
+}
+
+// nextGate returns the release channel of the next request to enter, failing
+// the spec rather than hanging if none enters within 2s.
+func (g *gatedHandler) nextGate() chan struct{} {
+	select {
+	case gate := <-g.gates:
+		return gate
+	case <-time.After(2 * time.Second):
+		Fail("no request entered the handler within 2s")
+		return nil
+	}
+}
+
+func (g *gatedHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	gate := make(chan struct{})
+	g.gates <- gate
+	<-gate
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
 // serveAsync runs limiter.ServeHTTP in a goroutine and returns a channel
 // that closes when it returns, so the test can read the recorder without
 // racing the goroutine's writes.
@@ -215,5 +247,91 @@ var _ = Describe("ConcurrencyLimiter", func() {
 		close(inner.release)
 		Eventually(done1, "1s").Should(BeClosed())
 		Expect(rec1.Code).To(Equal(http.StatusOK))
+	})
+
+	It("splits dispatched from queued: cap 2 with 5 concurrent requests reads 2 and 3", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 2, 10*time.Second)
+		counters, ok := limiter.(interface {
+			InFlight() int
+			Queued() int
+		})
+		Expect(ok).To(BeTrue(), "a capped limiter must expose both counters")
+
+		done := make([]chan struct{}, 5)
+		for i := range done {
+			done[i] = serveAsync(limiter, httptest.NewRecorder(), newMessagesRequest())
+		}
+
+		Eventually(inner.entryCount, "1s", "10ms").
+			Should(Equal(2), "two requests must hold the two slots")
+		Eventually(counters.Queued, "1s", "10ms").
+			Should(Equal(3), "the other three must be queued")
+		Expect(counters.InFlight()).To(Equal(2), "dispatched must not exceed the cap")
+
+		close(inner.release)
+		for i := range done {
+			Eventually(done[i], "2s").Should(BeClosed())
+		}
+		Eventually(counters.InFlight, "1s", "10ms").Should(Equal(0))
+		Eventually(counters.Queued, "1s", "10ms").
+			Should(Equal(0), "queued must return to 0 once every request has run")
+	})
+
+	It("never counts a request that takes a free slot as queued", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 1, time.Second)
+		counters, ok := limiter.(interface{ Queued() int })
+		Expect(ok).To(BeTrue())
+
+		done := serveAsync(limiter, httptest.NewRecorder(), newMessagesRequest())
+		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(1))
+		Expect(counters.Queued()).To(Equal(0), "a dispatched request is not queued")
+
+		close(inner.release)
+		Eventually(done, "1s").Should(BeClosed())
+		Eventually(counters.Queued, "1s", "10ms").Should(Equal(0))
+	})
+
+	It("reports queued 0 on an uncapped limiter, which is the no-op path", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 0, time.Second)
+		_, ok := limiter.(interface{ Queued() int })
+		Expect(ok).To(BeFalse(), "the <= 0 path returns next unchanged and has no counters")
+	})
+
+	It("stops counting a request as queued the moment it acquires the slot", func() {
+		inner := newGatedHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 1, 10*time.Second)
+		counters, ok := limiter.(interface {
+			InFlight() int
+			Queued() int
+		})
+		Expect(ok).To(BeTrue())
+
+		// A takes the only slot on the fast path and holds it.
+		doneA := serveAsync(limiter, httptest.NewRecorder(), newMessagesRequest())
+		gateA := inner.nextGate()
+		Expect(counters.InFlight()).To(Equal(1))
+		Expect(counters.Queued()).To(Equal(0))
+
+		// B finds every slot held, so it enters the waiting path.
+		doneB := serveAsync(limiter, httptest.NewRecorder(), newMessagesRequest())
+		Eventually(counters.Queued, "1s", "10ms").Should(Equal(1))
+
+		// Release A. B acquires the slot and enters the handler, where it
+		// blocks — so B is mid-service, not returning. This is the window a
+		// decrement on return would miss: queued would still read 1.
+		close(gateA)
+		gateB := inner.nextGate()
+
+		Expect(counters.InFlight()).To(Equal(1))
+		Expect(counters.Queued()).To(Equal(0),
+			"a request that acquired the slot is dispatched, not queued")
+
+		close(gateB)
+		Eventually(doneA, "1s").Should(BeClosed())
+		Eventually(doneB, "1s").Should(BeClosed())
+		Eventually(counters.Queued, "1s", "10ms").Should(Equal(0))
 	})
 })
