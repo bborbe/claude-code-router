@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [020-ttft-backpressure-and-circuit-breaker]
+summary: Wired the spec-020 TTFT backpressure controller and circuit breaker into the factory request tree, added the two additive Prometheus collectors with handler and wiring tests, and documented both knobs and series across config, metrics, changelog, and README.
+execution_id: claude-code-router-backpressure-exec-065-spec-020-metrics-wiring-docs
+dark-factory-version: v0.196.0
 created: "2026-10-11T09:12:32Z"
 queued: "2026-10-11T10:05:40Z"
+started: "2026-10-11T10:52:38Z"
+completed: "2026-10-11T11:13:14Z"
 ---
 
 # Metrics, factory wiring, SIGHUP rebuild, and documentation

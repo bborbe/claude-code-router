@@ -71,10 +71,12 @@ const (
 // one CounterVec for requests delayed (paced) by the adaptive 429
 // delay gate, labeled by provider (spec 018), one InFlight collector
 // exporting the current + 60 s-peak in-flight request count per
-// provider, and four further additive collectors observing the
+// provider, four further additive collectors observing the
 // per-provider cold-start admission gate (spec 019): delayed and
 // refused cold-request counters, an in-flight cold-token gauge, and a
-// cold time-to-first-token histogram.
+// cold time-to-first-token histogram, and two more additive collectors
+// for the spec-020 behaviours: the live effective cold-prefill budget
+// gauge and the circuit-breaker state-transition counter.
 //
 // Cardinality budget: 5 providers × ~15 active models × 7 status_classes
 // = 525 series ceiling for the requests counter (~450 in practice because
@@ -97,7 +99,13 @@ type Metrics struct {
 	ColdAdmissionRefusedTotal *prometheus.CounterVec
 	ColdTokensInFlight        *prometheus.GaugeVec
 	ColdTTFTSeconds           *prometheus.HistogramVec
-	InFlight                  *InFlight
+	// The two spec-020 collectors are additive: the gauge carries the live
+	// effective cold-prefill budget the backpressure loop adjusts, and the
+	// counter carries the circuit breaker's state transitions. Neither
+	// changes the existing series or the status_class enum.
+	ColdPrefillBudgetTokens      *prometheus.GaugeVec   // ccrouter_cold_prefill_budget_tokens{provider}
+	BreakerStateTransitionsTotal *prometheus.CounterVec // ccrouter_breaker_state_transitions_total{provider,state}
+	InFlight                     *InFlight
 }
 
 // NewMetrics constructs the collectors but does NOT register them. Call
@@ -117,7 +125,22 @@ type Metrics struct {
 // libtime.NewCurrentDateTime() built here) so the peak window and the
 // router's request timing share one clock.
 func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTimeGetter) *Metrics {
-	m := &Metrics{
+	m := newCoreCollectors()
+	m.addColdCollectors()
+	m.addSpec020Collectors()
+	m.InFlight = NewInFlight(currentDateTime)
+	for alias, resolved := range aliases {
+		m.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
+	}
+	return m
+}
+
+// newCoreCollectors builds the request, latency, alias, token, cache-token,
+// and throttle collectors — the pre-spec-019 set. Extracted from NewMetrics so
+// that constructor stays under the length gate; it carries no behavior beyond
+// constructing the collectors.
+func newCoreCollectors() *Metrics {
+	return &Metrics{
 		RequestsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "ccrouter_requests_total",
@@ -161,41 +184,64 @@ func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTi
 			},
 			[]string{"provider"},
 		),
-		ColdAdmissionDelayedTotal: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ccrouter_cold_admission_delayed_total",
-				Help: "Number of cold /v1/* requests the cold-start admission gate admitted only after waiting in the bounded queue (blocked by the prefill budget or the new-session rate), labeled by provider. A request admitted immediately and a warm request do not increment it.",
-			},
-			[]string{"provider"},
-		),
-		ColdAdmissionRefusedTotal: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ccrouter_cold_admission_refused_total",
-				Help: "Number of cold /v1/* requests the cold-start admission gate refused with HTTP 429 (the bounded queue was full, or the max wait elapsed), labeled by provider. A client that disconnects while waiting is never counted.",
-			},
-			[]string{"provider"},
-		),
-		ColdTokensInFlight: prometheus.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Name: "ccrouter_cold_tokens_in_flight",
-				Help: "Cold-prefill tokens currently reserved by the cold-start admission gate, labeled by provider. Rises while a cold request holds its reservation and returns to zero as the reservation is released on the first content delta (or when the handler returns).",
-			},
-			[]string{"provider"},
-		),
-		ColdTTFTSeconds: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "ccrouter_cold_ttft_seconds",
-				Help:    "Time to first token (seconds) for cold /v1/* requests, measured from admission to the first content delta in the response stream, labeled by provider. Warm requests are not observed.",
-				Buckets: LatencyBucketsSeconds,
-			},
-			[]string{"provider"},
-		),
-		InFlight: NewInFlight(currentDateTime),
 	}
-	for alias, resolved := range aliases {
-		m.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
-	}
-	return m
+}
+
+// addColdCollectors fills in the four additive spec-019 cold-start admission
+// collectors on m: the delayed and refused cold-request counters, the
+// in-flight cold-token gauge, and the cold time-to-first-token histogram.
+func (m *Metrics) addColdCollectors() {
+	m.ColdAdmissionDelayedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ccrouter_cold_admission_delayed_total",
+			Help: "Number of cold /v1/* requests the cold-start admission gate admitted only after waiting in the bounded queue (blocked by the prefill budget or the new-session rate), labeled by provider. A request admitted immediately and a warm request do not increment it.",
+		},
+		[]string{"provider"},
+	)
+	m.ColdAdmissionRefusedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ccrouter_cold_admission_refused_total",
+			Help: "Number of cold /v1/* requests the cold-start admission gate refused with HTTP 429 (the bounded queue was full, or the max wait elapsed), labeled by provider. A client that disconnects while waiting is never counted.",
+		},
+		[]string{"provider"},
+	)
+	m.ColdTokensInFlight = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "ccrouter_cold_tokens_in_flight",
+			Help: "Cold-prefill tokens currently reserved by the cold-start admission gate, labeled by provider. Rises while a cold request holds its reservation and returns to zero as the reservation is released on the first content delta (or when the handler returns).",
+		},
+		[]string{"provider"},
+	)
+	m.ColdTTFTSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ccrouter_cold_ttft_seconds",
+			Help:    "Time to first token (seconds) for cold /v1/* requests, measured from admission to the first content delta in the response stream, labeled by provider. Warm requests are not observed.",
+			Buckets: LatencyBucketsSeconds,
+		},
+		[]string{"provider"},
+	)
+}
+
+// addSpec020Collectors fills in the two additive spec-020 collectors on m: the
+// gauge carrying the live effective cold-prefill budget the backpressure loop
+// adjusts, and the counter carrying the circuit breaker's state transitions.
+// Neither is pre-initialized here — the controller sets the budget gauge at
+// construction and the breaker pre-initializes its own three state series.
+func (m *Metrics) addSpec020Collectors() {
+	m.ColdPrefillBudgetTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "ccrouter_cold_prefill_budget_tokens",
+			Help: "Current effective cold-prefill token budget the cold-start admission gate admits against, labeled by provider. Reads the configured ceiling until the TTFT backpressure loop adjusts it, then the halved or grown value (spec 020).",
+		},
+		[]string{"provider"},
+	)
+	m.BreakerStateTransitionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ccrouter_breaker_state_transitions_total",
+			Help: "Number of circuit-breaker state transitions, labeled by provider and state (closed|open|half_open). The three state series are pre-initialized to 0 for a provider with the breaker enabled (spec 020).",
+		},
+		[]string{"provider", "state"},
+	)
 }
 
 // Register registers all collectors against reg. Pass a fresh registry
@@ -203,7 +249,7 @@ func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTi
 // production. Returns the first registration error (if any) so caller
 // can decide whether to abort startup.
 func (m *Metrics) Register(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds, m.InFlight} {
+	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds, m.ColdPrefillBudgetTokens, m.BreakerStateTransitionsTotal, m.InFlight} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}

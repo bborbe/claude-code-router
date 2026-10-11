@@ -189,24 +189,29 @@ const defaultMaxConcurrentWaitSeconds = 30
 const defaultThrottleMaxDelaySeconds = 30
 
 // coldGateHandler wraps a provider's upstream pool handler in the per-provider
-// cold-start admission gate (spec 019), wired to the four additive collectors.
-// A provider with both cold knobs absent, 0, or negative gets the pool handler
-// unchanged from NewColdStartGate (its no-op path), so an unconfigured router
-// is byte-for-byte unchanged. The max-wait argument is 0 so the handler's own
-// default is the single source of truth (a factory copy would silently shadow
-// a later change), and a non-positive session window likewise resolves to the
-// handler's 600-second default. now is the router's injected clock.
+// cold-start admission gate (spec 019), wired to the four additive collectors
+// and to the spec-020 TTFT backpressure controller (when one is configured), so
+// the gate admits against the controller's live effective budget. A provider
+// with both cold knobs absent, 0, or negative gets the pool handler unchanged
+// (its no-op path), so an unconfigured router is byte-for-byte unchanged. The
+// max-wait argument is 0 so the handler's own default is the single source of
+// truth (a factory copy would silently shadow a later change), and a
+// non-positive session window likewise resolves to the handler's 600-second
+// default. now is the router's injected clock. A nil backpressure makes this
+// identical to the pre-spec-020 gate.
 func coldGateHandler(
 	next http.Handler,
 	name string,
 	prov pkg.Provider,
+	backpressure *handler.TTFTBackpressure,
 	now func() libtime.DateTime,
 	metrics *handler.Metrics,
 ) http.Handler {
-	return handler.NewColdStartGate(
+	return handler.NewColdStartGateWithBackpressure(
 		next,
 		name,
 		prov.ColdPrefillBudgetTokens,
+		backpressure,
 		time.Duration(prov.ColdSessionWindowSeconds)*time.Second,
 		prov.NewSessionRatePerMinute,
 		0,
@@ -296,26 +301,39 @@ func CreateRouterFromConfig(
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		upQueued[name] = queueds
+		// The TTFT backpressure controller is constructed alongside the
+		// cold-start gate (spec 020) and adjusts that gate's effective
+		// budget. It is nil — inert — unless both the cold budget and the
+		// TTFT threshold are configured, so an unconfigured provider gets
+		// the pre-spec-020 gate unchanged.
+		backpressure := handler.NewTTFTBackpressure(
+			name,
+			prov.ColdPrefillBudgetTokens,
+			prov.TtftBackpressureThresholdSeconds,
+			o.currentDateTime.Now,
+			metrics.ColdPrefillBudgetTokens,
+		)
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
 		// The cold-start admission gate wraps the provider's pool handler
-		// (spec 019) BEFORE the throttle gate, so the existing 429 delay
-		// gate stays outermost and cold admission is the last gate before
-		// the pool.
+		// (spec 019), wired to the backpressure controller (spec 020), and
+		// sits INSIDE the throttle gate and the breaker — the innermost gate
+		// before the pool.
 		providerHandler = coldGateHandler(
 			providerHandler,
 			name,
 			prov,
+			backpressure,
 			o.currentDateTime.Now,
 			metrics,
 		)
-		// The adaptive 429 delay gate wraps the provider's pool handler
-		// (spec 018): an enabled provider (Throttle429Threshold > 0) paces
-		// requests destined for this pool while it is under sustained 429
-		// pressure; a disabled provider returns the pool handler unchanged.
-		// The value stored in providerHandlers[name] is the wrapped
-		// handler, so both glob-routed and default-provider traffic pass
-		// through the gate. A negative or absent ThrottleMaxDelaySeconds
-		// resolves to the 30s default.
+		// The adaptive 429 delay gate wraps the cold gate (spec 018): an
+		// enabled provider (Throttle429Threshold > 0) paces requests
+		// destined for this pool while it is under sustained 429 pressure;
+		// a disabled provider returns the inner handler unchanged. The value
+		// stored in providerHandlers[name] is the wrapped handler, so both
+		// glob-routed and default-provider traffic pass through the gate. A
+		// negative or absent ThrottleMaxDelaySeconds resolves to the 30s
+		// default.
 		maxDelaySeconds := prov.ThrottleMaxDelaySeconds
 		if maxDelaySeconds <= 0 {
 			maxDelaySeconds = defaultThrottleMaxDelaySeconds
@@ -327,6 +345,17 @@ func CreateRouterFromConfig(
 			time.Duration(maxDelaySeconds)*time.Second,
 			o.currentDateTime.Now,
 			metrics.ThrottledTotal,
+		)
+		// The circuit breaker wraps everything, OUTERMOST (spec 020), so an
+		// open breaker short-circuits the whole provider — the throttle gate
+		// and the cold gate are never reached while it is open. A provider
+		// with no BreakerFailureThreshold gets the inner handler unchanged.
+		providerHandler = handler.NewCircuitBreaker(
+			providerHandler,
+			name,
+			prov.BreakerFailureThreshold,
+			o.currentDateTime.Now,
+			metrics.BreakerStateTransitionsTotal,
 		)
 		providerHandlers[name] = providerHandler
 		for _, pattern := range prov.Models {
