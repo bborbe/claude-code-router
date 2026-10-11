@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update github.com/bborbe/argument/v2 to v2.13.5, github.com/bborbe/errors to v1.6.3, github.com/bborbe/log to v1.7.3, github.com/bborbe/time to v1.27.16, github.com/onsi/ginkgo/v2 to v2.33.1
+
 ## v0.53.1
 
 - fix: recognise Claude Code sessions as warm in the cold-start gate. The session middleware now falls back to `X-Claude-Code-Session-Id` (sent by Claude Code on every request) when `X-Session-Id` is absent; previously every Claude Code request was charged as a cold prefill, queued up to 30 s and often refused with HTTP 429. `X-Session-Id` still wins when both are present, and `X-Claude-Code-Session-Id` is forwarded unchanged.
