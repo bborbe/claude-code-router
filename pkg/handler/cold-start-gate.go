@@ -108,6 +108,36 @@ func NewColdStartGate(
 	now func() libtime.DateTime,
 	metrics ColdGateMetrics,
 ) http.Handler {
+	return NewColdStartGateWithBackpressure(
+		next,
+		provider,
+		budgetTokens,
+		nil,
+		sessionWindow,
+		newSessionsPerMinute,
+		maxWait,
+		now,
+		metrics,
+	)
+}
+
+// NewColdStartGateWithBackpressure is NewColdStartGate with a TTFT
+// backpressure controller attached (spec 020): the gate admits against
+// backpressure.Budget() (the live effective budget) instead of the value
+// fixed at construction, and feeds the controller each forwarded request's
+// response status and each cold request's time-to-first-token. A nil
+// backpressure makes this identical to NewColdStartGate.
+func NewColdStartGateWithBackpressure(
+	next http.Handler,
+	provider string,
+	budgetTokens int,
+	backpressure *TTFTBackpressure,
+	sessionWindow stdtime.Duration,
+	newSessionsPerMinute int,
+	maxWait stdtime.Duration,
+	now func() libtime.DateTime,
+	metrics ColdGateMetrics,
+) http.Handler {
 	if budgetTokens <= 0 && newSessionsPerMinute <= 0 {
 		return next
 	}
@@ -126,6 +156,7 @@ func NewColdStartGate(
 		next:           next,
 		provider:       provider,
 		budget:         budgetTokens,
+		bp:             backpressure,
 		window:         sessionWindow,
 		rate:           newSessionsPerMinute,
 		maxWait:        maxWait,
@@ -150,6 +181,7 @@ type coldStartGate struct {
 	next     http.Handler
 	provider string
 	budget   int
+	bp       *TTFTBackpressure
 	window   stdtime.Duration
 	rate     int
 	maxWait  stdtime.Duration
@@ -200,10 +232,37 @@ func (g *coldStartGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if warm || estimate == 0 {
-		g.next.ServeHTTP(w, r)
+		g.forwardObserved(w, r)
 		return
 	}
 	g.forwardCold(w, r, estimate)
+}
+
+// forwardObserved forwards a request carrying no cold reservation — a warm
+// session or a zero-estimate body. With a controller attached it observes
+// the response status so a warm request's failure still counts toward the
+// provider's window; without one it calls next directly, byte-for-byte the
+// pre-spec-020 path.
+func (g *coldStartGate) forwardObserved(w http.ResponseWriter, r *http.Request) {
+	if g.bp == nil {
+		g.next.ServeHTTP(w, r)
+		return
+	}
+	sr := &statusRecorder{ResponseWriter: w}
+	g.next.ServeHTTP(sr, r)
+	g.bp.ObserveStatus(sr.status)
+}
+
+// effectiveBudget returns the cold-prefill budget the gate admits against
+// right now: the controller's live effective budget when one is attached,
+// else the ceiling configured at construction. Callers hold g.mu; the
+// controller takes its own mutex inside and never takes g.mu, so the lock
+// order g.mu -> bp.mu is acyclic.
+func (g *coldStartGate) effectiveBudget() int {
+	if g.bp != nil {
+		return g.bp.Budget()
+	}
+	return g.budget
 }
 
 // admit classifies and reserves under g.mu, waiting in the bounded queue
@@ -365,7 +424,8 @@ func (g *coldStartGate) tryAdmitLocked(
 			return true, true, ""
 		}
 	}
-	if g.budget > 0 && g.inFlightTokens > 0 && g.inFlightTokens+estimate > g.budget {
+	if budget := g.effectiveBudget(); budget > 0 &&
+		g.inFlightTokens > 0 && g.inFlightTokens+estimate > budget {
 		return false, false, "budget"
 	}
 	g.refillLocked(at)
@@ -544,18 +604,29 @@ func (g *coldStartGate) forwardCold(w http.ResponseWriter, r *http.Request, esti
 	})
 	defer release()
 
+	inner := w
+	var sr *statusRecorder
+	if g.bp != nil {
+		sr = &statusRecorder{ResponseWriter: w}
+		inner = sr
+	}
 	rec := &coldReleaseRecorder{
-		ResponseWriter: w,
+		ResponseWriter: inner,
 		onDelta: func() {
 			release()
+			seconds := g.now().Time().Sub(dispatchAt).Seconds()
 			if g.metrics.TTFT != nil {
-				g.metrics.TTFT.
-					WithLabelValues(g.provider).
-					Observe(g.now().Time().Sub(dispatchAt).Seconds())
+				g.metrics.TTFT.WithLabelValues(g.provider).Observe(seconds)
+			}
+			if g.bp != nil {
+				g.bp.ObserveColdTTFT(seconds)
 			}
 		},
 	}
 	g.next.ServeHTTP(rec, r)
+	if sr != nil {
+		g.bp.ObserveStatus(sr.status)
+	}
 }
 
 // coldReleaseRecorder wraps the response writer and calls onDelta exactly

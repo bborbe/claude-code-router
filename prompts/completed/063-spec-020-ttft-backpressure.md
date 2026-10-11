@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [020-ttft-backpressure-and-circuit-breaker]
+summary: Added the per-provider TTFT backpressure controller in pkg/handler/ttft-backpressure.go and wired the cold-start gate to admit against its live effective budget via NewColdStartGateWithBackpressure, with full Ginkgo/Gomega coverage driving the injected clock.
+execution_id: claude-code-router-backpressure-exec-063-spec-020-ttft-backpressure
+dark-factory-version: v0.196.0
 created: "2026-10-11T09:12:32Z"
 queued: "2026-10-11T10:05:40Z"
+started: "2026-10-11T10:20:38Z"
+completed: "2026-10-11T10:42:10Z"
 ---
 
 # TTFT backpressure: windowed controller + live cold-prefill budget
