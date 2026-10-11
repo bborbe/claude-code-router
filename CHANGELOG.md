@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: recognise Claude Code sessions as warm in the cold-start gate. The session middleware now falls back to `X-Claude-Code-Session-Id` (sent by Claude Code on every request) when `X-Session-Id` is absent; previously every Claude Code request was charged as a cold prefill, queued up to 30 s and often refused with HTTP 429. `X-Session-Id` still wins when both are present, and `X-Claude-Code-Session-Id` is forwarded unchanged.
+- fix: rate-limit the `[coldgate] decision=delayed` / `decision=refused` INFO lines to about one per second per provider; `ccrouter_cold_admission_delayed_total` and `ccrouter_cold_admission_refused_total` still count every event.
+
 ## v0.53.0
 
 - feat: add per-provider TTFT backpressure and circuit breaker. Two optional provider knobs — `ttftBackpressureThresholdSeconds` (halves the effective cold-prefill budget when the provider's median cold time-to-first-token rises above this threshold over a fixed 60s window, or on any upstream failure in that window, and grows it back by a fixed step on a clean window) and `breakerFailureThreshold` (opens the provider after this many consecutive upstream 5xx, answering HTTP 429 with an integer `Retry-After` for the fixed 30s open period without invoking the upstream, then admitting a single probe) — react to a provider that has gone slow or is failing. The backpressure controller is built alongside the cold-start admission gate and drives its live effective budget; the breaker wraps the provider handler outermost, outside the 429 delay gate and the cold-start gate, so an open breaker short-circuits the whole provider. Both are off by default (absent, 0, or negative) and a provider that opts out is byte-for-byte unchanged. Adds two additive series `ccrouter_cold_prefill_budget_tokens{provider}` (gauge) and `ccrouter_breaker_state_transitions_total{provider,state}` (counter, its three `state` series pre-initialized to 0); the `status_class` enum is unchanged — a breaker 429 and a budget refusal both record through `4xx_rate_limited`.

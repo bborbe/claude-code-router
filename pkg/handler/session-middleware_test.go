@@ -65,6 +65,22 @@ var _ = Describe("SessionMiddleware", func() {
 		Expect(lowerCaseKeys(received.Header)).NotTo(HaveKey("x-session-id"))
 	})
 
+	It("falls back to X-Claude-Code-Session-Id and leaves that header on the request", func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		req.Header.Set("X-Claude-Code-Session-Id", "cc-sess-1")
+		handler.NewSessionMiddleware(next).ServeHTTP(httptest.NewRecorder(), req)
+		Expect(handler.SessionIDFromContext(received.Context())).To(Equal("cc-sess-1"))
+		Expect(received.Header.Get("X-Claude-Code-Session-Id")).To(Equal("cc-sess-1"))
+	})
+
+	It("prefers X-Session-Id over X-Claude-Code-Session-Id when both are sent", func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		req.Header.Set("X-Session-Id", "sess-1")
+		req.Header.Set("X-Claude-Code-Session-Id", "cc-sess-1")
+		handler.NewSessionMiddleware(next).ServeHTTP(httptest.NewRecorder(), req)
+		Expect(handler.SessionIDFromContext(received.Context())).To(Equal("sess-1"))
+	})
+
 	It("invokes the wrapped handler exactly once per request", func() {
 		invocations := 0
 		wrapped := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

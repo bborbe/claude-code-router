@@ -10,6 +10,7 @@ import (
 	"sync"
 	stdtime "time"
 
+	liblog "github.com/bborbe/log"
 	libtime "github.com/bborbe/time"
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
@@ -165,6 +166,7 @@ func NewColdStartGateWithBackpressure(
 		seen:           make(map[string]stdtime.Time),
 		notify:         make(chan struct{}),
 		queue:          make(chan struct{}, coldGateQueueCapacity),
+		logSampler:     liblog.NewSampleTime(stdtime.Second),
 		rateTokens:     coldGateRateTokenCap,
 		rateLastRefill: now().Time(),
 	}
@@ -188,6 +190,9 @@ type coldStartGate struct {
 	now      func() libtime.DateTime
 	metrics  ColdGateMetrics
 	queue    chan struct{}
+	// logSampler rate-limits the per-request delayed/refused INFO lines to
+	// about one per second per provider; the metrics still count every event.
+	logSampler liblog.Sampler
 
 	mu             sync.Mutex
 	seen           map[string]stdtime.Time
@@ -349,7 +354,13 @@ func (g *coldStartGate) admit(
 		if g.metrics.Delayed != nil {
 			g.metrics.Delayed.WithLabelValues(g.provider).Inc()
 		}
-		glog.Infof("[coldgate] provider=%s decision=delayed reason=%s", g.provider, blockedReason)
+		if g.logSampler.IsSample() {
+			glog.Infof(
+				"[coldgate] provider=%s decision=delayed reason=%s",
+				g.provider,
+				blockedReason,
+			)
+		}
 	}
 	<-g.queue
 	slotHeld = false
@@ -376,7 +387,9 @@ func (g *coldStartGate) refuse(w http.ResponseWriter, r *http.Request, reason st
 	if r.Context().Err() != nil {
 		return
 	}
-	glog.Infof("[coldgate] provider=%s decision=refused reason=%s", g.provider, reason)
+	if g.logSampler.IsSample() {
+		glog.Infof("[coldgate] provider=%s decision=refused reason=%s", g.provider, reason)
+	}
 	if g.metrics.Refused != nil {
 		g.metrics.Refused.WithLabelValues(g.provider).Inc()
 	}

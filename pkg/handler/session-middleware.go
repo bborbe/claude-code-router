@@ -13,6 +13,11 @@ import "net/http"
 // logged. An absent or empty header leaves the context value unset
 // (SessionIDFromContext returns ""), which dispatches the request
 // keyless.
+//
+// When x-session-id is absent, the id Claude Code sends on every request
+// (x-claude-code-session-id) is used instead, so Claude Code sessions are
+// recognised as warm by the cold-start gate. That header is left on the
+// request: it is Claude Code's own, not router-private.
 func NewSessionMiddleware(next http.Handler) http.Handler {
 	return &sessionMiddleware{next: next}
 }
@@ -23,6 +28,9 @@ type sessionMiddleware struct {
 
 func (s *sessionMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get("X-Session-Id")
+	if sessionID == "" {
+		sessionID = r.Header.Get("X-Claude-Code-Session-Id")
+	}
 	clone := r.Clone(r.Context())
 	// Header.Del is case-insensitive, so every letter case is stripped —
 	// the upstream never observes the caller's session id.
