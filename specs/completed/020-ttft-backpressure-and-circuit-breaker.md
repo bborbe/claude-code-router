@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-10-11T09:06:07Z"
 generating: "2026-10-11T10:05:44Z"
 prompted: "2026-10-11T10:05:44Z"
 verifying: "2026-10-11T11:13:15Z"
+completed: "2026-10-11T11:21:43Z"
 branch: dark-factory/ttft-backpressure-and-circuit-breaker
 ---
 
