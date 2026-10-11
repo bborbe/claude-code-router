@@ -31,6 +31,56 @@ const UnknownModelLabel = "_unknown_"
 // can meaningfully resolve.
 var LatencyBucketsSeconds = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
+// QueueWaitBucketsSeconds covers how long a request waits for a
+// concurrency slot before it either acquires one or times out at
+// maxConcurrentWait (30s default). The ladder is denser than
+// LatencyBucketsSeconds above 10s on purpose: a queue-timeout observation
+// lands at exactly maxConcurrentWait, and a coarse top bucket makes
+// histogram_quantile interpolate across the whole band — at a [10,30]
+// boundary a saturated limiter reports a p95 well below the 27s the
+// saturation criterion reads, which would make the criterion unable to
+// distinguish a saturated queue from a lightly loaded one.
+var QueueWaitBucketsSeconds = []float64{0.1, 0.5, 1, 2.5, 5, 10, 15, 20, 25, 30, 45, 60}
+
+const (
+	// rejectionReasonQueueTimeout is the ccrouter_rejected_total reason for
+	// a request the concurrency limiter could not admit within its wait
+	// window (concurrency-limiter.go). It is the router's own queue
+	// timeout, not an upstream refusal.
+	rejectionReasonQueueTimeout = "queue_timeout"
+	// rejectionReasonThrottle is the reason for a request the throttle
+	// gate's bounded pacing queue could not admit within the max delay
+	// (throttle-gate.go, spec 018).
+	rejectionReasonThrottle = "throttle"
+	// rejectionReasonColdStart is the reason for a cold request the
+	// cold-start admission gate refused — the bounded queue was full or
+	// the max wait elapsed (cold-start-gate.go, spec 019).
+	rejectionReasonColdStart = "cold_start"
+	// rejectionReasonCircuitOpen is the reason for a request refused while
+	// the circuit breaker was open or while it was half-open and another
+	// request held the probe (circuit-breaker.go, spec 020).
+	rejectionReasonCircuitOpen = "circuit_open"
+	// rejectionReasonUpstream is the reason for a 429 the upstream itself
+	// returned: no router-side gate wrote it, so it is the residual cause.
+	rejectionReasonUpstream = "upstream"
+)
+
+// rejectionReasons are the bounded reason label values of
+// ccrouter_rejected_total, in order. The enum is closed and enumerable,
+// which is what lets every (provider, reason) series be pre-initialized to
+// 0 — without that, rate() returns no data rather than 0 for a reason that
+// has not fired yet, and an alert on a never-yet-seen reason silently
+// never evaluates. Adding a reason here obliges a matching pre-init in
+// PreInitRejection and a producing call site; an unmapped value would
+// appear only once it fired, which is exactly the hole this enum closes.
+var rejectionReasons = []string{
+	rejectionReasonQueueTimeout,
+	rejectionReasonThrottle,
+	rejectionReasonColdStart,
+	rejectionReasonCircuitOpen,
+	rejectionReasonUpstream,
+}
+
 const (
 	// upstreamInFlightMetricName is the per-upstream-host in-flight gauge
 	// (spec 019), exported by the collector in
@@ -105,7 +155,15 @@ type Metrics struct {
 	// changes the existing series or the status_class enum.
 	ColdPrefillBudgetTokens      *prometheus.GaugeVec   // ccrouter_cold_prefill_budget_tokens{provider}
 	BreakerStateTransitionsTotal *prometheus.CounterVec // ccrouter_breaker_state_transitions_total{provider,state}
-	InFlight                     *InFlight
+	// The two rejection collectors are additive: the counter carries why a
+	// request was rejected, and the histogram carries how long a request
+	// waited for a concurrency slot before it was admitted or timed out.
+	// Neither changes the existing series or the status_class enum —
+	// ccrouter_requests_total{status_class="4xx_rate_limited"} still counts
+	// every 429, and these split that one value by cause.
+	RejectedTotal    *prometheus.CounterVec   // ccrouter_rejected_total{provider,reason}
+	QueueWaitSeconds *prometheus.HistogramVec // ccrouter_queue_wait_seconds{provider}
+	InFlight         *InFlight
 }
 
 // NewMetrics constructs the collectors but does NOT register them. Call
@@ -128,6 +186,7 @@ func NewMetrics(aliases map[string]string, currentDateTime libtime.CurrentDateTi
 	m := newCoreCollectors()
 	m.addColdCollectors()
 	m.addSpec020Collectors()
+	m.addRejectionCollectors()
 	m.InFlight = NewInFlight(currentDateTime)
 	for alias, resolved := range aliases {
 		m.AliasResolutions.WithLabelValues(alias, resolved).Add(0)
@@ -244,12 +303,55 @@ func (m *Metrics) addSpec020Collectors() {
 	)
 }
 
+// addRejectionCollectors fills in the two rejection collectors on m: the
+// counter carrying why a request was rejected and the histogram carrying
+// how long it waited for a concurrency slot. Both are constructed empty —
+// the (provider, reason) series are pre-initialized by PreInitRejection,
+// which is called from the factory once the configured providers are known
+// (NewMetrics sees only the alias map, not the provider list, exactly as it
+// does for the breaker's state series).
+func (m *Metrics) addRejectionCollectors() {
+	m.RejectedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ccrouter_rejected_total",
+			Help: "Total number of /v1/* requests the router answered with HTTP 429, labeled by provider and reason (queue_timeout|throttle|cold_start|circuit_open|upstream). Splits the single 4xx_rate_limited status_class of ccrouter_requests_total into its causes: queue_timeout is the concurrency limiter's own wait window, throttle the pacing queue's overflow, cold_start the cold-start admission gate's refusal, circuit_open the breaker refusing while open or half-open, and upstream a 429 the upstream itself returned.",
+		},
+		[]string{"provider", "reason"},
+	)
+	m.QueueWaitSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ccrouter_queue_wait_seconds",
+			Help:    "Time in seconds a /v1/* request waited for a concurrency slot, from entering the limiter's waiting path to acquiring a slot or timing out, labeled by provider. Requests that took a free slot immediately are not observed — this measures contention, not service time. A request that times out is observed at its full maxConcurrentWait, so the distribution's upper edge reads the configured wait window.",
+			Buckets: QueueWaitBucketsSeconds,
+		},
+		[]string{"provider"},
+	)
+}
+
+// PreInitRejection creates the rejection series for provider at zero: every
+// (provider, reason) counter and the provider's queue-wait histogram. Call
+// it once per configured provider at boot, before the router serves.
+//
+// The counter pre-initialization is load-bearing, not cosmetic: `reason` is
+// a bounded enum and a reason that has not fired yet has no series, so
+// `rate(ccrouter_rejected_total{reason="cold_start"}[5m])` returns no data
+// rather than 0 and an alert on it never evaluates. The histogram is seeded
+// for the same reason — an unobserved HistogramVec exports nothing, so a
+// panel for a provider that has never queued would read "no data" instead of
+// an empty-but-present distribution.
+func (m *Metrics) PreInitRejection(provider string) {
+	for _, reason := range rejectionReasons {
+		m.RejectedTotal.WithLabelValues(provider, reason).Add(0)
+	}
+	m.QueueWaitSeconds.WithLabelValues(provider)
+}
+
 // Register registers all collectors against reg. Pass a fresh registry
 // in tests; pass the registry the /metrics endpoint scrapes in
 // production. Returns the first registration error (if any) so caller
 // can decide whether to abort startup.
 func (m *Metrics) Register(reg prometheus.Registerer) error {
-	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds, m.ColdPrefillBudgetTokens, m.BreakerStateTransitionsTotal, m.InFlight} {
+	for _, c := range []prometheus.Collector{m.RequestsTotal, m.RequestDuration, m.AliasResolutions, m.TokensTotal, m.CacheTokensTotal, m.ThrottledTotal, m.ColdAdmissionDelayedTotal, m.ColdAdmissionRefusedTotal, m.ColdTokensInFlight, m.ColdTTFTSeconds, m.ColdPrefillBudgetTokens, m.BreakerStateTransitionsTotal, m.RejectedTotal, m.QueueWaitSeconds, m.InFlight} {
 		if err := reg.Register(c); err != nil {
 			return err
 		}
@@ -272,6 +374,23 @@ func (m *Metrics) ObserveRequest(
 ) {
 	m.RequestsTotal.WithLabelValues(provider, model, statusClass(status, isRouterError)).Inc()
 	m.RequestDuration.WithLabelValues(provider, model).Observe(latencySeconds)
+}
+
+// ObserveRejection increments ccrouter_rejected_total for a 429 the router
+// answered, labeled by the cause the refusing gate recorded. It is called
+// once per 429 from the router's single post-dispatch observation point —
+// the gates record their reason on the request's shared rejection slot
+// instead of incrementing the counter themselves, because the gates are
+// nested (a host limiter outside a member limiter, a throttle gate outside
+// a cold-start gate) and a per-gate increment would double-count a request
+// an outer gate refused after an inner one had already recorded.
+//
+// reason must be one of the rejectionReason* constants; the caller resolves
+// an unclaimed 429 to rejectionReasonUpstream. No bounded-enum guard is
+// applied here because every caller passes a constant, and a guard would
+// silently drop a future reason rather than fail loudly at the call site.
+func (m *Metrics) ObserveRejection(provider, reason string) {
+	m.RejectedTotal.WithLabelValues(provider, reason).Inc()
 }
 
 // ObserveTokens increments the ccrouter_tokens_total counter by count

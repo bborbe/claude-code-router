@@ -286,6 +286,11 @@ func CreateRouterFromConfig(
 		default:
 		}
 		prov := cfg.Providers[name]
+		// Pre-initialize this provider's rejection series before the router
+		// serves: `reason` is a bounded enum, so an unfired reason would
+		// otherwise have no series and `rate(...)` would return no data
+		// rather than 0 (see Metrics.PreInitRejection).
+		metrics.PreInitRejection(name)
 		members, caps, inflights, queueds, err := buildUpstreamMembers(
 			ctx,
 			name,
@@ -293,6 +298,7 @@ func CreateRouterFromConfig(
 			cfg.DefaultToken,
 			cfg.UpstreamHostLimits,
 			o.currentDateTime,
+			metrics,
 			hostLimiters,
 		)
 		if err != nil {
@@ -459,6 +465,7 @@ func buildUpstreamMembers(
 	defaultToken string,
 	hostLimits map[string]pkg.HostLimit,
 	now libtime.CurrentDateTimeGetter,
+	metrics *handler.Metrics,
 	hostLimiters map[string]*handler.HostLimiter,
 ) ([]handler.UpstreamMember, []int, []func() int, []func() int, error) {
 	upstreams := prov.UpstreamList()
@@ -516,8 +523,10 @@ func buildUpstreamMembers(
 		}
 		memberHandler := handler.NewConcurrencyLimiter(
 			proxy,
+			name,
 			up.MaxConcurrentRequests,
 			time.Duration(waitSeconds)*time.Second,
+			metrics.QueueWaitSeconds,
 		)
 		// Captured from the UNWRAPPED member limiter, before the host cap is
 		// wrapped outside it (spec 019): least-loaded selection and the

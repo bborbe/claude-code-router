@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // limiter429Body is the Anthropic-shaped rate_limit_error envelope written
@@ -27,8 +29,23 @@ const limiter429Body = `{"type":"error","error":{"type":"rate_limit_error","mess
 // retryAfterSeconds > 0 adds an integer Retry-After header; 0 omits it, which
 // is the shape the concurrency limiter and the throttle gate have always used
 // and which the cold-start gate overrides with its clamped 1–60. Shared by all
-// three so the envelope and the header write cannot drift apart.
-func writeRateLimited(w http.ResponseWriter, retryAfterSeconds int) {
+// four so the envelope and the header write cannot drift apart.
+//
+// reason is the gate's own cause (one of the rejectionReason* constants) and is
+// recorded on the request's shared slot before the write, so the router's
+// single post-dispatch observation point can attribute the 429. It is a
+// required parameter rather than an optional one on purpose: every caller
+// already knows which gate it is, so making the reason positional means a
+// future 429 site cannot be added without naming its cause — the alternative,
+// each gate incrementing the counter itself, is what makes a nested-gate
+// double count possible.
+func writeRateLimited(
+	w http.ResponseWriter,
+	r *http.Request,
+	retryAfterSeconds int,
+	reason string,
+) {
+	recordRejection(r, reason)
 	w.Header().Set("Content-Type", "application/json")
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
@@ -55,30 +72,56 @@ func writeRateLimited(w http.ResponseWriter, retryAfterSeconds int) {
 // what is waiting.
 // maxConcurrentWait must be > 0; the factory resolves the 30s default
 // (spec DB 5) before constructing.
+//
+// provider labels the queue-wait histogram; queueWait, when non-nil, is
+// observed with how long a request waited for a slot — on the acquire path
+// and on the timeout path, but never for a request that took a free slot on
+// its first attempt, because that request never queued and observing it
+// would fold service-free requests into a distribution meant to measure
+// contention. A nil queueWait disables the observation without changing the
+// request path, so a caller with no metrics wiring (tests) behaves exactly
+// as before.
 func NewConcurrencyLimiter(
 	next http.Handler,
+	provider string,
 	maxConcurrentRequests int,
 	maxConcurrentWait time.Duration,
+	queueWait *prometheus.HistogramVec,
 ) http.Handler {
 	if maxConcurrentRequests <= 0 {
 		return next
 	}
 	return &concurrencyLimiter{
-		next: next,
-		sem:  make(chan struct{}, maxConcurrentRequests),
-		wait: maxConcurrentWait,
+		next:      next,
+		provider:  provider,
+		sem:       make(chan struct{}, maxConcurrentRequests),
+		wait:      maxConcurrentWait,
+		queueWait: queueWait,
 	}
 }
 
 type concurrencyLimiter struct {
-	next http.Handler
-	sem  chan struct{}
-	wait time.Duration
+	next     http.Handler
+	provider string
+	sem      chan struct{}
+	wait     time.Duration
+	// queueWait is the ccrouter_queue_wait_seconds histogram, or nil when
+	// the caller wired no metrics.
+	queueWait *prometheus.HistogramVec
 	// waiters counts requests currently blocked waiting for a slot — those
 	// that found every slot held and have not yet acquired one. Incremented
 	// on entering the queued path and decremented on every exit from it, so
 	// a request that takes a free slot immediately is never counted.
 	waiters atomic.Int64
+}
+
+// observeQueueWait records how long a request spent in the waiting path.
+// A nil histogram (no metrics wiring) makes this a no-op.
+func (l *concurrencyLimiter) observeQueueWait(waited time.Duration) {
+	if l.queueWait == nil {
+		return
+	}
+	l.queueWait.WithLabelValues(l.provider).Observe(waited.Seconds())
 }
 
 // InFlight returns the number of slots currently held — the number of
@@ -124,19 +167,28 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.waiters.Add(1)
+	// queuedAt is taken with the monotonic clock: this measures elapsed
+	// time inside one process, where a wall-clock reading could move
+	// backwards under an NTP step and report a negative wait.
+	queuedAt := time.Now()
 
 	timer := time.NewTimer(l.wait)
 	defer timer.Stop()
 	select {
 	case l.sem <- struct{}{}:
+		l.observeQueueWait(time.Since(queuedAt))
 	case <-timer.C:
 		l.waiters.Add(-1)
-		writeRateLimited(w, 0)
+		l.observeQueueWait(time.Since(queuedAt))
+		writeRateLimited(w, r, 0, rejectionReasonQueueTimeout)
 		return
 	case <-r.Context().Done():
 		// Client disconnected while queued: return without acquiring a
 		// slot and without forwarding. No response write is needed — the
-		// write would fail harmlessly on the dead connection.
+		// write would fail harmlessly on the dead connection. The wait is
+		// not observed either: the request was neither admitted nor
+		// refused by the limiter, so it belongs in neither the queue-wait
+		// distribution nor the rejection counter.
 		l.waiters.Add(-1)
 		return
 	}

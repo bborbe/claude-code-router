@@ -393,7 +393,7 @@ func (g *coldStartGate) refuse(w http.ResponseWriter, r *http.Request, reason st
 	if g.metrics.Refused != nil {
 		g.metrics.Refused.WithLabelValues(g.provider).Inc()
 	}
-	writeRateLimited(w, g.retryAfterSeconds())
+	writeRateLimited(w, r, g.retryAfterSeconds(), rejectionReasonColdStart)
 }
 
 // retryAfterSeconds is the integer Retry-After header value: the max wait in

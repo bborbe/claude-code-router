@@ -419,6 +419,13 @@ func newModelRouter(
 		// -> a uniform `/0` suffix, never conditionally omitted.
 		slot := &upstreamIndexSlot{}
 		r = r.WithContext(ContextWithUpstreamIndex(r.Context(), slot))
+		// Per-request rejection slot: whichever 429-producing gate answers
+		// this request records its reason here, and the router reads it back
+		// below to increment ccrouter_rejected_total once. Counting at this
+		// single point rather than inside each gate is what keeps a nested
+		// refusal from being counted twice — see rejection-reason.go.
+		rejection := &rejectionSlot{}
+		r = r.WithContext(ContextWithRejectionReason(r.Context(), rejection))
 		// In-flight gauge: Start immediately before dispatch and defer the
 		// end function so the count comes back down on every exit from the
 		// target — success, upstream error, client cancel, or a panic in the
@@ -441,6 +448,12 @@ func newModelRouter(
 
 		modelLabel := resolveModelLabel(model, origModel)
 		metrics.ObserveRequest(providerName, modelLabel, status, latency.Seconds(), false)
+		// Split the 429s out of the single 4xx_rate_limited status_class by
+		// cause. A 429 the upstream itself returned carries no recorded
+		// reason and resolves to rejectionReasonUpstream.
+		if status == http.StatusTooManyRequests {
+			metrics.ObserveRejection(providerName, rejectionReasonOf(rejection))
+		}
 		glog.V(4).
 			Infof("[inbound.end] %s %s status=%d latency=%s", r.Method, r.URL.Path, status, latency)
 

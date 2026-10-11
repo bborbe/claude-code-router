@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: split the router's HTTP 429s by cause and measure queue contention. Two additive series: `ccrouter_rejected_total{provider,reason}` — why the router answered 429, with `reason` one of the bounded enum `queue_timeout` (the concurrency limiter's own wait window), `throttle` (the pacing queue's overflow), `cold_start` (the cold-start admission gate's refusal), `circuit_open` (the breaker refusing while open or half-open) or `upstream` (a 429 the upstream itself returned) — and `ccrouter_queue_wait_seconds{provider}` — how long a request waited for a concurrency slot before acquiring one or timing out, observed on both of those paths but not for a request that took a free slot on its first attempt, so the distribution measures contention rather than service time. All five `reason` series are pre-initialized to 0 per provider, so `rate()` reads 0 rather than no data for a reason that has not fired yet. The reason is recorded once, by the model router after dispatch, from a per-request slot that each refusing gate writes: the gates nest (a host limiter outside a member limiter, a throttle gate outside a cold-start gate), so a per-gate increment would double-count a request an outer gate refuses after an inner one recorded it. `ccrouter_requests_total{status_class="4xx_rate_limited"}` still counts every 429 — these series split that one value by cause, and the `status_class` enum is unchanged.
+
 ## v0.53.1
 
 - fix: recognise Claude Code sessions as warm in the cold-start gate. The session middleware now falls back to `X-Claude-Code-Session-Id` (sent by Claude Code on every request) when `X-Session-Id` is absent; previously every Claude Code request was charged as a cold prefill, queued up to 30 s and often refused with HTTP 429. `X-Session-Id` still wins when both are present, and `X-Claude-Code-Session-Id` is forwarded unchanged.

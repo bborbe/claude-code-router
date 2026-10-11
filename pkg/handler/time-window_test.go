@@ -181,11 +181,11 @@ var _ = Describe("UpstreamPoolHandler time windows", func() {
 			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 				windowedMember(
 					"https://day", "08:00 Europe/Berlin", "18:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(dayCounter, 16, stdtime.Second), clock,
+					handler.NewConcurrencyLimiter(dayCounter, "", 16, stdtime.Second, nil), clock,
 				),
 				windowedMember(
 					"https://night", "18:00 Europe/Berlin", "08:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(nightCounter, 50, stdtime.Second), clock,
+					handler.NewConcurrencyLimiter(nightCounter, "", 50, stdtime.Second, nil), clock,
 				),
 			})
 
@@ -404,11 +404,11 @@ var _ = Describe("UpstreamPoolHandler time windows", func() {
 			pool := handler.NewUpstreamPoolHandler(context.Background(), []handler.UpstreamMember{
 				windowedMember(
 					"https://day", "08:00 Europe/Berlin", "18:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(dayCounter, 16, stdtime.Second), clock,
+					handler.NewConcurrencyLimiter(dayCounter, "", 16, stdtime.Second, nil), clock,
 				),
 				windowedMember(
 					"https://night", "18:00 Europe/Berlin", "08:00 Europe/Berlin",
-					handler.NewConcurrencyLimiter(nightCounter, 50, stdtime.Second), clock,
+					handler.NewConcurrencyLimiter(nightCounter, "", 50, stdtime.Second, nil), clock,
 				),
 			})
 			_ = flag.Set("logtostderr", "true")
@@ -720,16 +720,24 @@ var _ = Describe("UpstreamPoolHandler weekday eligibility (days)", func() {
 				"saturday, sunday Europe/Berlin",
 				handler.NewConcurrencyLimiter(
 					labelHandler("weekend"),
+					"",
 					50,
 					stdtime.Second,
+					nil,
 				),
 				clock,
 				nil,
 			)
 			day := handler.UpstreamMember{
 				Upstream: "https://day",
-				Handler:  handler.NewConcurrencyLimiter(labelHandler("day"), 16, stdtime.Second),
-				Weight:   1,
+				Handler: handler.NewConcurrencyLimiter(
+					labelHandler("day"),
+					"",
+					16,
+					stdtime.Second,
+					nil,
+				),
+				Weight: 1,
 				Window: &pkg.Window{
 					From:  mustTOD("08:00 Europe/Berlin"),
 					Until: mustTOD("18:00 Europe/Berlin"),
@@ -739,8 +747,14 @@ var _ = Describe("UpstreamPoolHandler weekday eligibility (days)", func() {
 			}
 			night := handler.UpstreamMember{
 				Upstream: "https://night",
-				Handler:  handler.NewConcurrencyLimiter(labelHandler("night"), 50, stdtime.Second),
-				Weight:   1,
+				Handler: handler.NewConcurrencyLimiter(
+					labelHandler("night"),
+					"",
+					50,
+					stdtime.Second,
+					nil,
+				),
+				Weight: 1,
 				Window: &pkg.Window{
 					From:  mustTOD("18:00 Europe/Berlin"),
 					Until: mustTOD("08:00 Europe/Berlin"),
