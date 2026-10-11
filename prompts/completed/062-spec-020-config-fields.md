@@ -1,7 +1,13 @@
 ---
-spec: ["020"]
-status: draft
+status: completed
+spec: [020-ttft-backpressure-and-circuit-breaker]
+summary: Added the two optional per-provider config knobs ttftBackpressureThresholdSeconds and breakerFailureThreshold to pkg/config.go with lenient zero-value semantics, added yaml-boundary test rows, and extracted the spec-018 throttle Context into pkg/config_throttle_test.go to stay inside the 2000-line revive limit
+execution_id: claude-code-router-backpressure-exec-062-spec-020-config-fields
+dark-factory-version: v0.196.0
 created: "2026-10-11T09:12:32Z"
+queued: "2026-10-11T10:05:40Z"
+started: "2026-10-11T10:06:55Z"
+completed: "2026-10-11T10:12:30Z"
 ---
 
 # Config: TTFT backpressure and circuit-breaker provider knobs

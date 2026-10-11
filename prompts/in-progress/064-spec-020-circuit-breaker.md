@@ -1,7 +1,8 @@
 ---
-spec: ["020"]
-status: draft
+status: approved
+spec: [020-ttft-backpressure-and-circuit-breaker]
 created: "2026-10-11T09:12:32Z"
+queued: "2026-10-11T10:05:40Z"
 ---
 
 # Circuit breaker: consecutive-failure gate with open / half-open / closed

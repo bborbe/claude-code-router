@@ -1090,10 +1090,10 @@ upstreamHostLimits:
 		})
 	})
 
-	Context("throttle429Threshold", func() {
+	Context("ttftBackpressureThresholdSeconds and breakerFailureThreshold", func() {
 		// These are yaml-boundary tests: a wrong yaml tag would silently
 		// leave the fields zero, so every fixture goes through Load, not
-		// struct literals (spec 018 AC 1/2).
+		// struct literals (spec 020 AC 1/2).
 		loadProvider := func(extra string) (*pkgcfg.Config, error) {
 			p := write(`
 router:
@@ -1107,61 +1107,77 @@ providers:
 		}
 
 		It(
-			"loads both fields when a provider sets throttle429Threshold and throttleMaxDelaySeconds",
+			"loads both fields when a provider sets ttftBackpressureThresholdSeconds and breakerFailureThreshold",
 			func() {
 				cfg, err := loadProvider(`
-    throttle429Threshold: 3
-    throttleMaxDelaySeconds: 30
+    ttftBackpressureThresholdSeconds: 20
+    breakerFailureThreshold: 5
 `)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(3))
-				Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(30))
+				Expect(cfg.Providers["anthropic"].TtftBackpressureThresholdSeconds).To(Equal(20))
+				Expect(cfg.Providers["anthropic"].BreakerFailureThreshold).To(Equal(5))
 			},
 		)
 
 		It("leaves both fields 0 when a provider sets neither — identical to today", func() {
 			cfg, err := loadProvider(``)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].TtftBackpressureThresholdSeconds).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].BreakerFailureThreshold).To(Equal(0))
 		})
 
-		It("loads only throttle429Threshold, leaving throttleMaxDelaySeconds 0", func() {
+		It(
+			"loads only ttftBackpressureThresholdSeconds, leaving breakerFailureThreshold 0",
+			func() {
+				cfg, err := loadProvider(`
+    ttftBackpressureThresholdSeconds: 20
+`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Providers["anthropic"].TtftBackpressureThresholdSeconds).To(Equal(20))
+				// 0 disables the breaker at wiring, not at load.
+				Expect(cfg.Providers["anthropic"].BreakerFailureThreshold).To(Equal(0))
+			},
+		)
+
+		It(
+			"loads only breakerFailureThreshold, leaving ttftBackpressureThresholdSeconds 0",
+			func() {
+				cfg, err := loadProvider(`
+    breakerFailureThreshold: 5
+`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Providers["anthropic"].BreakerFailureThreshold).To(Equal(5))
+				// 0 disables the loop at wiring, not at load.
+				Expect(cfg.Providers["anthropic"].TtftBackpressureThresholdSeconds).To(Equal(0))
+			},
+		)
+
+		It("loads a negative ttftBackpressureThresholdSeconds with no error", func() {
 			cfg, err := loadProvider(`
-    throttle429Threshold: 3
+    ttftBackpressureThresholdSeconds: -1
 `)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(3))
-			// 0 resolves to the 30s default at wiring, not at load.
-			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
+			// The loop resolves <= 0 to disabled at wiring.
+			Expect(cfg.Providers["anthropic"].TtftBackpressureThresholdSeconds).To(Equal(-1))
 		})
 
-		It("loads a negative throttle429Threshold with no error", func() {
+		It("loads a negative breakerFailureThreshold with no error", func() {
 			cfg, err := loadProvider(`
-    throttle429Threshold: -1
+    breakerFailureThreshold: -1
 `)
 			Expect(err).NotTo(HaveOccurred())
-			// The factory resolves <= 0 to disabled at wiring.
-			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(-1))
+			// The breaker resolves <= 0 to disabled at wiring.
+			Expect(cfg.Providers["anthropic"].BreakerFailureThreshold).To(Equal(-1))
 		})
 
-		It("loads a negative throttleMaxDelaySeconds with no error", func() {
+		It("loads explicit zeroes as valid — both disabled", func() {
 			cfg, err := loadProvider(`
-    throttleMaxDelaySeconds: -1
+    ttftBackpressureThresholdSeconds: 0
+    breakerFailureThreshold: 0
 `)
 			Expect(err).NotTo(HaveOccurred())
-			// The factory resolves <= 0 to the 30s default at wiring.
-			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(-1))
-		})
-
-		It("loads explicit zeroes as valid — disabled / default-resolved respectively", func() {
-			cfg, err := loadProvider(`
-    throttle429Threshold: 0
-    throttleMaxDelaySeconds: 0
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Providers["anthropic"].Throttle429Threshold).To(Equal(0))
-			Expect(cfg.Providers["anthropic"].ThrottleMaxDelaySeconds).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].TtftBackpressureThresholdSeconds).To(Equal(0))
+			Expect(cfg.Providers["anthropic"].BreakerFailureThreshold).To(Equal(0))
 		})
 	})
 
