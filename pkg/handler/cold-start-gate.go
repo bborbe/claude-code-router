@@ -27,10 +27,15 @@ const (
 	// coldGateDeltaMarker is the SSE/JSON marker whose first appearance in
 	// the response stream means prefill has finished.
 	coldGateDeltaMarker = "content_block_delta"
-	// coldGateRateBurst is the fixed burst of newly-seen session ids a
-	// provider admits immediately before the refill applies (spec 019
-	// DB 3). Fixed internal constant, not a config knob.
-	coldGateRateBurst = 2
+	// coldGateRateTokenCap is the capacity of the per-minute new-session
+	// token bucket (spec 019 DB 3). It is 1, so a newly-seen session id is
+	// admitted at most one ahead of the per-minute refill: there is no
+	// burst, and admissions are spaced by the refill interval (60s/rate).
+	// The operator asked for exactly this — "about one new session every
+	// 30 s (2/min) instead of the 4/min-with-burst-2 design" — so the
+	// bucket must never hold a second token. Fixed internal constant, not
+	// a config knob.
+	coldGateRateTokenCap = 1
 	// coldGateQueueCapacity is the fixed bounded queue capacity (spec 019
 	// DB 4): at most this many cold requests wait; a request arriving when
 	// the queue is full is refused immediately. Fixed internal constant,
@@ -129,7 +134,7 @@ func NewColdStartGate(
 		seen:           make(map[string]stdtime.Time),
 		notify:         make(chan struct{}),
 		queue:          make(chan struct{}, coldGateQueueCapacity),
-		rateTokens:     coldGateRateBurst,
+		rateTokens:     coldGateRateTokenCap,
 		rateLastRefill: now().Time(),
 	}
 }
@@ -397,7 +402,7 @@ func (g *coldStartGate) refillLocked(at stdtime.Time) {
 	if g.rate <= 0 {
 		return
 	}
-	if g.rateTokens >= coldGateRateBurst {
+	if g.rateTokens >= coldGateRateTokenCap {
 		g.rateLastRefill = at
 		return
 	}
@@ -406,8 +411,8 @@ func (g *coldStartGate) refillLocked(at stdtime.Time) {
 		return
 	}
 	g.rateTokens += earned
-	if g.rateTokens > coldGateRateBurst {
-		g.rateTokens = coldGateRateBurst
+	if g.rateTokens > coldGateRateTokenCap {
+		g.rateTokens = coldGateRateTokenCap
 	}
 	g.rateLastRefill = g.rateLastRefill.Add(
 		stdtime.Duration(earned) * stdtime.Minute / stdtime.Duration(g.rate),

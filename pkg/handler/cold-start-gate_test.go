@@ -546,32 +546,30 @@ var _ = Describe("ColdStartGate", func() {
 		Eventually(zeroInFlight(gate), "1s", "10ms").Should(Equal(0))
 	})
 
-	It("admits the fixed burst of new sessions and holds the next until the rate refills", func() {
+	It("admits one new session immediately and holds the next until the rate refills", func() {
 		inner := newColdStub("")
 		inner.block = make(chan struct{})
 		gate := newColdGateFull(inner, 1_000_000, 2, 30*stdtime.Second)
 		body := strings.Repeat("x", coldBody)
 
 		done1 := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s1", body))
-		done2 := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s2", body))
 		Eventually(inner.entryCount, "1s", "10ms").
-			Should(Equal(2), "the fixed burst of two is admitted immediately")
+			Should(Equal(1), "the bucket's single token admits the first new session immediately")
 
-		done3 := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s3", body))
+		done2 := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s2", body))
 		Consistently(inner.entryCount, "150ms", "15ms").
-			Should(Equal(2), "the third distinct id exceeds the rate and must wait")
+			Should(Equal(1), "there is no burst — the second distinct id must wait")
 
 		// Advance the injected clock by the refill interval (60s / rate 2 =
-		// 30s), then release the two held reservations so their broadcasts
-		// wake the waiter. A clock advance alone wakes no one.
+		// 30s), then release the held reservation so its broadcast wakes the
+		// waiter. A clock advance alone wakes no one.
 		clock.SetNow(libtime.DateTime(t0.Time().Add(30 * stdtime.Second)))
 		close(inner.block)
 		Eventually(inner.entryCount, "1s", "10ms").
-			Should(Equal(3), "the refilled bucket admits the waiter")
+			Should(Equal(2), "the refilled bucket admits the waiter")
 
 		Eventually(done1, "1s").Should(BeClosed())
 		Eventually(done2, "1s").Should(BeClosed())
-		Eventually(done3, "1s").Should(BeClosed())
 	})
 
 	It("charges one rate unit for two concurrent first requests with the same session id", func() {
@@ -582,27 +580,23 @@ var _ = Describe("ColdStartGate", func() {
 
 		// Fired concurrently: whichever commits first is charged, the other
 		// observes the id as seen and forwards warm — one rate unit for the
-		// pair, leaving one of the two burst tokens for the next id.
+		// pair, which is the bucket's entire capacity, so the next distinct
+		// id has nothing left to draw on.
 		doneA := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s1", body))
 		doneB := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s1", body))
 		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(2))
 
 		doneC := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s2", body))
-		Eventually(inner.entryCount, "1s", "10ms").
-			Should(Equal(3), "the pair consumed one of the two burst tokens")
-
-		doneD := serveAsync(gate, httptest.NewRecorder(), sizedRequest("s3", body))
 		Consistently(inner.entryCount, "150ms", "15ms").
-			Should(Equal(3), "both burst tokens are spent — the third distinct id waits")
+			Should(Equal(2), "the pair consumed the single rate token — the next distinct id waits")
 
 		clock.SetNow(libtime.DateTime(t0.Time().Add(30 * stdtime.Second)))
 		close(inner.block)
-		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(4))
+		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(3))
 
 		Eventually(doneA, "1s").Should(BeClosed())
 		Eventually(doneB, "1s").Should(BeClosed())
 		Eventually(doneC, "1s").Should(BeClosed())
-		Eventually(doneD, "1s").Should(BeClosed())
 	})
 
 	It("answers 429 with the static body and a clamped Retry-After when the wait elapses", func() {

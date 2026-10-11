@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: remove the cold-start gate's fixed rate burst. The new-session token bucket now holds at most one token, so admissions are spaced by the refill interval (60s / `newSessionRatePerMinute`) rather than admitting two newly-seen session ids immediately and then refilling — at 2/min that is one new session every 30 seconds. The fixed `coldGateRateBurst` (2) becomes `coldGateRateTokenCap` (1). Only providers with `newSessionRatePerMinute` set see a behaviour change; the budget check and every other gate constant are unchanged.
+
 ## v0.50.0
 
 - feat: add per-provider cold-start admission gate. Three optional provider knobs — `coldPrefillBudgetTokens` (ceiling on in-flight cold-prefill tokens), `coldSessionWindowSeconds` (window deciding whether a session is new, default 600), and `newSessionRatePerMinute` (cap on newly-seen session ids per minute, fixed burst 2) — hold cold requests in a bounded queue (capacity 32, max wait 30s) and refuse the excess with HTTP 429 and an integer `Retry-After` (1–60) instead of overloading a backend whose cold-prefill throughput is capped. Warm sessions are never held, and the reservation is released on the first content delta. Adds four additive series `ccrouter_cold_admission_delayed_total`, `ccrouter_cold_admission_refused_total`, `ccrouter_cold_tokens_in_flight`, and `ccrouter_cold_ttft_seconds`; the `status_class` enum is unchanged.
