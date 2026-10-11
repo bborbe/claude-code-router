@@ -255,11 +255,12 @@ type Provider struct {
 	// level only.
 	ColdSessionWindowSeconds int `yaml:"coldSessionWindowSeconds,omitempty"`
 	// NewSessionRatePerMinute, when > 0, caps how many newly-seen session ids
-	// this provider admits per minute (spec 019), with a fixed burst of 2
-	// admitted immediately. A first request for an id beyond that allowance
-	// waits in the same bounded queue as a budget-blocked request. Absent, 0,
-	// or negative disables the rate check. Read at provider level only — NOT
-	// copied onto upstream members.
+	// this provider admits per minute (spec 019). Admissions are spaced by the
+	// refill interval: at most one id is admitted ahead of it, so there is no
+	// burst. A first request for an id beyond that allowance waits in the same
+	// bounded queue as a budget-blocked request. Absent, 0, or negative
+	// disables the rate check. Read at provider level only — NOT copied onto
+	// upstream members.
 	NewSessionRatePerMinute int `yaml:"newSessionRatePerMinute,omitempty"`
 }
 

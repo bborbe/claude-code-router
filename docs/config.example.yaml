@@ -71,7 +71,7 @@ providers:
     # Admit new sessions only while the backend's cold-prefill ceiling allows it.
     # coldPrefillBudgetTokens: 65536 # optional; ceiling on in-flight cold-prefill tokens for THIS provider. Absent or 0 or negative = budget check off.
     # coldSessionWindowSeconds: 600 # optional; window deciding whether a session is new (default 600)
-    # newSessionRatePerMinute: 4 # optional; cap on newly-seen session ids admitted per minute. Absent or 0 or negative = rate check off.
+    # newSessionRatePerMinute: 2 # optional; cap on newly-seen session ids admitted per minute (no burst — admissions are spaced by the refill interval). Absent or 0 or negative = rate check off.
     # upstreams:                   # optional; alternative to `upstream:` — a pool of servers (see docs/config.md ## Upstream pools).
     #   - upstream: http://localhost:11434
     #     token: "ollama"
