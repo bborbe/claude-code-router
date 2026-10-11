@@ -157,7 +157,7 @@ type Provider struct {
 	// Token, if set, replaces the client's Authorization header with
 	// "Bearer <Token>". If empty, the client's Authorization is
 	// forwarded verbatim — used for the subscription-OAuth case.
-	Token string `yaml:"token,omitempty"                    display:"length"`
+	Token string `yaml:"token,omitempty"                            display:"length"`
 	// Models is the list of glob patterns (filepath.Match syntax) the
 	// router uses to match request body's `model` field. Examples:
 	// "claude-opus-*", "MiniMax-*", "qwen*".
@@ -186,7 +186,7 @@ type Provider struct {
 	// A key must NOT be claimed by more than one provider (validation
 	// error, see Config.Validate). Absent, null, and empty all mean: this
 	// provider claims no keys, so it is only reachable via glob routing.
-	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"           display:"length"`
+	AllowedApiKeys []string `yaml:"allowedApiKeys,omitempty"                   display:"length"`
 	// MaxConcurrentRequests, when > 0, caps how many /v1/* requests this
 	// provider forwards upstream at the same time. Requests beyond the cap
 	// queue for up to MaxConcurrentWaitSeconds; a request still waiting
@@ -262,6 +262,28 @@ type Provider struct {
 	// disables the rate check. Read at provider level only — NOT copied onto
 	// upstream members.
 	NewSessionRatePerMinute int `yaml:"newSessionRatePerMinute,omitempty"`
+	// TtftBackpressureThresholdSeconds, when > 0, enables the per-provider
+	// TTFT backpressure loop (spec 020): once per fixed 60s window the
+	// provider's median cold time-to-first-token (seconds) is compared with
+	// this threshold — a median above it, or any upstream failure observed in
+	// the window, halves the effective cold-prefill budget; a clean window
+	// grows it back by a fixed step. It has an effect only when the cold-start
+	// gate is enabled (ColdPrefillBudgetTokens > 0), because it adjusts that
+	// budget; with no cold budget configured the knob is inert. Absent, 0, or
+	// negative disables the loop — byte-for-byte current behaviour. Read at
+	// provider level only — NOT copied onto upstream members (like the
+	// throttle and cold knobs).
+	TtftBackpressureThresholdSeconds int `yaml:"ttftBackpressureThresholdSeconds,omitempty"`
+	// BreakerFailureThreshold, when > 0, enables the per-provider circuit
+	// breaker (spec 020): after this many consecutive upstream failures — a
+	// 5xx response, including the router's reverse proxy answering 502/504
+	// for an upstream timeout — the provider is opened and every request to it
+	// is answered HTTP 429 with a Retry-After for the fixed open period,
+	// without invoking the upstream. A non-5xx response resets the count. It is
+	// independent of the cold-start gate. Absent, 0, or negative disables the
+	// breaker — byte-for-byte current behaviour. Read at provider level only —
+	// NOT copied onto upstream members.
+	BreakerFailureThreshold int `yaml:"breakerFailureThreshold,omitempty"`
 }
 
 // Window is an optional per-upstream time-of-day eligibility window
