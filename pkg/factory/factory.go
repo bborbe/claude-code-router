@@ -255,6 +255,11 @@ func CreateRouterFromConfig(
 	// provider's upstream list.
 	upCaps := make(map[string][]int, len(cfg.Providers))
 	upInFlight := make(map[string][]func() int, len(cfg.Providers))
+	// upQueued is the queued counterpart of upInFlight: each provider's
+	// per-member count of requests blocked waiting for a member slot, nil
+	// for an uncapped member. The two feed the exported dispatched/queued
+	// gauge pair (registerProviderInFlight).
+	upQueued := make(map[string][]func() int, len(cfg.Providers))
 	// One shared HostLimiter per distinct upstream host (spec 019), keyed
 	// by pkg.UpstreamHostKey. Every member resolving to the same host —
 	// across providers and across pool members — is wrapped by the same
@@ -276,7 +281,7 @@ func CreateRouterFromConfig(
 		default:
 		}
 		prov := cfg.Providers[name]
-		members, caps, inflights, err := buildUpstreamMembers(
+		members, caps, inflights, queueds, err := buildUpstreamMembers(
 			ctx,
 			name,
 			prov,
@@ -290,6 +295,7 @@ func CreateRouterFromConfig(
 		}
 		upCaps[name] = caps
 		upInFlight[name] = inflights
+		upQueued[name] = queueds
 		providerHandler := handler.NewUpstreamPoolHandler(ctx, members)
 		// The cold-start admission gate wraps the provider's pool handler
 		// (spec 019) BEFORE the throttle gate, so the existing 429 delay
@@ -371,6 +377,9 @@ func CreateRouterFromConfig(
 	if err := registerUpstreamInFlight(ctx, o.metricsRegisterer, hostLimiters); err != nil {
 		return nil, err
 	}
+	if err := registerProviderInFlight(ctx, o.metricsRegisterer, upInFlight, upQueued); err != nil {
+		return nil, err
+	}
 	modelRouter := handler.NewModelRouterWithPools(
 		routes,
 		cfg.Router.DefaultProvider,
@@ -405,9 +414,10 @@ func CreateRouterFromConfig(
 }
 
 // buildUpstreamMembers resolves one provider's upstreams into runtime pool
-// members plus the parallel cap and in-flight slices the model pools read
-// (spec 013): caps[i] is upstream i's MaxConcurrentRequests and inflights[i]
-// its live in-flight counter (nil for an uncapped member). Each member is
+// members plus the parallel cap, in-flight and queued slices the model pools
+// read (spec 013): caps[i] is upstream i's MaxConcurrentRequests, inflights[i]
+// its live in-flight counter and queueds[i] its count of requests blocked
+// waiting for a slot (both nil for an uncapped member). Each member is
 // wrapped by its own concurrency limiter and then, outermost, by the shared
 // per-host limiter for its upstream host (spec 019) — a request takes its host
 // slot before its member slot. hostLimiters is mutated in place: the first
@@ -421,20 +431,21 @@ func buildUpstreamMembers(
 	hostLimits map[string]pkg.HostLimit,
 	now libtime.CurrentDateTimeGetter,
 	hostLimiters map[string]*handler.HostLimiter,
-) ([]handler.UpstreamMember, []int, []func() int, error) {
+) ([]handler.UpstreamMember, []int, []func() int, []func() int, error) {
 	upstreams := prov.UpstreamList()
 	members := make([]handler.UpstreamMember, 0, len(upstreams))
 	caps := make([]int, 0, len(upstreams))
 	inflights := make([]func() int, 0, len(upstreams))
+	queueds := make([]func() int, 0, len(upstreams))
 	for _, up := range upstreams {
 		select {
 		case <-ctx.Done():
-			return nil, nil, nil, ctx.Err()
+			return nil, nil, nil, nil, ctx.Err()
 		default:
 		}
 		upstream, err := url.Parse(up.Upstream)
 		if err != nil {
-			return nil, nil, nil, errors.Wrapf(
+			return nil, nil, nil, nil, errors.Wrapf(
 				ctx,
 				err,
 				"provider %q: parse upstream %q",
@@ -479,15 +490,14 @@ func buildUpstreamMembers(
 			up.MaxConcurrentRequests,
 			time.Duration(waitSeconds)*time.Second,
 		)
-		var inFlight func() int
-		if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
-			inFlight = limiter.InFlight
-		}
+		// Captured from the UNWRAPPED member limiter, before the host cap is
+		// wrapped outside it (spec 019): least-loaded selection and the
+		// exported dispatched/queued gauges read the MEMBER's occupancy, not
+		// the host's, so a request waiting for a host slot is attributed to no
+		// provider.
+		inFlight, queued := memberCounters(memberHandler)
 		// Host cap OUTSIDE the per-member limiter (spec 019): a request takes
-		// its host slot first, then its member slot. inFlight above was
-		// captured from the unwrapped member limiter on purpose — least-loaded
-		// selection and model-pool saturation read the MEMBER's occupancy,
-		// not the host's.
+		// its host slot first, then its member slot.
 		memberHandler = hostLimiterFor(
 			hostLimiters,
 			hostLimits,
@@ -495,6 +505,7 @@ func buildUpstreamMembers(
 		).Wrap(memberHandler)
 		caps = append(caps, up.MaxConcurrentRequests)
 		inflights = append(inflights, inFlight)
+		queueds = append(queueds, queued)
 		members = append(members, handler.UpstreamMember{
 			Upstream: up.Upstream,
 			Handler:  memberHandler,
@@ -505,7 +516,24 @@ func buildUpstreamMembers(
 			Now:      now.Now,
 		})
 	}
-	return members, caps, inflights, nil
+	return members, caps, inflights, queueds, nil
+}
+
+// memberCounters returns a member handler's in-flight and queued counter
+// functions, either of which is nil when the member has no limiter: the
+// maxConcurrentRequests <= 0 no-op path returns next unchanged, so the
+// assertions miss and every reader treats a missing counter as 0. Both are
+// read from the handler as passed in — the caller captures them BEFORE
+// wrapping the host limiter outside — so they report the member's own
+// occupancy rather than the shared host's.
+func memberCounters(memberHandler http.Handler) (inFlight func() int, queued func() int) {
+	if limiter, ok := memberHandler.(interface{ InFlight() int }); ok {
+		inFlight = limiter.InFlight
+	}
+	if limiter, ok := memberHandler.(interface{ Queued() int }); ok {
+		queued = limiter.Queued
+	}
+	return inFlight, queued
 }
 
 // registerUpstreamInFlight registers the ccrouter_upstream_inflight{host}
@@ -521,6 +549,31 @@ func registerUpstreamInFlight(
 ) error {
 	if err := reg.Register(handler.NewUpstreamInFlightCollector(hostLimiters)); err != nil {
 		return errors.Wrapf(ctx, err, "register upstream inflight collector")
+	}
+	return nil
+}
+
+// registerProviderInFlight registers the per-provider dispatched/queued
+// gauge pair (ccrouter_provider_dispatched{provider} and
+// ccrouter_provider_queued{provider}) on reg: one pair of series per
+// provider this handler tree serves, read live from the provider's member
+// concurrency limiters. dispatched and queued are the same
+// provider-keyed, member-indexed slices the model pools read, so the
+// exported pair always describes the limiters actually in the request
+// path. Like registerUpstreamInFlight it is registered on the same
+// registerer as the tree's other ccrouter_* series, so a SIGHUP reload
+// (fresh registry) exposes the rebuilt tree's providers. Both maps are
+// complete and never mutated when this runs.
+func registerProviderInFlight(
+	ctx context.Context,
+	reg prometheus.Registerer,
+	dispatched map[string][]func() int,
+	queued map[string][]func() int,
+) error {
+	if err := reg.Register(
+		handler.NewProviderInFlightCollector(dispatched, queued),
+	); err != nil {
+		return errors.Wrapf(ctx, err, "register provider inflight collector")
 	}
 	return nil
 }
