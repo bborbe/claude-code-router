@@ -126,7 +126,7 @@ func (b *circuitBreaker) State() string {
 func (b *circuitBreaker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	admitted, probe := b.admit(b.now().Time())
 	if !admitted {
-		writeRateLimited(w, breakerOpenPeriodSeconds)
+		writeRateLimited(w, r, breakerOpenPeriodSeconds, rejectionReasonCircuitOpen)
 		return
 	}
 	sr := &statusRecorder{ResponseWriter: w}

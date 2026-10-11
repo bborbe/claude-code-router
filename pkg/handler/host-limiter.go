@@ -45,11 +45,18 @@ func NewHostLimiter(maxConcurrentRequests int, maxConcurrentWait time.Duration) 
 
 // Wrap returns next guarded by this host's shared budget. Every handler
 // returned by Wrap on the same HostLimiter shares one budget.
+//
+// The returned limiter reuses the concurrencyLimiter type but is built as a
+// raw literal rather than through NewConcurrencyLimiter, because a host
+// budget is not a provider's: it carries no provider label and so observes
+// neither ccrouter_queue_wait_seconds nor a per-provider reason. now is set
+// explicitly — the type's clock is read on the waiting path, and a literal
+// that omitted it would nil-panic on the first host-slot timeout.
 func (h *HostLimiter) Wrap(next http.Handler) http.Handler {
 	if h.sem == nil {
 		return &hostInFlightCounter{next: next, inFlight: &h.inFlight}
 	}
-	return &concurrencyLimiter{next: next, sem: h.sem, wait: h.wait}
+	return &concurrencyLimiter{next: next, sem: h.sem, wait: h.wait, now: realNow}
 }
 
 // InFlight returns the host's current in-flight request count: the
