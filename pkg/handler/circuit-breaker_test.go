@@ -97,6 +97,28 @@ func (s *firstBlockStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(int(s.status.Load()))
 }
 
+// panicStub records each entry and serves the configured status, or panics
+// instead once panicNext is set — the wrapped-handler panic the release row
+// uses to unwind past observe. It is local to this file because the shared
+// gateStub always writes a status.
+type panicStub struct {
+	calls     atomic.Int32
+	status    atomic.Int32
+	panicNext atomic.Bool
+}
+
+func (s *panicStub) entryCount() int { return int(s.calls.Load()) }
+
+func (s *panicStub) setStatus(status int) { s.status.Store(int32(status)) }
+
+func (s *panicStub) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	s.calls.Add(1)
+	if s.panicNext.Load() {
+		panic("router bug in the wrapped handler")
+	}
+	w.WriteHeader(int(s.status.Load()))
+}
+
 var _ = Describe("CircuitBreaker", func() {
 	It("returns next unchanged when the threshold is 0 or negative — byte-for-byte no-op", func() {
 		clock := newClock()
@@ -221,6 +243,48 @@ var _ = Describe("CircuitBreaker", func() {
 		cb.ServeHTTP(httptest.NewRecorder(), newMessagesRequest())
 		Expect(stub.entryCount()).To(Equal(4), "a second open period admits a second probe")
 	})
+
+	It(
+		"releases the half-open probe when the wrapped handler panics — the breaker is not wedged",
+		func() {
+			clock := newClock()
+			stub := &panicStub{}
+			stub.setStatus(http.StatusInternalServerError)
+			cb := handler.NewCircuitBreaker(stub, "p", 2, clock.Now, nil)
+			for i := 0; i < 2; i++ {
+				cb.ServeHTTP(httptest.NewRecorder(), newMessagesRequest())
+			}
+			Expect(breakerStateOf(cb)).To(Equal("open"))
+
+			// After the open period the next request is the half-open probe, and
+			// the wrapped handler panics: the panic unwinds past observe, so only
+			// the deferred release can clear the probe flag.
+			clock.SetNow(libtime.DateTime(t0.Time().Add(30 * stdtime.Second)))
+			stub.panicNext.Store(true)
+			Expect(func() {
+				cb.ServeHTTP(httptest.NewRecorder(), newMessagesRequest())
+			}).To(Panic())
+			Expect(stub.entryCount()).To(Equal(3), "the panicking probe reached the upstream")
+
+			// A router bug is neither health nor failure: the panic left the
+			// breaker half-open — not closed (which a healthy probe would cause)
+			// and not open (which a failing probe would cause).
+			state := breakerStateOf(cb)
+			Expect(state).NotTo(Equal("closed"), "a panic is not a healthy probe")
+			Expect(state).NotTo(Equal("open"), "a panic is not a failing probe")
+			Expect(state).To(Equal("half_open"), "the breaker stays willing to probe")
+
+			// The probe flag was released on the unwind, so the next request is
+			// admitted again (the upstream is invoked) rather than answered 429.
+			stub.panicNext.Store(false)
+			stub.setStatus(http.StatusOK)
+			rec := httptest.NewRecorder()
+			cb.ServeHTTP(rec, newMessagesRequest())
+			Expect(stub.entryCount()).To(Equal(4), "the breaker is not wedged in half-open")
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(breakerStateOf(cb)).To(Equal("closed"), "the healthy probe closes the breaker")
+		},
+	)
 
 	It(
 		"admits exactly one probe — concurrent requests are 429 while the probe is in flight",

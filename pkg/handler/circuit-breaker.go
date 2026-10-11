@@ -130,6 +130,15 @@ func (b *circuitBreaker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sr := &statusRecorder{ResponseWriter: w}
+	// observe runs only on the normal path; a panic unwinding out of the
+	// wrapped handler would otherwise leave the probe flag set forever and
+	// wedge the breaker in half-open, answering 429 until the process
+	// restarts. The deferred release is idempotent — observe has already
+	// cleared the flag on the normal path — so a panic leaves the breaker
+	// state untouched rather than reading a router bug as an upstream verdict.
+	if probe {
+		defer b.releaseProbe()
+	}
 	b.next.ServeHTTP(sr, r)
 	b.observe(sr.status, probe, b.now().Time())
 }
@@ -205,6 +214,15 @@ func (b *circuitBreaker) observe(status int, probe bool, at stdtime.Time) {
 	if b.failures >= b.threshold {
 		b.setStateLocked(breakerOpen, at)
 	}
+}
+
+// releaseProbe clears the half-open probe flag without changing the breaker
+// state, so a probe whose forwarded request never returned leaves the breaker
+// half-open and the next request becomes the probe.
+func (b *circuitBreaker) releaseProbe() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.probing = false
 }
 
 // setStateLocked assigns the new state and emits its observable effects: on
