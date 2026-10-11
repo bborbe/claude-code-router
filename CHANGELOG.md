@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.53.1
 
 - fix: recognise Claude Code sessions as warm in the cold-start gate. The session middleware now falls back to `X-Claude-Code-Session-Id` (sent by Claude Code on every request) when `X-Session-Id` is absent; previously every Claude Code request was charged as a cold prefill, queued up to 30 s and often refused with HTTP 429. `X-Session-Id` still wins when both are present, and `X-Claude-Code-Session-Id` is forwarded unchanged.
 - fix: rate-limit the `[coldgate] decision=delayed` / `decision=refused` INFO lines to about one per second per provider; `ccrouter_cold_admission_delayed_total` and `ccrouter_cold_admission_refused_total` still count every event.
