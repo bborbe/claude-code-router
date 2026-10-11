@@ -19,8 +19,13 @@ import (
 const InFlightPeakWindowSeconds = 60
 
 // InFlight is a prometheus.Collector that tracks, per provider, how many
-// requests are currently dispatched to that provider and not yet returned.
-// It exports two gauges:
+// requests have entered the provider's dispatch path and not yet returned.
+// The count is taken immediately before the provider handler runs, so it
+// includes requests queued for a concurrency slot and requests held by the
+// 429 pacing gate — it is NOT the number of requests with an open upstream
+// socket. ccrouter_provider_dispatched{provider} reports the dispatched
+// half of this count and ccrouter_provider_queued{provider} the queued
+// half. It exports two gauges:
 //
 //   - ccrouter_inflight_requests{provider} — the current count. Incremented
 //     by Start, decremented by the end function Start returns.
@@ -57,7 +62,7 @@ func NewInFlight(currentDateTime libtime.CurrentDateTimeGetter) *InFlight {
 		clock: currentDateTime,
 		currentDesc: prometheus.NewDesc(
 			"ccrouter_inflight_requests",
-			"Number of /v1/* requests currently dispatched to the provider and not yet returned, labeled by provider.",
+			"Number of /v1/* requests that have entered the provider's dispatch path and not yet returned, labeled by provider. Counts requests queued for a concurrency slot, paced by the 429 delay gate, and executing — not only those with an open upstream socket.",
 			[]string{"provider"},
 			nil,
 		),

@@ -216,4 +216,55 @@ var _ = Describe("ConcurrencyLimiter", func() {
 		Eventually(done1, "1s").Should(BeClosed())
 		Expect(rec1.Code).To(Equal(http.StatusOK))
 	})
+
+	It("splits dispatched from queued: cap 2 with 5 concurrent requests reads 2 and 3", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 2, 10*time.Second)
+		counters, ok := limiter.(interface {
+			InFlight() int
+			Queued() int
+		})
+		Expect(ok).To(BeTrue(), "a capped limiter must expose both counters")
+
+		done := make([]chan struct{}, 5)
+		for i := range done {
+			done[i] = serveAsync(limiter, httptest.NewRecorder(), newMessagesRequest())
+		}
+
+		Eventually(inner.entryCount, "1s", "10ms").
+			Should(Equal(2), "two requests must hold the two slots")
+		Eventually(counters.Queued, "1s", "10ms").
+			Should(Equal(3), "the other three must be queued")
+		Expect(counters.InFlight()).To(Equal(2), "dispatched must not exceed the cap")
+
+		close(inner.release)
+		for i := range done {
+			Eventually(done[i], "2s").Should(BeClosed())
+		}
+		Eventually(counters.InFlight, "1s", "10ms").Should(Equal(0))
+		Eventually(counters.Queued, "1s", "10ms").
+			Should(Equal(0), "queued must return to 0 once every request has run")
+	})
+
+	It("never counts a request that takes a free slot as queued", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 1, time.Second)
+		counters, ok := limiter.(interface{ Queued() int })
+		Expect(ok).To(BeTrue())
+
+		done := serveAsync(limiter, httptest.NewRecorder(), newMessagesRequest())
+		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(1))
+		Expect(counters.Queued()).To(Equal(0), "a dispatched request is not queued")
+
+		close(inner.release)
+		Eventually(done, "1s").Should(BeClosed())
+		Eventually(counters.Queued, "1s", "10ms").Should(Equal(0))
+	})
+
+	It("reports queued 0 on an uncapped limiter, which is the no-op path", func() {
+		inner := newBlockingHandler()
+		limiter := handler.NewConcurrencyLimiter(inner, 0, time.Second)
+		_, ok := limiter.(interface{ Queued() int })
+		Expect(ok).To(BeFalse(), "the <= 0 path returns next unchanged and has no counters")
+	})
 })
