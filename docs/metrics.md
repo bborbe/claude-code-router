@@ -28,7 +28,7 @@ scrape_configs:
 | `ccrouter_cold_tokens_in_flight` | `provider` | gauge | `4096` (in-flight cold tokens) |
 | `ccrouter_cold_ttft_seconds` | `provider` | histogram | `0.842` (p95 bucket) |
 | `ccrouter_upstream_inflight` | `host` | gauge | `8` (at an 8-slot host cap) |
-| `ccrouter_inflight_requests` | `provider` | gauge | `3` (currently executing) |
+| `ccrouter_inflight_requests` | `provider` | gauge | `3` (queued, paced or executing) |
 | `ccrouter_inflight_requests_peak` | `provider` | gauge | `5` (max over the last 60 s) |
 | `ccrouter_provider_dispatched` | `provider` | gauge | `2` (at a 2-slot member cap) |
 | `ccrouter_provider_queued` | `provider` | gauge | `3` (waiting for a slot) |
