@@ -124,19 +124,31 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.waiters.Add(1)
-	defer l.waiters.Add(-1)
 
 	timer := time.NewTimer(l.wait)
 	defer timer.Stop()
 	select {
 	case l.sem <- struct{}{}:
-		defer func() { <-l.sem }()
-		l.next.ServeHTTP(w, r)
 	case <-timer.C:
+		l.waiters.Add(-1)
 		writeRateLimited(w, 0)
+		return
 	case <-r.Context().Done():
 		// Client disconnected while queued: return without acquiring a
 		// slot and without forwarding. No response write is needed — the
 		// write would fail harmlessly on the dead connection.
+		l.waiters.Add(-1)
+		return
 	}
+
+	// The slot is held now, so the request has stopped waiting and must
+	// stop counting as queued BEFORE the handler runs. Decrementing on
+	// return instead would keep it counted for its whole service duration,
+	// which under saturation is exactly the condition this gauge exists to
+	// measure — queued would then over-report by roughly the number of
+	// slot-holders admitted through this path, and InFlight and Queued
+	// would no longer be disjoint.
+	l.waiters.Add(-1)
+	defer func() { <-l.sem }()
+	l.next.ServeHTTP(w, r)
 }

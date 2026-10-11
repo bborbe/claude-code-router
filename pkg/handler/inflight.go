@@ -68,7 +68,7 @@ func NewInFlight(currentDateTime libtime.CurrentDateTimeGetter) *InFlight {
 		),
 		peakDesc: prometheus.NewDesc(
 			"ccrouter_inflight_requests_peak",
-			"Maximum number of /v1/* requests dispatched to the provider in parallel over the last 60 seconds, labeled by provider. Never reset on read; always at least the current in-flight count.",
+			"Maximum number of /v1/* requests that had entered the provider's dispatch path at once over the last 60 seconds, labeled by provider. The peak of ccrouter_inflight_requests, so it counts queued, paced and executing requests alike — 'dispatched' here never means only those holding a concurrency slot. Never reset on read; always at least the current in-flight count.",
 			[]string{"provider"},
 			nil,
 		),
