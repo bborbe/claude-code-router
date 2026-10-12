@@ -71,6 +71,28 @@ providers:
     #     maxConcurrentWaitSeconds: 30 # optional; per-member queue wait before HTTP 429 (default 30)
 ```
 
+## Environment variable expansion
+
+At load, every `${NAME}` occurring anywhere in the config file text is replaced by the value of environment variable `NAME`, so a provider token or an inbound API key can be named in the file instead of written into it:
+
+```yaml
+providers:
+  anthropic:
+    upstream: https://api.anthropic.com
+    token: "${ANTHROPIC_API_KEY}"   # resolved from the environment at load and at every reload
+    models: ["claude-*"]
+```
+
+- **Syntax.** A reference is `${NAME}`, where `NAME` is an environment-variable identifier — `[A-Za-z_][A-Za-z0-9_]*`. The name is looked up in the process environment exactly, case-sensitively.
+- **The escape.** `$${` renders a literal `${` and performs no lookup, so a value or a comment can carry a reference verbatim. A `$` that begins neither a reference nor the escape is passed through unchanged, so a bare `$` and a bare `$$` survive as written.
+- **Document-wide.** Expansion is applied to the whole file, not to a whitelist of fields, so a reference in a provider `token:`, a top-level `allowedApiKeys:` entry, an `upstream:`, an `aliases:` value — or a field added in a later release — is covered with no code change here. The direct consequence is that expansion covers **comments too**: a comment in a real config that mentions a reference must write it escaped, e.g. `# example: $${NAME}`. An unescaped `${UNSET}` inside a comment fails the load.
+- **Single pass.** An expanded value is never re-scanned, so a value that itself contains `${OTHER}` is emitted verbatim and can never trigger a second lookup.
+- **Unset vs empty.** A variable that is *unset* fails the load, naming the variable and never its value — the router does not start, and a reload leaves the previous handler in place (see ## Reload). A variable that is *set to the empty string* resolves: the load succeeds and the empty value is used. The distinction matters — exporting a variable to an empty value is not the same as not exporting it.
+- **Malformed references.** An unterminated `${` fails the load naming the byte offset, as does a reference whose name is not a valid identifier. Both `token: ${UNCLOSED` and `token: ${not-a-name}` are load failures.
+- **Quoting.** The document is parsed as YAML *after* expansion, so an expanded value containing YAML-significant characters (`#`, `: `, a leading `-` / `*` / `&` / `%`, a newline) can truncate the value or break the parse when the reference is written unquoted. Author the reference as a quoted scalar — `token: "${NAME}"` — which keeps the expanded value inside a quoted scalar and preserves it verbatim.
+- **Reload.** SIGHUP re-runs expansion against the config file and the environment as they stand at reload time, so a rotated environment is picked up without a config edit (see ## Reload).
+- **Security.** Expansion reads only the process environment; it adds no file, network or TeamVault access to the router. Error messages name the variable, never its value, so a failed start is diagnosable without the failure itself disclosing a secret. The config file's permissions are unchanged by this feature.
+
 ## Routing
 
 On every `/v1/*` request, the router:

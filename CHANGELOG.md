@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: resolve `${NAME}` references in the config file from the process environment, each replaced by the value of that environment variable at load and at every reload, so a provider token or an inbound API key can be named in the file instead of written into it. `$${` escapes a literal `${` and performs no lookup, and a `$` that begins neither a reference nor the escape passes through unchanged. Expansion is a single pass over the whole document — including comments, so a comment documenting the syntax must write `$${NAME}` — and an inserted value is never re-scanned, so an environment value containing `${OTHER}` stays literal. A variable that is unset fails the load naming the variable and never its value (the router does not start, and a reload leaves the previous handler in place), a reference whose name is not a valid identifier or whose `${` is unterminated fails the load naming the byte offset, and a variable set to the empty string resolves to the empty value. No secret value appears in an error message or a log line. Documented in `docs/config.md` (new `## Environment variable expansion` section).
+
 ## v0.55.0
 
 - fix: observe `ccrouter_queue_wait_seconds` for a host-slot timeout. A request refused after waiting for a shared per-host concurrency slot now records its wait under the provider it routed to — the same label its `ccrouter_rejected_total{reason="queue_timeout"}` series already carries — instead of incrementing the rejection counter with no matching wait observation. The host-slot timeout keeps `reason="queue_timeout"` and the HTTP 429 body is unchanged; no new metric and no new reason value are added. Breaking: `HostLimiter.Wrap` gains two positional parameters, `provider string` and `queueWait *prometheus.HistogramVec`.

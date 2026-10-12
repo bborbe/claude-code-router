@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-12T08:41:09Z"
 generating: "2026-10-12T08:41:09Z"
 prompted: "2026-10-12T08:56:20Z"
+verifying: "2026-10-12T09:10:53Z"
 branch: dark-factory/config-env-expansion
 ---
 

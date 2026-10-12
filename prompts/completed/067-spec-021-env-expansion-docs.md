@@ -1,7 +1,13 @@
 ---
-status: draft
+status: completed
 spec: [021-config-env-expansion]
+summary: 'Documented ${NAME} environment-variable expansion in docs/config.md (new section between Schema and Routing), added a README clause pointing at it, and recorded a feat entry under a new CHANGELOG ## Unreleased; make precommit exits 0.'
+execution_id: claude-code-router-env-expand-exec-067-spec-021-env-expansion-docs
+dark-factory-version: v0.196.0
 created: "2026-10-12T08:48:00Z"
+queued: "2026-10-12T09:16:50Z"
+started: "2026-10-12T09:16:52Z"
+completed: "2026-10-12T09:21:34Z"
 branch: dark-factory/config-env-expansion
 ---
 
@@ -26,13 +32,13 @@ Document the `${NAME}` expansion syntax so an operator can move a provider token
 
 <context>
 - Repo root is the current working directory. Use repo-relative paths only.
-- **This prompt depends on prompt 1** (`1-spec-021-env-expansion.md`). Do not execute it until prompt 1 has shipped. Its postconditions are: `expandEnvRefs` exists in `pkg/config.go` and uses `os.LookupEnv`; `Load` calls it between `os.ReadFile` and `yaml.Unmarshal`; the syntax is `${NAME}`, the escape is `$${`, an unset variable fails the load by name, an unterminated `${` or an invalid name fails the load naming the byte offset, expansion is a single pass over the whole document, and a set-but-empty variable resolves. If any of those is absent, STOP and report the failure — do NOT implement the Go side here and do NOT document syntax that is not shipped. (`grep -n 'os.LookupEnv' pkg/config.go` and `grep -n 'func expandEnvRefs' pkg/config.go` are the cheap precondition checks.)
+- **This prompt depends on prompt 1** (the sibling helper prompt for this spec — now `prompts/completed/066-spec-021-env-expansion.md`). Do not execute it until prompt 1 has shipped. Its postconditions are: `expandEnvRefs` exists in `pkg/config.go` and uses `os.LookupEnv`; `Load` calls it between `os.ReadFile` and `yaml.Unmarshal`; the syntax is `${NAME}`, the escape is `$${`, an unset variable fails the load by name, an unterminated `${` or an invalid name fails the load naming the byte offset, expansion is a single pass over the whole document, and a set-but-empty variable resolves. If any of those is absent, STOP and report the failure — do NOT implement the Go side here and do NOT document syntax that is not shipped. (`grep -n 'os.LookupEnv' pkg/config.go` and `grep -n 'func expandEnvRefs' pkg/config.go` are the cheap precondition checks.)
 - Read the shipped implementation before writing a word of the section, so the docs describe what the code actually does: `pkg/config.go`'s `expandEnvRefs` and `Load`.
 - Read `specs/in-progress/021-config-env-expansion.md` (or `specs/completed/` if it has moved) — its Desired Behavior 1–8, Constraints, Failure Modes table, and Security section are the source of the operator-facing facts.
 - **Read `docs/config.md` and match its structure.** Current heading order: `# claude-code-router config` → `## Schema` (a fenced YAML block that ends immediately before `## Routing`) → `## Routing` → `## Aliases` → `## Model pools` → `## Requires leading system` → `## Concurrency limit` → `## Upstream host limits` → `## 429 delay gate` → `## Cold-start admission gate` → `## TTFT backpressure and circuit breaker` → `## Upstream pools` → `## Time-of-day windows` → `## Auth` → `## Routing by API key` → `## Trace` → `## Example — all four providers` → `## Switching mid-session` → `## Reload` → `## Related`.
   Match the established voice of a neighbouring section such as `## Concurrency limit` / `## Upstream host limits`: a short lead-in sentence, a `yaml` fenced snippet, then bold-lead bullets (`- **What it bounds.** …`).
   The `## Reload` section already documents SIGHUP and the `config reload failed: …` WARNING; link to it rather than repeating it.
-- Read `docs/dod.md` — it requires a `CHANGELOG.md` entry under `## Unreleased` for this change (and `docs/config.md` to be updated when config behaviour changes).
+- Read `docs/dod.md` — it requires a `CHANGELOG.md` entry under `## Unreleased` for this change. (Its `docs/config.md` rule fires only when a YAML field is added/removed/renamed, which this change does not — the `docs/config.md` section here is required by the spec's AC8.)
 - Read `CHANGELOG.md`: today it goes straight from the header block to `## v0.55.0`, with **no** `## Unreleased` heading. Released sections are frozen history. The highest `## vX.Y.Z` heading drifts between prompt authoring and execution — read the file and use whichever version heading is highest; never trust a hard-coded number.
 - Coding plugin docs (in-container paths):
   - `/home/node/.claude/plugins/marketplaces/coding/docs/changelog-guide.md` — `feat:` prefix (minor bump), one bullet per logical change, specificity.
@@ -75,7 +81,7 @@ Document the `${NAME}` expansion syntax so an operator can move a provider token
 
 2. **`CHANGELOG.md`.** Add one `feat:` bullet under a new `## Unreleased` heading, created immediately above the newest released heading (`## v0.55.0` at the time of writing — read the file and use whichever `## vX.Y.Z` heading is highest). Match the detail level of the repo's longer `feat:` entries. The bullet must contain the phrase `environment variable` and must mention: that `${NAME}` in the config file is resolved from the process environment at load and at every reload; the `$${` escape for a literal `${`; that expansion covers the whole document including comments; that an unset variable fails the load by name and a malformed reference fails it by byte offset; that a set-but-empty variable resolves; that a value is expanded in a single pass and never re-expanded; and that no secret value appears in an error message or a log line. Do NOT edit any released `## vX.Y.Z` section.
 
-2b. **`README.md`.** Add one clause pointing at the new `docs/config.md` section — a value may be written `token: "${NAME}"` and resolved from the process environment at load and at every reload. `docs/dod.md` requires `README.md` updated when configuration changes, and the repo's own precedent (`prompts/completed/065-spec-020-metrics-wiring-docs.md`, requirement 8) updated `README.md` for a smaller config change. Do NOT inline the full syntax — one clause plus the `docs/config.md` link.
+2b. **`README.md`.** Add one clause to the `Optional per-provider knobs tune admission and pacing …` sentence (the sentence prompt 065 requirement 8 extended) pointing at the new `docs/config.md` section — a value may be written `token: "${NAME}"` and resolved from the process environment at load and at every reload. `docs/dod.md` requires `README.md` updated when configuration changes, and the repo's own precedent (`prompts/completed/065-spec-020-metrics-wiring-docs.md`, requirement 8) updated `README.md` for a smaller config change. Do NOT inline the full syntax — one clause plus the `docs/config.md` link.
 
 3. **Before finishing, re-run `<verification>` and read its OUTPUT — not its exit status.** The executor does not fail the run on a non-zero exit, so a silent empty grep is not a pass. Every `grep -n` line must print a match; every `grep -c` line must print a count ≥ 1; the ordering `awk` must print `ORDER OK`; the precondition greps must print a match, not the `MISSEQUENCED:` line. Then re-read the new section end to end and check each claim against the shipped `expandEnvRefs` implementation — every documented behaviour must be one the code actually has.
 </requirements>
@@ -105,7 +111,11 @@ grep -c '\$\${' docs/config.md
 # The section exists and sits between ## Schema and ## Routing — assert the ORDER mechanically
 # (a plain grep of the three headings always matched, because ## Schema and ## Routing always exist):
 grep -n '^## Environment variable expansion' docs/config.md || echo 'ORDER FAIL: section heading absent'
-awk '/^## Schema/{s=NR} /^## Environment variable expansion/{e=NR} /^## Routing/{r=NR} END{ if (s && e && r && s<e && e<r) print "ORDER OK"; else print "ORDER FAIL s="s" e="e" r="r }' docs/config.md
+awk '/^## Schema/{s=NR} /^## Environment variable expansion/{e=NR} /^## Routing$/{r=NR} END{ if (s && e && r && s<e && e+1==r) print "ORDER OK"; else print "ORDER FAIL s="s" e="e" r="r }' docs/config.md
+
+# Reload + security facts, scoped to the new section:
+sed -n '/^## Environment variable expansion/,/^## Routing$/p' docs/config.md | grep -nE 'SIGHUP|reload'
+sed -n '/^## Environment variable expansion/,/^## Routing$/p' docs/config.md | grep -nE 'never its value|process environment'
 
 # The failure modes and the quoting rule are documented:
 grep -n 'byte offset' docs/config.md
@@ -125,21 +135,22 @@ grep -nE 'empty string|set to the empty' docs/config.md
 grep -n '^## Unreleased' CHANGELOG.md
 sed -n '/^## Unreleased/,/^## v/p' CHANGELOG.md | grep -c 'environment variable'
 sed -n '/^## Unreleased/,/^## v/p' CHANGELOG.md | grep -c '^- feat:'
+
+# README — the one-clause pointer to the new section (0 matches today):
+grep -n '\${NAME}' README.md
+grep -n 'environment' README.md
 </verification>
 
 <!--
-OPEN QUESTION (changelog scope — flag at audit).
-The spec lists no acceptance criterion for CHANGELOG.md; its AC8 covers docs/config.md only. The
-repo's own `docs/dod.md` ("CHANGELOG.md has an entry under ## Unreleased") and the precedent of the
-sibling docs prompts (e.g. `prompts/completed/059-spec-019-docs-changelog.md`,
-`prompts/completed/061-spec-019-cold-gate-docs-changelog.md`) both put the changelog entry with the
-docs prompt, so requirement 2 carries it here. If the reviewer wants the changelog strictly out of
-scope for this spec, drop requirement 2 and the three CHANGELOG verification lines together — do not
-keep the verification without the requirement.
+RESOLVED AT AUDIT.
+Changelog scope — kept here. The spec lists no acceptance criterion for CHANGELOG.md, but the
+repo's `docs/dod.md` requires an `## Unreleased` entry and the precedent of the sibling docs
+prompts (`prompts/completed/059-spec-019-docs-changelog.md`,
+`prompts/completed/061-spec-019-cold-gate-docs-changelog.md`) pairs the changelog with the docs
+prompt, so requirement 2 carries it.
 
-OPEN QUESTION (README scope — flag at audit).
-`docs/dod.md` also says "README.md updated if the change affects usage, configuration, or install
-steps". This feature adds a config-file syntax, so a one-line pointer from README to the new
-`docs/config.md` section would be defensible. The spec scopes its documentation acceptance criterion
-to `docs/config.md`, so README.md is left untouched here to avoid scope creep. Decide at audit.
+README scope — included, as requirement 2b. `docs/dod.md` requires README.md updated when
+configuration changes, and `prompts/completed/065-spec-020-metrics-wiring-docs.md` requirement 8
+updated README for a smaller config change. One clause plus the `docs/config.md` link; the full
+syntax stays in the doc.
 -->
