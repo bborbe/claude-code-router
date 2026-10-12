@@ -175,7 +175,9 @@ var _ = Describe("CreateRouterFromConfig upstream inflight wiring", func() {
 		Eventually(func() string { return scrape(router) }, "1s", "10ms").Should(
 			ContainSubstring(fmt.Sprintf(`ccrouter_upstream_inflight{host=%q} 2`, key)),
 		)
-		Expect(strings.Count(scrape(router), fmt.Sprintf(`host=%q`, key))).To(Equal(1))
+		Expect(
+			strings.Count(scrape(router), fmt.Sprintf(`ccrouter_upstream_inflight{host=%q}`, key)),
+		).To(Equal(1))
 
 		srv.releaseAll()
 		Eventually(doneA, "1s").Should(BeClosed())

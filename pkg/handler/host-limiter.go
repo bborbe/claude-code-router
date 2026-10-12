@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"math"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -92,6 +93,15 @@ func (h *HostLimiter) Wrap(
 		queueWait:    queueWait,
 		rejectReason: rejectionReasonHostQueueTimeout,
 	}
+}
+
+// Limit returns the host's shared budget (maxConcurrentRequests), or +Inf
+// for an unlimited host. It backs ccrouter_upstream_limit{host}.
+func (h *HostLimiter) Limit() float64 {
+	if h.sem == nil {
+		return math.Inf(1)
+	}
+	return float64(cap(h.sem))
 }
 
 // InFlight returns the host's current in-flight request count: the

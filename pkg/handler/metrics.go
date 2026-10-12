@@ -116,6 +116,18 @@ const (
 	// providerQueuedMetricHelp is the HELP text of
 	// ccrouter_provider_queued.
 	providerQueuedMetricHelp = "Current number of /v1/* requests blocked waiting for a concurrency slot at the provider, summed across its eligible pool members, labeled by provider. The queued half of ccrouter_inflight_requests: it counts only requests that found every slot held, so it excludes requests held by the 429 pacing gate and by the cold-start admission queue."
+	// providerLimitMetricName is the per-provider concurrency limit in force,
+	// exported by the collector in provider-limit-collector.go — the
+	// denominator for ccrouter_provider_dispatched.
+	providerLimitMetricName = "ccrouter_provider_limit"
+	// providerLimitMetricHelp is the HELP text of ccrouter_provider_limit.
+	providerLimitMetricHelp = "Concurrency limit in force at the provider right now: the sum of maxConcurrentRequests over its pool members eligible at scrape time (time windows and days applied), labeled by provider. Changes at window boundaries without a reload. +Inf when an eligible member is uncapped; 0 when no member is eligible. Plot with ccrouter_provider_dispatched: dispatched pinned at this value means the provider is saturated."
+	// upstreamLimitMetricName is the per-host budget from upstreamHostLimits,
+	// exported by the collector in provider-limit-collector.go — the
+	// denominator for ccrouter_upstream_inflight.
+	upstreamLimitMetricName = "ccrouter_upstream_limit"
+	// upstreamLimitMetricHelp is the HELP text of ccrouter_upstream_limit.
+	upstreamLimitMetricHelp = "Shared concurrency budget of an upstream host from upstreamHostLimits (spec 019), labeled by host; +Inf for an uncapped host. Plot with ccrouter_upstream_inflight: in-flight pinned at this value means the host budget binds."
 )
 
 // Metrics groups the Prometheus collectors emitted from the model
