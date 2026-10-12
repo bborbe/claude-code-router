@@ -5,25 +5,33 @@
 // Live-pool wiring specs: the operator's three-member weekday/night/weekend
 // pool (seibert-vllm-default as of 2026-10-12 — day 16, night 25, weekend 25,
 // host 25), driven end-to-end through CreateRouterFromConfig with the clock
-// fixed by SetNow. Two concerns:
+// fixed by SetNow. Three concerns:
 //
 //   - window boundaries: which member serves at 07:59, 08:00, 17:59, 18:00
 //     and on a Saturday, including one session pinned across the switches;
 //   - saturation: which limiter refuses the request one past the binding
 //     cap, read from ccrouter_rejected_total{reason} — the member cap
 //     (queue_timeout) and the shared host budget (host_queue_timeout) must
-//     stay distinguishable, because they call for different config changes.
+//     stay distinguishable, because they call for different config changes;
+//   - the 18:00 switch on one running router: admission rises from the day
+//     member's 16 to the host budget's 25 by the clock alone, with no
+//     restart or reload — bounded by the host while day requests still hold
+//     their slots.
 
 package factory_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	stdtime "time"
 
+	httpmocks "github.com/bborbe/http/mocks"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -298,4 +306,182 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 			),
 		)
 	})
+
+	Context("18:00 switch on one running router (no restart, no reload)", func() {
+		It(
+			"raises admission from the day cap 16 to the host budget 25 as the clock crosses 18:00",
+			func() {
+				// One upstream server backed by the Counterfeiter HttpHandler mock.
+				// The stub sorts requests into lanes by URL path prefix: each lane
+				// counts its own in-flight requests and is released on its own, so
+				// day traffic can drain while night traffic stays held.
+				lanes := map[string]*upstreamLane{
+					"/day":     newUpstreamLane(),
+					"/night":   newUpstreamLane(),
+					"/weekend": newUpstreamLane(),
+				}
+				upstream := &httpmocks.HttpHandler{}
+				upstream.ServeHTTPStub = func(w http.ResponseWriter, r *http.Request) {
+					l := lanes[laneOf(r.URL.Path)]
+					if l == nil {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					atomic.AddInt32(&l.inFlight, 1)
+					defer atomic.AddInt32(&l.inFlight, -1)
+					// Read the body first, as poolUpstream does, so a client
+					// disconnect is noticed and cannot leave the lane counter stuck.
+					_, _ = io.Copy(io.Discard, r.Body)
+					select {
+					case <-l.release:
+					case <-r.Context().Done():
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"ok":true}`))
+				}
+				srv := httptest.NewServer(upstream)
+				defer func() {
+					for _, l := range lanes {
+						l.open()
+					}
+					srv.Close()
+				}()
+				u, err := url.Parse(srv.URL)
+				Expect(err).NotTo(HaveOccurred())
+
+				// The URL path does not enter the host key, so all three members
+				// draw from one host budget of 25.
+				cfg := &pkg.Config{
+					Router: pkg.Router{DefaultProvider: provider},
+					Providers: map[string]pkg.Provider{
+						provider: livePoolProvider(
+							[3]string{srv.URL + "/day", srv.URL + "/night", srv.URL + "/weekend"},
+							[3]int{16, 25, 25},
+						),
+					},
+					UpstreamHostLimits: map[string]pkg.HostLimit{
+						pkg.UpstreamHostKey(u): {
+							MaxConcurrentRequests:    25,
+							MaxConcurrentWaitSeconds: 1,
+						},
+					},
+				}
+				clock := libtime.NewCurrentDateTime()
+				clock.SetNow(
+					libtime.DateTime(stdtime.Date(2026, stdtime.October, 12, 17, 59, 0, 0, berlin)),
+				)
+				reg := prometheus.NewRegistry()
+				h, err := factory.CreateRouterFromConfig(
+					context.Background(),
+					cfg,
+					factory.WithMetricsRegisterer(reg),
+					factory.WithCurrentDateTime(clock),
+				)
+				Expect(err).NotTo(HaveOccurred())
+
+				admit := func(n int) []chan struct{} {
+					dones := make([]chan struct{}, 0, n)
+					for i := 0; i < n; i++ {
+						dones = append(
+							dones,
+							serveAsync(
+								h,
+								httptest.NewRecorder(),
+								newMessagesRequest("deepseek-v4-flash"),
+							),
+						)
+					}
+					return dones
+				}
+				refused := func() {
+					rec := httptest.NewRecorder()
+					h.ServeHTTP(rec, newMessagesRequest("deepseek-v4-flash"))
+					Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
+				}
+
+				By("17:59 — the day member's 16 binds while the host has room")
+				dayDones := admit(16)
+				Eventually(lanes["/day"].count).Should(BeNumerically("==", 16))
+				refused()
+				Expect(rejectedCount(reg, provider, "queue_timeout")).To(Equal(float64(1)))
+				Expect(rejectedCount(reg, provider, "host_queue_timeout")).To(Equal(float64(0)))
+
+				By(
+					"18:00 — same router, night member eligible; the 16 day requests still hold host slots",
+				)
+				clock.SetNow(
+					libtime.DateTime(stdtime.Date(2026, stdtime.October, 12, 18, 0, 0, 0, berlin)),
+				)
+				nightDones := admit(9)
+				Eventually(lanes["/night"].count).Should(BeNumerically("==", 9))
+				Expect(lanes["/day"].count()).To(BeNumerically("==", 16))
+				refused()
+				Expect(rejectedCount(reg, provider, "host_queue_timeout")).To(Equal(float64(1)))
+				Expect(rejectedCount(reg, provider, "queue_timeout")).To(Equal(float64(1)))
+
+				By("the day requests drain — the night member fills to the full 25")
+				lanes["/day"].open()
+				for _, done := range dayDones {
+					Eventually(done, "2s").Should(BeClosed())
+				}
+				nightDones = append(nightDones, admit(16)...)
+				Eventually(lanes["/night"].count).Should(BeNumerically("==", 25))
+				Expect(lanes["/day"].count()).To(BeNumerically("==", 0))
+				refused()
+				Expect(rejectedCount(reg, provider, "host_queue_timeout")).To(Equal(float64(2)))
+				Expect(rejectedCount(reg, provider, "queue_timeout")).To(Equal(float64(1)))
+				Expect(rejectedCount(reg, provider, "upstream")).To(Equal(float64(0)))
+
+				lanes["/night"].open()
+				for _, done := range nightDones {
+					Eventually(done, "2s").Should(BeClosed())
+				}
+
+				By(
+					"the upstream saw exactly the admitted requests — none of the three refused ones",
+				)
+				received := map[string]int{}
+				for i := 0; i < upstream.ServeHTTPCallCount(); i++ {
+					_, r := upstream.ServeHTTPArgsForCall(i)
+					received[laneOf(r.URL.Path)]++
+				}
+				Expect(received).To(Equal(map[string]int{"/day": 16, "/night": 25}))
+			},
+		)
+	})
 })
+
+// upstreamLane is the per-member state the HttpHandler mock's stub reads:
+// an in-flight counter and a release channel that frees every request held
+// in the lane.
+type upstreamLane struct {
+	inFlight int32
+	release  chan struct{}
+	once     sync.Once
+}
+
+func newUpstreamLane() *upstreamLane {
+	return &upstreamLane{release: make(chan struct{})}
+}
+
+// count returns the lane's in-flight request count; usable as a poll func.
+func (l *upstreamLane) count() int32 {
+	return atomic.LoadInt32(&l.inFlight)
+}
+
+// open releases every request held in the lane. Idempotent.
+func (l *upstreamLane) open() {
+	l.once.Do(func() { close(l.release) })
+}
+
+// laneOf maps an upstream request path to its member lane: the first path
+// segment the member's upstream URL carries ("/day/v1/messages" → "/day").
+func laneOf(path string) string {
+	for _, p := range []string{"/day", "/night", "/weekend"} {
+		if strings.HasPrefix(path, p+"/") || path == p {
+			return p
+		}
+	}
+	return ""
+}
