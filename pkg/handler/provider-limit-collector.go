@@ -16,22 +16,36 @@ import (
 // members eligible right now (UpstreamMember.Eligible — the same rule the
 // pool handler routes by). caps[i] is member i's maxConcurrentRequests. An
 // eligible member with no cap (caps[i] <= 0) makes the provider unbounded
-// and the result +Inf; no eligible member at all yields 0 — the provider
-// cannot serve anything right now.
+// and the result +Inf.
+//
+// With no eligible member the pool does not refuse: its selection falls back
+// to member 0 (leastLoaded / pinSlot return index 0 for an empty eligible
+// set), which is how a closed default provider is still served as a last
+// resort. The limit follows the same rule and reports member 0's cap, so
+// dispatched/limit stays meaningful in that state. Only a provider with no
+// members at all reads 0.
 //
 // Because eligibility is re-evaluated on every call, a time-windowed pool's
 // limit changes at its window boundaries without a reload: the weekday pool
 // reads 16 by day and 25 from 18:00 (spec 014 / 017).
 func ProviderLimit(members []UpstreamMember, caps []int) float64 {
 	limit := 0
+	eligible := 0
 	for i, member := range members {
 		if !member.Eligible() {
 			continue
 		}
+		eligible++
 		if i >= len(caps) || caps[i] <= 0 {
 			return math.Inf(1)
 		}
 		limit += caps[i]
+	}
+	if eligible == 0 && len(members) > 0 {
+		if len(caps) == 0 || caps[0] <= 0 {
+			return math.Inf(1)
+		}
+		return float64(caps[0])
 	}
 	return float64(limit)
 }

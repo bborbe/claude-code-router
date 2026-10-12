@@ -81,10 +81,23 @@ var _ = Describe("ProviderLimit", func() {
 		Expect(handler.ProviderLimit(weekdayPool(), []int{16, 0, 0})).To(Equal(16.0))
 	})
 
-	It("is 0 when no member is eligible", func() {
-		setBerlin(12, 10, 0) // Mon 10:00 — the weekend member alone is closed
+	It(
+		"reports member 0's cap when no member is eligible — the pool's last-resort fallback",
+		func() {
+			setBerlin(12, 10, 0) // Mon 10:00 — the weekend member alone is closed
+			weekendOnly := weekdayPool()[2:]
+			Expect(handler.ProviderLimit(weekendOnly, []int{25})).To(Equal(25.0))
+		},
+	)
+
+	It("is +Inf when the fallback member 0 is uncapped", func() {
+		setBerlin(12, 10, 0)
 		weekendOnly := weekdayPool()[2:]
-		Expect(handler.ProviderLimit(weekendOnly, []int{25})).To(Equal(0.0))
+		Expect(math.IsInf(handler.ProviderLimit(weekendOnly, []int{0}), 1)).To(BeTrue())
+	})
+
+	It("is 0 only for a provider with no members", func() {
+		Expect(handler.ProviderLimit(nil, nil)).To(Equal(0.0))
 	})
 })
 

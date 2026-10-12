@@ -121,7 +121,7 @@ const (
 	// denominator for ccrouter_provider_dispatched.
 	providerLimitMetricName = "ccrouter_provider_limit"
 	// providerLimitMetricHelp is the HELP text of ccrouter_provider_limit.
-	providerLimitMetricHelp = "Concurrency limit in force at the provider right now: the sum of maxConcurrentRequests over its pool members eligible at scrape time (time windows and days applied), labeled by provider. Changes at window boundaries without a reload. +Inf when an eligible member is uncapped; 0 when no member is eligible. Plot with ccrouter_provider_dispatched: dispatched pinned at this value means the provider is saturated."
+	providerLimitMetricHelp = "Concurrency limit in force at the provider right now: the sum of maxConcurrentRequests over its pool members eligible at scrape time (time windows and days applied), labeled by provider. Changes at window boundaries without a reload. +Inf when an eligible member is uncapped. With no eligible member the pool falls back to its first member as a last resort, and so does this value (member 0's cap). Plot with ccrouter_provider_dispatched: dispatched pinned at this value means the provider is saturated."
 	// upstreamLimitMetricName is the per-host budget from upstreamHostLimits,
 	// exported by the collector in provider-limit-collector.go — the
 	// denominator for ccrouter_upstream_inflight.
