@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.55.0
 
 - fix: observe `ccrouter_queue_wait_seconds` for a host-slot timeout. A request refused after waiting for a shared per-host concurrency slot now records its wait under the provider it routed to — the same label its `ccrouter_rejected_total{reason="queue_timeout"}` series already carries — instead of incrementing the rejection counter with no matching wait observation. The host-slot timeout keeps `reason="queue_timeout"` and the HTTP 429 body is unchanged; no new metric and no new reason value are added. Breaking: `HostLimiter.Wrap` gains two positional parameters, `provider string` and `queueWait *prometheus.HistogramVec`.
 
