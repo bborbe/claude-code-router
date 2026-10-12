@@ -1009,10 +1009,12 @@ func resolveEnvRef(ctx context.Context, data []byte, i int) (string, int, error)
 	}
 	name := string(data[i+2 : j])
 	if !envRefNamePattern.MatchString(name) {
+		// The offending text is deliberately not echoed: this position is
+		// where a literal secret is most likely to be pasted by mistake, and
+		// the error reaches the log through reloader.Reload's Warningf.
 		return "", 0, errors.Errorf(
 			ctx,
-			"invalid environment reference name %q at byte offset %d",
-			name,
+			"invalid env reference name at byte offset %d (must match [A-Za-z_][A-Za-z0-9_]*)",
 			i,
 		)
 	}

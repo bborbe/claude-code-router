@@ -116,11 +116,21 @@ func unsetAll(names ...string) func() {
 	}
 }
 
-// setAll sets the given name/value pairs for the duration of the spec.
+// setAll sets the given name/value pairs for the duration of the spec and
+// restores each variable's prior state at spec cleanup.
 func setAll(pairs ...string) func() {
 	return func() {
 		for i := 0; i+1 < len(pairs); i += 2 {
-			Expect(os.Setenv(pairs[i], pairs[i+1])).To(Succeed())
+			name := pairs[i]
+			prior, existed := os.LookupEnv(name)
+			Expect(os.Setenv(name, pairs[i+1])).To(Succeed())
+			DeferCleanup(func() {
+				if existed {
+					Expect(os.Setenv(name, prior)).To(Succeed())
+					return
+				}
+				Expect(os.Unsetenv(name)).To(Succeed())
+			})
 		}
 	}
 }
@@ -271,9 +281,12 @@ var _ = Describe("Config env expansion", func() {
 		Entry("Failure Modes: an escaped reference inside a comment loads with no error",
 			expandFixtureCommentEscaped,
 			unsetAll("ROUTER_EXPAND_MISSING"),
-			func(cfg *pkgcfg.Config, err error, _ string) {
+			func(_ *pkgcfg.Config, err error, _ string) {
+				// The fixture carries the escape only in a comment, so there is
+				// nothing to assert about the parsed config beyond the load
+				// succeeding — a Token assertion here would read the zero value
+				// of a field the fixture never declares.
 				Expect(err).NotTo(HaveOccurred())
-				Expect(cfg.Providers["anthropic"].Token).To(Equal(""))
 			},
 		),
 	)
