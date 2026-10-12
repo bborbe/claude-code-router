@@ -112,6 +112,12 @@ func NewConcurrencyLimiter(
 	if now == nil {
 		now = realNow
 	}
+	if waiter == nil {
+		// A nil waiter would panic on the first queued request inside the
+		// waiter goroutine, where net/http's recover does not reach — it
+		// would take the whole process down, and only under load.
+		waiter = libtime.NewWaiterDuration()
+	}
 	return &concurrencyLimiter{
 		next:         next,
 		provider:     provider,
@@ -223,12 +229,18 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// semaphore in one select. waitCtx is cancelled as soon as the select
 	// returns, so the waiter goroutine ends with the queued phase rather than
 	// outliving it for the length of the upstream round-trip. timedOut is
-	// closed only when the wait completed (nil error) — a waiter ended by
-	// cancellation or client disconnect never reads as a timeout.
+	// closed when the wait ended while the queued phase is still live — a
+	// completed wait (nil error), or a waiter failing on its own, which is
+	// refused rather than left to wait without a bound. A waiter ended by
+	// cancellation or client disconnect (waitCtx done) never reads as a
+	// timeout. The deferred cancel is a backstop; every select arm also
+	// cancels explicitly so the waiter stops before the upstream round-trip.
 	waitCtx, cancelWait := context.WithCancel(r.Context())
+	defer cancelWait()
 	timedOut := make(chan struct{})
 	go func() {
-		if err := l.waiter.Wait(waitCtx, libtime.Duration(l.wait)); err == nil {
+		err := l.waiter.Wait(waitCtx, libtime.Duration(l.wait))
+		if err == nil || waitCtx.Err() == nil {
 			close(timedOut)
 		}
 	}()

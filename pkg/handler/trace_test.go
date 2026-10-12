@@ -294,8 +294,11 @@ var _ = Describe("TraceMiddleware", func() {
 			mux.ServeHTTP(r1, req1)
 			Expect(filesInTraceDir()).To(BeEmpty())
 
-			// Enable tracing.
+			// Enable tracing. Disable on cleanup: the armed 5s TTL timer
+			// would otherwise fire during a later spec and log through glog
+			// while that spec rewires glog's flags / stderr (a data race).
 			ts.Enable()
+			DeferCleanup(ts.Disable)
 
 			// Now a file should be written.
 			r2 := httptest.NewRecorder()

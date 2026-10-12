@@ -6,6 +6,7 @@ package handler_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -92,6 +93,49 @@ var _ = Describe("ConcurrencyLimiter queue wait (injected WaiterDuration)", func
 			"2s",
 		).Should(BeClosed(), "the waiter does not outlive the queued phase")
 	})
+
+	It(
+		"refuses rather than waiting unbounded when the waiter fails while the request is queued",
+		func() {
+			waiter.WaitStub = func(context.Context, libtime.Duration) error {
+				return errors.New("waiter broke")
+			}
+			holderDone := holdTheSlot()
+
+			rec := httptest.NewRecorder()
+			queuedDone := serveAsync(h, rec, newMessagesRequest())
+			Eventually(queuedDone, "2s").Should(BeClosed())
+			Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
+
+			close(inner.release)
+			Eventually(holderDone, "2s").Should(BeClosed())
+		},
+	)
+
+	DescribeTable("falls back to a real waiter when constructed with a nil one",
+		func(build func(next http.Handler) http.Handler) {
+			// A nil waiter used to panic in the waiter goroutine on the first
+			// queued request — outside net/http's recover, so fatal.
+			nilInner := newBlockingHandler()
+			limited := build(nilInner)
+			holderDone := serveAsync(limited, httptest.NewRecorder(), newMessagesRequest())
+			Eventually(nilInner.entryCount).Should(Equal(1))
+
+			rec := httptest.NewRecorder()
+			queuedDone := serveAsync(limited, rec, newMessagesRequest())
+			Eventually(queuedDone, "2s").Should(BeClosed())
+			Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
+
+			close(nilInner.release)
+			Eventually(holderDone, "2s").Should(BeClosed())
+		},
+		Entry("member limiter", func(next http.Handler) http.Handler {
+			return handler.NewConcurrencyLimiter(next, "", 1, 20*time.Millisecond, nil, nil, nil)
+		}),
+		Entry("host limiter", func(next http.Handler) http.Handler {
+			return handler.NewHostLimiter(1, 20*time.Millisecond, nil).Wrap(next, "", nil)
+		}),
+	)
 
 	It("does not refuse a client that disconnects while queued", func() {
 		holderDone := holdTheSlot()

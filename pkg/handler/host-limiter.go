@@ -45,6 +45,11 @@ func NewHostLimiter(
 	maxConcurrentWait time.Duration,
 	waiter libtime.WaiterDuration,
 ) *HostLimiter {
+	if waiter == nil {
+		// Same guard as NewConcurrencyLimiter: a nil waiter panics in the
+		// waiter goroutine, outside net/http's recover.
+		waiter = libtime.NewWaiterDuration()
+	}
 	h := &HostLimiter{wait: maxConcurrentWait, waiter: waiter}
 	if maxConcurrentRequests > 0 {
 		h.sem = make(chan struct{}, maxConcurrentRequests)
