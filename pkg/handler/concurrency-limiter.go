@@ -105,12 +105,13 @@ func NewConcurrencyLimiter(
 		now = realNow
 	}
 	return &concurrencyLimiter{
-		next:      next,
-		provider:  provider,
-		sem:       make(chan struct{}, maxConcurrentRequests),
-		wait:      maxConcurrentWait,
-		now:       now,
-		queueWait: queueWait,
+		next:         next,
+		provider:     provider,
+		sem:          make(chan struct{}, maxConcurrentRequests),
+		wait:         maxConcurrentWait,
+		now:          now,
+		queueWait:    queueWait,
+		rejectReason: rejectionReasonQueueTimeout,
 	}
 }
 
@@ -119,6 +120,12 @@ type concurrencyLimiter struct {
 	provider string
 	sem      chan struct{}
 	wait     time.Duration
+	// rejectReason is the ccrouter_rejected_total reason recorded when a
+	// queued request times out: rejectionReasonQueueTimeout for a member or
+	// provider limiter, rejectionReasonHostQueueTimeout for a host limiter
+	// built by HostLimiter.Wrap. The type is shared, so the reason has to
+	// travel with the instance for the two to stay distinguishable.
+	rejectReason string
 	// now is the injected clock the queue-wait measurement reads; never nil
 	// (the constructor resolves realNow).
 	now func() libtime.DateTime
@@ -197,7 +204,7 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case <-timer.C:
 		l.waiters.Add(-1)
 		l.observeQueueWait(l.now().Time().Sub(queuedAt))
-		writeRateLimited(w, r, 0, rejectionReasonQueueTimeout)
+		writeRateLimited(w, r, 0, l.rejectReason)
 		return
 	case <-r.Context().Done():
 		// Client disconnected while queued: return without acquiring a

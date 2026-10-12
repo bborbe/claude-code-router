@@ -55,11 +55,13 @@ func NewHostLimiter(maxConcurrentRequests int, maxConcurrentWait time.Duration) 
 // resolving to that host. queueWait is the same ccrouter_queue_wait_seconds
 // histogram the member limiter observes, so a request refused after waiting
 // for a host slot is attributed to the provider it routed to — the same
-// label its ccrouter_rejected_total{reason="queue_timeout"} series already
-// carries. A nil queueWait disables the observation without changing the
-// request path. now is set explicitly — the type's clock is read on the
-// waiting path, and a literal that omitted it would nil-panic on the first
-// host-slot timeout.
+// label its ccrouter_rejected_total{reason="host_queue_timeout"} series
+// carries. A host-slot timeout records host_queue_timeout rather than the
+// member limiter's queue_timeout, so a saturated host budget is
+// distinguishable from a saturated member cap. A nil queueWait disables the
+// observation without changing the request path. now is set explicitly —
+// the type's clock is read on the waiting path, and a literal that omitted
+// it would nil-panic on the first host-slot timeout.
 func (h *HostLimiter) Wrap(
 	next http.Handler,
 	provider string,
@@ -69,12 +71,13 @@ func (h *HostLimiter) Wrap(
 		return &hostInFlightCounter{next: next, inFlight: &h.inFlight}
 	}
 	return &concurrencyLimiter{
-		next:      next,
-		provider:  provider,
-		sem:       h.sem,
-		wait:      h.wait,
-		now:       realNow,
-		queueWait: queueWait,
+		next:         next,
+		provider:     provider,
+		sem:          h.sem,
+		wait:         h.wait,
+		now:          realNow,
+		queueWait:    queueWait,
+		rejectReason: rejectionReasonHostQueueTimeout,
 	}
 }
 
