@@ -12,9 +12,34 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/bborbe/claude-code-router/pkg/handler"
 )
+
+// queueWaitObservation returns the observation count and the summed seconds
+// of the ccrouter_queue_wait_seconds series for provider, read from reg. A
+// zero pair means the series was never observed.
+func queueWaitObservation(reg *prometheus.Registry, provider string) (uint64, float64) {
+	families, err := reg.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, family := range families {
+		if family.GetName() != "ccrouter_queue_wait_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "provider" && label.GetValue() == provider {
+					return metric.GetHistogram().
+							GetSampleCount(),
+						metric.GetHistogram().
+							GetSampleSum()
+				}
+			}
+		}
+	}
+	return 0, 0
+}
 
 // panickyHandler panics on every request, modelling a request goroutine
 // that dies mid-request so the tests can prove the host slot is still
@@ -30,8 +55,8 @@ var _ = Describe("HostLimiter", func() {
 		hl := handler.NewHostLimiter(1, time.Second)
 		innerA := newBlockingHandler()
 		innerB := newBlockingHandler()
-		wrapA := hl.Wrap(innerA)
-		wrapB := hl.Wrap(innerB)
+		wrapA := hl.Wrap(innerA, "", nil)
+		wrapB := hl.Wrap(innerB, "", nil)
 
 		recA := httptest.NewRecorder()
 		doneA := serveAsync(wrapA, recA, newMessagesRequest())
@@ -53,11 +78,21 @@ var _ = Describe("HostLimiter", func() {
 	})
 
 	It("answers HTTP 429 with the static rate_limit_error body on queue timeout", func() {
+		queueWait := prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "ccrouter_queue_wait_seconds",
+				Buckets: handler.QueueWaitBucketsSeconds,
+			},
+			[]string{"provider"},
+		)
+		reg := prometheus.NewRegistry()
+		Expect(reg.Register(queueWait)).To(Succeed())
+
 		hl := handler.NewHostLimiter(1, 50*time.Millisecond)
 		innerA := newBlockingHandler()
 		innerB := newBlockingHandler()
-		wrapA := hl.Wrap(innerA)
-		wrapB := hl.Wrap(innerB)
+		wrapA := hl.Wrap(innerA, "provider-a", queueWait)
+		wrapB := hl.Wrap(innerB, "provider-b", queueWait)
 
 		recA := httptest.NewRecorder()
 		doneA := serveAsync(wrapA, recA, newMessagesRequest())
@@ -73,6 +108,16 @@ var _ = Describe("HostLimiter", func() {
 		Expect(recB.Body.String()).To(ContainSubstring("rate_limit_error"))
 		Expect(innerB.entryCount()).To(Equal(0), "the 429'd request must never enter the handler")
 
+		// The refusal and its wait must describe one event: the host-slot
+		// timeout is attributed to the provider the request routed to, at
+		// approximately the full configured wait.
+		count, sum := queueWaitObservation(reg, "provider-b")
+		Expect(count).To(Equal(uint64(1)), "the host-slot wait must be observed exactly once")
+		Expect(sum).To(BeNumerically("~", 0.05, 0.04), "observed at the full configured wait")
+		// A request that took a free host slot never queued and is not observed.
+		countA, _ := queueWaitObservation(reg, "provider-a")
+		Expect(countA).To(Equal(uint64(0)))
+
 		close(innerA.release)
 		close(innerB.release)
 		Eventually(doneA, "1s").Should(BeClosed())
@@ -83,7 +128,7 @@ var _ = Describe("HostLimiter", func() {
 		func(maxConcurrentRequests int) {
 			hl := handler.NewHostLimiter(maxConcurrentRequests, time.Second)
 			inner := newBlockingHandler()
-			wrap := hl.Wrap(inner)
+			wrap := hl.Wrap(inner, "", nil)
 
 			dones := make([]chan struct{}, 5)
 			recs := make([]*httptest.ResponseRecorder, 5)
@@ -109,7 +154,7 @@ var _ = Describe("HostLimiter", func() {
 	It("reports the semaphore occupancy via InFlight when capped", func() {
 		hl := handler.NewHostLimiter(2, time.Second)
 		inner := newBlockingHandler()
-		wrap := hl.Wrap(inner)
+		wrap := hl.Wrap(inner, "", nil)
 
 		Expect(hl.InFlight()).To(Equal(0))
 
@@ -126,7 +171,7 @@ var _ = Describe("HostLimiter", func() {
 	It("never acquires a slot for a client that disconnects while queued", func() {
 		hl := handler.NewHostLimiter(1, time.Second)
 		inner := newBlockingHandler()
-		wrap := hl.Wrap(inner)
+		wrap := hl.Wrap(inner, "", nil)
 
 		rec1 := httptest.NewRecorder()
 		done1 := serveAsync(wrap, rec1, newMessagesRequest())
@@ -149,7 +194,7 @@ var _ = Describe("HostLimiter", func() {
 	DescribeTable("releases the slot when the inner handler panics",
 		func(maxConcurrentRequests int) {
 			hl := handler.NewHostLimiter(maxConcurrentRequests, time.Second)
-			wrap := hl.Wrap(panickyHandler{})
+			wrap := hl.Wrap(panickyHandler{}, "", nil)
 
 			func() {
 				defer func() { _ = recover() }()
@@ -163,7 +208,7 @@ var _ = Describe("HostLimiter", func() {
 				inner := newBlockingHandler()
 				close(inner.release)
 				rec := httptest.NewRecorder()
-				hl.Wrap(inner).ServeHTTP(rec, newMessagesRequest())
+				hl.Wrap(inner, "", nil).ServeHTTP(rec, newMessagesRequest())
 				Expect(rec.Code).To(Equal(http.StatusOK))
 			}
 		},

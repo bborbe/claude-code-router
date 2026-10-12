@@ -541,7 +541,7 @@ func buildUpstreamMembers(
 			hostLimiters,
 			hostLimits,
 			pkg.UpstreamHostKey(upstream),
-		).Wrap(memberHandler)
+		).Wrap(memberHandler, name, metrics.QueueWaitSeconds)
 		caps = append(caps, up.MaxConcurrentRequests)
 		inflights = append(inflights, inFlight)
 		queueds = append(queueds, queued)

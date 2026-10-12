@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // HostLimiter is the one shared concurrency budget for an upstream host
@@ -47,16 +49,33 @@ func NewHostLimiter(maxConcurrentRequests int, maxConcurrentWait time.Duration) 
 // returned by Wrap on the same HostLimiter shares one budget.
 //
 // The returned limiter reuses the concurrencyLimiter type but is built as a
-// raw literal rather than through NewConcurrencyLimiter, because a host
-// budget is not a provider's: it carries no provider label and so observes
-// neither ccrouter_queue_wait_seconds nor a per-provider reason. now is set
-// explicitly — the type's clock is read on the waiting path, and a literal
-// that omitted it would nil-panic on the first host-slot timeout.
-func (h *HostLimiter) Wrap(next http.Handler) http.Handler {
+// raw literal rather than through NewConcurrencyLimiter. Wrap is called once
+// per upstream member, so each returned wrapper carries its own provider
+// label while the semaphore it draws from is shared across every provider
+// resolving to that host. queueWait is the same ccrouter_queue_wait_seconds
+// histogram the member limiter observes, so a request refused after waiting
+// for a host slot is attributed to the provider it routed to — the same
+// label its ccrouter_rejected_total{reason="queue_timeout"} series already
+// carries. A nil queueWait disables the observation without changing the
+// request path. now is set explicitly — the type's clock is read on the
+// waiting path, and a literal that omitted it would nil-panic on the first
+// host-slot timeout.
+func (h *HostLimiter) Wrap(
+	next http.Handler,
+	provider string,
+	queueWait *prometheus.HistogramVec,
+) http.Handler {
 	if h.sem == nil {
 		return &hostInFlightCounter{next: next, inFlight: &h.inFlight}
 	}
-	return &concurrencyLimiter{next: next, sem: h.sem, wait: h.wait, now: realNow}
+	return &concurrencyLimiter{
+		next:      next,
+		provider:  provider,
+		sem:       h.sem,
+		wait:      h.wait,
+		now:       realNow,
+		queueWait: queueWait,
+	}
 }
 
 // InFlight returns the host's current in-flight request count: the
