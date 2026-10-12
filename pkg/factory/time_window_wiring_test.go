@@ -318,14 +318,17 @@ var _ = Describe("CreateRouterFromConfig time-window wiring", func() {
 			// open until the fallback server is actually serving — the [route] line
 			// is written before dispatch, so a risen B counter proves it landed inside
 			// the window.
+			// The request runs entirely inside the capture: started after
+			// captureStderr swaps os.Stderr and finished before it restores it,
+			// so the request goroutine's glog writes never race the swap.
 			rec := httptest.NewRecorder()
-			done := serveAsync(router, rec, newMessagesRequest("m1"))
 			out := captureStderr(func() {
+				done := serveAsync(router, rec, newMessagesRequest("m1"))
 				Eventually(func() int32 { return atomic.LoadInt32(&b.inFlight) }, "1s", "10ms").
 					Should(BeNumerically("==", 1), "the fallback provider must serve")
+				b.unblock()
+				Eventually(done, "1s").Should(BeClosed())
 			})
-			b.unblock()
-			Eventually(done, "1s").Should(BeClosed())
 			Expect(rec.Code).To(Equal(http.StatusOK), "a closed window is eligibility, never a 429")
 			Expect(a.count()).To(BeNumerically("==", 0), "the closed pool must not serve")
 			Expect(out).To(ContainSubstring("[route] provider=pool window=closed -> fallback"))
@@ -382,14 +385,17 @@ var _ = Describe("CreateRouterFromConfig time-window wiring", func() {
 			// open until the fallback server is actually serving — the [route] line
 			// is written before dispatch, so a risen B counter proves it landed inside
 			// the window.
+			// The request runs entirely inside the capture: started after
+			// captureStderr swaps os.Stderr and finished before it restores it,
+			// so the request goroutine's glog writes never race the swap.
 			rec := httptest.NewRecorder()
-			done := serveAsync(router, rec, newMessagesRequest("m1"))
 			out := captureStderr(func() {
+				done := serveAsync(router, rec, newMessagesRequest("m1"))
 				Eventually(func() int32 { return atomic.LoadInt32(&b.inFlight) }, "1s", "10ms").
 					Should(BeNumerically("==", 1), "the fallback provider must serve")
+				b.unblock()
+				Eventually(done, "1s").Should(BeClosed())
 			})
-			b.unblock()
-			Eventually(done, "1s").Should(BeClosed())
 			Expect(rec.Code).To(Equal(http.StatusOK), "closed days are eligibility, never a 429")
 			Expect(a.count()).To(BeNumerically("==", 0), "the days-closed pool must not serve")
 			Expect(out).To(ContainSubstring("[route] provider=pool window=closed -> fallback"))

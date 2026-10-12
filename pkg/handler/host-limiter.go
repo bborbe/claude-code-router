@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -30,15 +31,21 @@ import (
 type HostLimiter struct {
 	sem      chan struct{} // nil when unlimited
 	wait     time.Duration
+	waiter   libtime.WaiterDuration
 	inFlight atomic.Int32 // in-flight count, used only when unlimited
 }
 
 // NewHostLimiter returns the shared budget for one upstream host.
 // maxConcurrentRequests <= 0 means unlimited. maxConcurrentWait must be
 // > 0 on a capped limiter; the factory resolves the 30s default before
-// constructing.
-func NewHostLimiter(maxConcurrentRequests int, maxConcurrentWait time.Duration) *HostLimiter {
-	h := &HostLimiter{wait: maxConcurrentWait}
+// constructing. waiter times the host-slot queue wait exactly as it does
+// for NewConcurrencyLimiter; it is required.
+func NewHostLimiter(
+	maxConcurrentRequests int,
+	maxConcurrentWait time.Duration,
+	waiter libtime.WaiterDuration,
+) *HostLimiter {
+	h := &HostLimiter{wait: maxConcurrentWait, waiter: waiter}
 	if maxConcurrentRequests > 0 {
 		h.sem = make(chan struct{}, maxConcurrentRequests)
 	}
@@ -75,6 +82,7 @@ func (h *HostLimiter) Wrap(
 		provider:     provider,
 		sem:          h.sem,
 		wait:         h.wait,
+		waiter:       h.waiter,
 		now:          realNow,
 		queueWait:    queueWait,
 		rejectReason: rejectionReasonHostQueueTimeout,

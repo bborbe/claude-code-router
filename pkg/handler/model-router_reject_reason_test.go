@@ -12,6 +12,7 @@ import (
 	"sync"
 	stdtime "time"
 
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -80,22 +81,31 @@ var _ = Describe("ModelRouter rejection reason in [req] line", func() {
 
 	It("logs reason=queue_timeout when the member limiter refuses", func() {
 		code, out := saturatedLogLine(func(next http.Handler) http.Handler {
-			return handler.NewConcurrencyLimiter(next, "p", 1, 50*stdtime.Millisecond, nil, nil)
+			return handler.NewConcurrencyLimiter(
+				next,
+				"p",
+				1,
+				50*stdtime.Millisecond,
+				libtime.NewWaiterDuration(),
+				nil,
+				nil,
+			)
 		})
 		Expect(code).To(Equal(http.StatusTooManyRequests))
 		Expect(
 			out,
-		).To(MatchRegexp(`\[req\] POST /v1/messages model=deepseek-v4-flash provider=p/0 status=429 .* reason=queue_timeout\n`))
+		).To(MatchRegexp(`\[req\] POST /v1/messages model=deepseek-v4-flash provider=p/- status=429 .* reason=queue_timeout\n`))
 	})
 
 	It("logs reason=host_queue_timeout when the shared host budget refuses", func() {
 		code, out := saturatedLogLine(func(next http.Handler) http.Handler {
-			return handler.NewHostLimiter(1, 50*stdtime.Millisecond).Wrap(next, "p", nil)
+			return handler.NewHostLimiter(1, 50*stdtime.Millisecond, libtime.NewWaiterDuration()).
+				Wrap(next, "p", nil)
 		})
 		Expect(code).To(Equal(http.StatusTooManyRequests))
 		Expect(
 			out,
-		).To(MatchRegexp(`\[req\] POST /v1/messages model=deepseek-v4-flash provider=p/0 status=429 .* reason=host_queue_timeout\n`))
+		).To(MatchRegexp(`\[req\] POST /v1/messages model=deepseek-v4-flash provider=p/- status=429 .* reason=host_queue_timeout\n`))
 	})
 
 	It("logs reason=upstream for a 429 no router gate claimed", func() {
@@ -110,7 +120,7 @@ var _ = Describe("ModelRouter rejection reason in [req] line", func() {
 		Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
 		Expect(
 			out,
-		).To(MatchRegexp(`\[req\] POST /v1/messages model=deepseek-v4-flash provider=p/0 status=429 .* reason=upstream\n`))
+		).To(MatchRegexp(`\[req\] POST /v1/messages model=deepseek-v4-flash provider=p/- status=429 .* reason=upstream\n`))
 	})
 
 	It("adds no reason field to a non-429 line", func() {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -106,7 +107,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 	It("returns next unchanged when maxConcurrentRequests is 0 — byte-for-byte no-op", func() {
 		inner := newBlockingHandler()
 		close(inner.release)
-		limiter := handler.NewConcurrencyLimiter(inner, "", 0, time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			0,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 
 		Expect(limiter).To(BeIdenticalTo(http.Handler(inner)))
 
@@ -122,7 +131,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 		"caps in-flight requests at the limit and forwards the queued request after the first releases its slot",
 		func() {
 			inner := newBlockingHandler()
-			limiter := handler.NewConcurrencyLimiter(inner, "", 1, time.Second, nil, nil)
+			limiter := handler.NewConcurrencyLimiter(
+				inner,
+				"",
+				1,
+				time.Second,
+				libtime.NewWaiterDuration(),
+				nil,
+				nil,
+			)
 
 			rec1 := httptest.NewRecorder()
 			done1 := serveAsync(limiter, rec1, newMessagesRequest())
@@ -150,7 +167,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 
 	It("reports its in-flight slot occupancy via InFlight", func() {
 		inner := newBlockingHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 1, time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			1,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 		// The no-op path (cap <= 0) returns next unchanged, which carries no
 		// InFlight; a real limiter exposes the semaphore occupancy the pool
 		// handler's least-loaded selection reads.
@@ -170,7 +195,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 
 	It("answers HTTP 429 with the Anthropic-shaped rate_limit_error body on queue timeout", func() {
 		inner := newBlockingHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 1, 50*time.Millisecond, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			1,
+			50*time.Millisecond,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 
 		rec1 := httptest.NewRecorder()
 		done1 := serveAsync(limiter, rec1, newMessagesRequest())
@@ -206,8 +239,24 @@ var _ = Describe("ConcurrencyLimiter", func() {
 	It("keeps per-provider limiters independent — saturating one does not affect another", func() {
 		innerA := newBlockingHandler()
 		innerB := newBlockingHandler()
-		limiterA := handler.NewConcurrencyLimiter(innerA, "", 1, time.Second, nil, nil)
-		limiterB := handler.NewConcurrencyLimiter(innerB, "", 1, time.Second, nil, nil)
+		limiterA := handler.NewConcurrencyLimiter(
+			innerA,
+			"",
+			1,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
+		limiterB := handler.NewConcurrencyLimiter(
+			innerB,
+			"",
+			1,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 
 		recA := httptest.NewRecorder()
 		doneA := serveAsync(limiterA, recA, newMessagesRequest())
@@ -228,7 +277,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 
 	It("never acquires a slot for a client that disconnects while queued", func() {
 		inner := newBlockingHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 1, time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			1,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 
 		rec1 := httptest.NewRecorder()
 		done1 := serveAsync(limiter, rec1, newMessagesRequest())
@@ -251,7 +308,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 
 	It("splits dispatched from queued: cap 2 with 5 concurrent requests reads 2 and 3", func() {
 		inner := newBlockingHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 2, 10*time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			2,
+			10*time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 		counters, ok := limiter.(interface {
 			InFlight() int
 			Queued() int
@@ -280,7 +345,15 @@ var _ = Describe("ConcurrencyLimiter", func() {
 
 	It("never counts a request that takes a free slot as queued", func() {
 		inner := newBlockingHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 1, time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			1,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 		counters, ok := limiter.(interface{ Queued() int })
 		Expect(ok).To(BeTrue())
 
@@ -295,14 +368,30 @@ var _ = Describe("ConcurrencyLimiter", func() {
 
 	It("reports queued 0 on an uncapped limiter, which is the no-op path", func() {
 		inner := newBlockingHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 0, time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			0,
+			time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 		_, ok := limiter.(interface{ Queued() int })
 		Expect(ok).To(BeFalse(), "the <= 0 path returns next unchanged and has no counters")
 	})
 
 	It("stops counting a request as queued the moment it acquires the slot", func() {
 		inner := newGatedHandler()
-		limiter := handler.NewConcurrencyLimiter(inner, "", 1, 10*time.Second, nil, nil)
+		limiter := handler.NewConcurrencyLimiter(
+			inner,
+			"",
+			1,
+			10*time.Second,
+			libtime.NewWaiterDuration(),
+			nil,
+			nil,
+		)
 		counters, ok := limiter.(interface {
 			InFlight() int
 			Queued() int

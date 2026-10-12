@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -20,7 +21,7 @@ import (
 
 var _ = Describe("UpstreamInFlightCollector", func() {
 	It("reports a capped host's occupancy 0 -> 1 -> 0", func() {
-		hl := handler.NewHostLimiter(2, time.Second)
+		hl := handler.NewHostLimiter(2, time.Second, libtime.NewWaiterDuration())
 		c := handler.NewUpstreamInFlightCollector(map[string]*handler.HostLimiter{
 			"vllm.seibert.tools": hl,
 		})
@@ -38,7 +39,7 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 	})
 
 	It("reports an uncapped host's live in-flight count 0 -> 1 -> 0", func() {
-		hl := handler.NewHostLimiter(0, time.Second)
+		hl := handler.NewHostLimiter(0, time.Second, libtime.NewWaiterDuration())
 		c := handler.NewUpstreamInFlightCollector(map[string]*handler.HostLimiter{
 			"vllm.seibert.tools": hl,
 		})
@@ -57,8 +58,8 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 
 	It("emits one gauge family with exactly the host label per host", func() {
 		c := handler.NewUpstreamInFlightCollector(map[string]*handler.HostLimiter{
-			"a.example":      handler.NewHostLimiter(2, time.Second),
-			"127.0.0.1:8317": handler.NewHostLimiter(0, time.Second),
+			"a.example":      handler.NewHostLimiter(2, time.Second, libtime.NewWaiterDuration()),
+			"127.0.0.1:8317": handler.NewHostLimiter(0, time.Second, libtime.NewWaiterDuration()),
 		})
 
 		reg := prometheus.NewPedanticRegistry()
@@ -87,7 +88,7 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 	})
 
 	It("never reports above the cap while a request is queued", func() {
-		hl := handler.NewHostLimiter(1, 50*time.Millisecond)
+		hl := handler.NewHostLimiter(1, 50*time.Millisecond, libtime.NewWaiterDuration())
 		c := handler.NewUpstreamInFlightCollector(map[string]*handler.HostLimiter{
 			"capped.example": hl,
 		})
@@ -114,7 +115,7 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 
 	DescribeTable("returns to 0 after a failed request",
 		func(maxConcurrent int) {
-			hl := handler.NewHostLimiter(maxConcurrent, time.Second)
+			hl := handler.NewHostLimiter(maxConcurrent, time.Second, libtime.NewWaiterDuration())
 			c := handler.NewUpstreamInFlightCollector(map[string]*handler.HostLimiter{
 				"failing.example": hl,
 			})

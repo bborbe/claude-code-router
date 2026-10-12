@@ -22,6 +22,7 @@ package factory_test
 
 import (
 	"context"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,7 @@ import (
 
 	httpmocks "github.com/bborbe/http/mocks"
 	libtime "github.com/bborbe/time"
+	libtimemocks "github.com/bborbe/time/mocks"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -307,6 +309,69 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 		)
 	})
 
+	Context("[req] member label for a request no member saw", func() {
+		It(
+			"logs /- with the gate's reason, never /0, when the breaker refuses on a Sunday",
+			func() {
+				// Reproduces the 2026-10-11 log: provider-level refusals were
+				// logged as member /0 — the weekday-day member — although no member
+				// saw them, which read as weekend traffic dispatched to the day
+				// member.
+				upstream := &httpmocks.HttpHandler{}
+				upstream.ServeHTTPStub = func(w http.ResponseWriter, r *http.Request) {
+					_, _ = io.Copy(io.Discard, r.Body)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+				srv := httptest.NewServer(upstream)
+				defer srv.Close()
+
+				prov := livePoolProvider([3]string{srv.URL, srv.URL, srv.URL}, [3]int{16, 25, 25})
+				prov.BreakerFailureThreshold = 1
+				cfg := &pkg.Config{
+					Router:    pkg.Router{DefaultProvider: provider},
+					Providers: map[string]pkg.Provider{provider: prov},
+				}
+				h, err := factory.CreateRouterFromConfig(
+					context.Background(),
+					cfg,
+					isolatedRegistry(),
+					factory.WithCurrentDateTime(berlinAt(2026, stdtime.October, 11, 12, 0)),
+				)
+				Expect(err).NotTo(HaveOccurred())
+
+				oldV := flag.Lookup("v").Value.String()
+				oldLogToStderr := flag.Lookup("logtostderr").Value.String()
+				defer func() {
+					Expect(flag.Set("v", oldV)).To(Succeed())
+					Expect(flag.Set("logtostderr", oldLogToStderr)).To(Succeed())
+				}()
+				Expect(flag.Set("v", "1")).To(Succeed())
+				Expect(flag.Set("logtostderr", "true")).To(Succeed())
+
+				var failed, refused *httptest.ResponseRecorder
+				out := captureStderr(func() {
+					failed = httptest.NewRecorder()
+					h.ServeHTTP(failed, newMessagesRequest("deepseek-v4-flash"))
+					refused = httptest.NewRecorder()
+					h.ServeHTTP(refused, newMessagesRequest("deepseek-v4-flash"))
+				})
+
+				Expect(failed.Code).To(Equal(http.StatusInternalServerError))
+				Expect(refused.Code).To(Equal(http.StatusTooManyRequests))
+				Expect(
+					upstream.ServeHTTPCallCount(),
+				).To(Equal(1), "the open breaker never reached a member")
+				Expect(
+					out,
+				).To(MatchRegexp(`provider=seibert-vllm-default/2 status=500 `), "the weekend member served the first")
+				Expect(
+					out,
+				).To(MatchRegexp(`provider=seibert-vllm-default/- status=429 .* reason=circuit_open\n`))
+				Expect(out).NotTo(ContainSubstring("provider=seibert-vllm-default/0"))
+			},
+		)
+	})
+
 	Context("18:00 switch on one running router (no restart, no reload)", func() {
 		It(
 			"raises admission from the day cap 16 to the host budget 25 as the clock crosses 18:00",
@@ -371,12 +436,27 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 				clock.SetNow(
 					libtime.DateTime(stdtime.Date(2026, stdtime.October, 12, 17, 59, 0, 0, berlin)),
 				)
+				// The queue wait is timed by the counterfeiter WaiterDuration mock:
+				// a queued request times out only when the spec sends on expire,
+				// so each refusal is one deterministic event rather than a real
+				// 1s timer.
+				expire := make(chan struct{})
+				waiter := &libtimemocks.WaiterDuration{}
+				waiter.WaitStub = func(ctx context.Context, _ libtime.Duration) error {
+					select {
+					case <-expire:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 				reg := prometheus.NewRegistry()
 				h, err := factory.CreateRouterFromConfig(
 					context.Background(),
 					cfg,
 					factory.WithMetricsRegisterer(reg),
 					factory.WithCurrentDateTime(clock),
+					factory.WithWaiterDuration(waiter),
 				)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -394,9 +474,21 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 					}
 					return dones
 				}
+				// refused sends one request past the binding cap: it queues (one
+				// more Wait call), the spec expires exactly that wait, and the
+				// request is answered 429. Exactly one request is queued at each
+				// call, so the single send on expire reaches that one waiter.
 				refused := func() {
+					waitsBefore := waiter.WaitCallCount()
 					rec := httptest.NewRecorder()
-					h.ServeHTTP(rec, newMessagesRequest("deepseek-v4-flash"))
+					done := serveAsync(h, rec, newMessagesRequest("deepseek-v4-flash"))
+					Eventually(waiter.WaitCallCount).Should(Equal(waitsBefore + 1))
+					_, d := waiter.WaitArgsForCall(waitsBefore)
+					Expect(
+						d,
+					).To(Equal(libtime.Duration(stdtime.Second)), "maxConcurrentWaitSeconds: 1")
+					expire <- struct{}{}
+					Eventually(done, "2s").Should(BeClosed())
 					Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
 				}
 

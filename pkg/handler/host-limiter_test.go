@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,7 +53,7 @@ func (panickyHandler) ServeHTTP(http.ResponseWriter, *http.Request) {
 
 var _ = Describe("HostLimiter", func() {
 	It("shares one budget across every wrapped handler", func() {
-		hl := handler.NewHostLimiter(1, time.Second)
+		hl := handler.NewHostLimiter(1, time.Second, libtime.NewWaiterDuration())
 		innerA := newBlockingHandler()
 		innerB := newBlockingHandler()
 		wrapA := hl.Wrap(innerA, "", nil)
@@ -88,7 +89,7 @@ var _ = Describe("HostLimiter", func() {
 		reg := prometheus.NewRegistry()
 		Expect(reg.Register(queueWait)).To(Succeed())
 
-		hl := handler.NewHostLimiter(1, 50*time.Millisecond)
+		hl := handler.NewHostLimiter(1, 50*time.Millisecond, libtime.NewWaiterDuration())
 		innerA := newBlockingHandler()
 		innerB := newBlockingHandler()
 		wrapA := hl.Wrap(innerA, "provider-a", queueWait)
@@ -126,7 +127,11 @@ var _ = Describe("HostLimiter", func() {
 
 	DescribeTable("never queues when unlimited",
 		func(maxConcurrentRequests int) {
-			hl := handler.NewHostLimiter(maxConcurrentRequests, time.Second)
+			hl := handler.NewHostLimiter(
+				maxConcurrentRequests,
+				time.Second,
+				libtime.NewWaiterDuration(),
+			)
 			inner := newBlockingHandler()
 			wrap := hl.Wrap(inner, "", nil)
 
@@ -152,7 +157,7 @@ var _ = Describe("HostLimiter", func() {
 	)
 
 	It("reports the semaphore occupancy via InFlight when capped", func() {
-		hl := handler.NewHostLimiter(2, time.Second)
+		hl := handler.NewHostLimiter(2, time.Second, libtime.NewWaiterDuration())
 		inner := newBlockingHandler()
 		wrap := hl.Wrap(inner, "", nil)
 
@@ -169,7 +174,7 @@ var _ = Describe("HostLimiter", func() {
 	})
 
 	It("never acquires a slot for a client that disconnects while queued", func() {
-		hl := handler.NewHostLimiter(1, time.Second)
+		hl := handler.NewHostLimiter(1, time.Second, libtime.NewWaiterDuration())
 		inner := newBlockingHandler()
 		wrap := hl.Wrap(inner, "", nil)
 
@@ -193,7 +198,11 @@ var _ = Describe("HostLimiter", func() {
 
 	DescribeTable("releases the slot when the inner handler panics",
 		func(maxConcurrentRequests int) {
-			hl := handler.NewHostLimiter(maxConcurrentRequests, time.Second)
+			hl := handler.NewHostLimiter(
+				maxConcurrentRequests,
+				time.Second,
+				libtime.NewWaiterDuration(),
+			)
 			wrap := hl.Wrap(panickyHandler{}, "", nil)
 
 			func() {

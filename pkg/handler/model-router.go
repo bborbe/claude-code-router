@@ -420,9 +420,10 @@ func newModelRouter(
 		// injects a shared slot into the request context before dispatch;
 		// an upstream pool handler in the dispatch path writes the
 		// zero-based index of the member it selected, and the router reads
-		// it back below for the [req] line. No pool handler in the path
-		// (default-fallback, test stubs) leaves the slot at its zero value
-		// -> a uniform `/0` suffix, never conditionally omitted.
+		// it back below for the [req] line. Every production provider
+		// dispatches through a pool handler, so an unselected slot means no
+		// member saw the request (a provider-level gate refused it first) and
+		// the suffix reads `/-` — always present, never omitted.
 		slot := &upstreamIndexSlot{}
 		r = r.WithContext(ContextWithUpstreamIndex(r.Context(), slot))
 		// Per-request rejection slot: whichever 429-producing gate answers
@@ -440,7 +441,7 @@ func newModelRouter(
 		end := metrics.InFlight.Start(providerName)
 		defer end()
 		target.ServeHTTP(ur, r)
-		memberIndex := slot.index
+		member := slot.memberLabel()
 
 		status := rec.status
 		if status == 0 {
@@ -492,14 +493,14 @@ func newModelRouter(
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {
 			glog.V(1).Infof(
-				"[req] %s %s model=%s alias=%s provider=%s/%d status=%d latency=%s in=%s out=%s%s",
-				r.Method, r.URL.Path, origModel, aliasResolved, providerName, memberIndex, status, latency, in, out, reasonField,
+				"[req] %s %s model=%s alias=%s provider=%s/%s status=%d latency=%s in=%s out=%s%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, member, status, latency, in, out, reasonField,
 			)
 			return
 		}
 		glog.V(1).Infof(
-			"[req] %s %s model=%s provider=%s/%d status=%d latency=%s in=%s out=%s%s",
-			r.Method, r.URL.Path, origModel, providerName, memberIndex, status, latency, in, out, reasonField,
+			"[req] %s %s model=%s provider=%s/%s status=%d latency=%s in=%s out=%s%s",
+			r.Method, r.URL.Path, origModel, providerName, member, status, latency, in, out, reasonField,
 		)
 	})
 }
