@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update github.com/bborbe/argument/v2 to v2.13.5, github.com/bborbe/errors to v1.6.3, github.com/bborbe/log to v1.7.3, github.com/bborbe/time to v1.27.16, github.com/onsi/ginkgo/v2 to v2.33.1
+
 ## v0.56.0
 
 - feat: resolve `${NAME}` references in the config file from the process environment, each replaced by the value of that environment variable at load and at every reload, so a provider token or an inbound API key can be named in the file instead of written into it. `$${` escapes a literal `${` and performs no lookup, and a `$` that begins neither a reference nor the escape passes through unchanged. Expansion is a single pass over the whole document — including comments, so a comment documenting the syntax must write `$${NAME}` — and an inserted value is never re-scanned, so an environment value containing `${OTHER}` stays literal. A variable that is unset fails the load naming the variable and never its value (the router does not start, and a reload leaves the previous handler in place), a reference whose name is not a valid identifier or whose `${` is unterminated fails the load naming the byte offset, and a variable set to the empty string resolves to the empty value. No secret value appears in an error message or a log line. Documented in `docs/config.md` (new `## Environment variable expansion` section). **Breaking:** a config file that already contains a literal `${…}` — an unset variable, or a name that is not a valid identifier — now fails to load where it previously loaded verbatim, so the router does not start and a reload keeps the previous handler in place.
