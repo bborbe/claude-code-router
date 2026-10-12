@@ -181,6 +181,67 @@ var _ = Describe("Reloader", func() {
 			Expect(len(rel.ConfigSnapshot().Providers)).To(Equal(2))
 		})
 
+		It("re-expands env refs against the environment at reload time", func() {
+			tmpFile := filepath.Join(tmpDir, "config.yaml")
+
+			Expect(os.Setenv("ROUTER_RELOAD_TOKEN", "first-value")).To(Succeed())
+			DeferCleanup(func() { _ = os.Unsetenv("ROUTER_RELOAD_TOKEN") })
+
+			Expect(os.WriteFile(tmpFile, []byte(configYAML(map[string]struct {
+				Upstream string
+				Token    string
+				Models   []string
+			}{
+				"anthropic": {
+					Upstream: "https://api.anthropic.com",
+					Token:    "${ROUTER_RELOAD_TOKEN}",
+					Models:   []string{"claude-*"},
+				},
+			}, "anthropic")), 0o600)).To(Succeed())
+
+			initialCfg := &pkg.Config{
+				Router: pkg.Router{DefaultProvider: "anthropic"},
+				Providers: map[string]pkg.Provider{
+					"anthropic": {
+						Upstream: "https://api.anthropic.com",
+						Models:   []string{"claude-*"},
+					},
+				},
+			}
+			initialHandler, err := factory.CreateRouterFromConfig(context.Background(), initialCfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			rel := reloader.NewReloader(
+				tmpFile,
+				initialHandler,
+				func(ctx context.Context, cfg *pkg.Config) (http.Handler, error) {
+					return factory.CreateRouterFromConfig(
+						ctx,
+						cfg,
+						factory.WithMetricsRegisterer(prometheus.NewRegistry()),
+					)
+				},
+			)
+			rel.SeedConfig(initialCfg)
+
+			// First reload: the reference resolves to the environment as it
+			// stands now.
+			Expect(rel.Reload(context.Background())).To(Succeed())
+			Expect(rel.ConfigSnapshot().Providers["anthropic"].Token).To(Equal("first-value"))
+
+			// Rotate the environment without touching the config file: the
+			// next reload must re-run expansion and pick the new value up.
+			Expect(os.Setenv("ROUTER_RELOAD_TOKEN", "second-value")).To(Succeed())
+			Expect(rel.Reload(context.Background())).To(Succeed())
+			Expect(rel.ConfigSnapshot().Providers["anthropic"].Token).To(Equal("second-value"))
+
+			// Unset the variable: the reload fails and the previous snapshot
+			// stays active, so a rotated-away secret never blanks the token.
+			_ = os.Unsetenv("ROUTER_RELOAD_TOKEN")
+			Expect(rel.Reload(context.Background())).NotTo(Succeed())
+			Expect(rel.ConfigSnapshot().Providers["anthropic"].Token).To(Equal("second-value"))
+		})
+
 		It("serves the reloaded handler's metrics after Reload", func() {
 			tmpFile := filepath.Join(tmpDir, "config.yaml")
 			Expect(os.WriteFile(tmpFile, []byte(configYAML(map[string]struct {

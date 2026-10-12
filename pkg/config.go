@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	stdtime "time"
 
@@ -522,7 +523,9 @@ type ModelPoolMember struct {
 }
 
 // Load reads, parses, and validates the config at path. Tilde-prefix
-// (~/) is expanded to the user's home directory.
+// (~/) is expanded to the user's home directory. Every `${NAME}`
+// reference in the file text is then resolved against the process
+// environment (see expandEnvRefs) before the YAML is parsed.
 func Load(ctx context.Context, rawPath string) (*Config, error) {
 	expanded, err := expandTilde(rawPath)
 	if err != nil {
@@ -531,6 +534,10 @@ func Load(ctx context.Context, rawPath string) (*Config, error) {
 	data, err := os.ReadFile(expanded) //nolint:gosec // operator-provided path
 	if err != nil {
 		return nil, errors.Wrapf(ctx, err, "read config %q", expanded)
+	}
+	data, err = expandEnvRefs(ctx, data)
+	if err != nil {
+		return nil, errors.Wrapf(ctx, err, "expand env refs in config %q", expanded)
 	}
 	c := &Config{}
 	if err := yaml.Unmarshal(data, c); err != nil {
@@ -913,6 +920,112 @@ func (c *Config) validateModelPools(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// envRefNamePattern is the accepted shape of an environment reference
+// name: a POSIX-style identifier, so `${NAME}` never resolves a name the
+// process environment could not carry.
+var envRefNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// expandEnvRefs resolves every `${NAME}` reference in data against the
+// process environment and returns the expanded bytes.
+//
+// Syntax: `${NAME}` is replaced by the value of the environment variable
+// NAME; `$${` is the escape and renders the literal `${` with no lookup,
+// so a comment or a value can carry a reference verbatim. A `$` that
+// starts neither a reference nor the escape (`$$` not followed by `{`, a
+// lone `$`, a trailing `$`) is passed through untouched.
+//
+// It is a single left-to-right pass over data and an inserted value is
+// never re-scanned, so a value that itself contains `${OTHER}` is emitted
+// verbatim. The byte offsets reported by its errors are 0-based offsets
+// into data.
+//
+// A variable that is UNSET fails the load; a variable set to the empty
+// string resolves to the empty string. That distinction is why this uses
+// os.LookupEnv rather than Getenv or the stdlib ExpandEnv helper, neither
+// of which can tell unset from empty. No error, log line,
+// or trace entry ever carries a referenced value — only the variable name
+// and the byte offset — so an expansion failure cannot leak a secret.
+//
+// ctx feeds bborbe/errors purely as error metadata (tracing), not as a
+// cancellation point; this mirrors the (*Days).UnmarshalText GoDoc
+// precedent. The scan is over an in-memory byte slice with no I/O, so
+// there is no cancellation to observe.
+func expandEnvRefs(ctx context.Context, data []byte) ([]byte, error) {
+	var out strings.Builder
+	out.Grow(len(data))
+	i := 0
+	for i < len(data) {
+		if data[i] != '$' {
+			out.WriteByte(data[i])
+			i++
+			continue
+		}
+		// Escape: $${ renders a literal ${ and performs no lookup.
+		if i+2 < len(data) && data[i+1] == '$' && data[i+2] == '{' {
+			out.WriteString("${")
+			i += 3
+			continue
+		}
+		// Reference: ${NAME}.
+		if i+1 < len(data) && data[i+1] == '{' {
+			value, next, err := resolveEnvRef(ctx, data, i)
+			if err != nil {
+				return nil, err
+			}
+			out.WriteString(value)
+			i = next
+			continue
+		}
+		// A bare $ that starts neither a reference nor the escape.
+		out.WriteByte('$')
+		i++
+	}
+	return []byte(out.String()), nil
+}
+
+// resolveEnvRef resolves the `${NAME}` reference that opens at byte offset
+// i in data, where data[i] == '$' and data[i+1] == '{'. It returns the
+// value to emit and the offset just past the closing brace, or an error
+// naming i. A name that is not a valid environment identifier and a
+// reference with no closing brace are both errors, as is a name that is
+// not set in the process environment.
+//
+// It never puts a referenced value into an error: the messages carry the
+// variable name and the byte offset only, so a failed expansion cannot
+// leak a secret.
+func resolveEnvRef(ctx context.Context, data []byte, i int) (string, int, error) {
+	j := i + 2
+	for j < len(data) && data[j] != '}' {
+		j++
+	}
+	if j == len(data) {
+		return "", 0, errors.Errorf(
+			ctx,
+			"unterminated environment reference at byte offset %d",
+			i,
+		)
+	}
+	name := string(data[i+2 : j])
+	if !envRefNamePattern.MatchString(name) {
+		return "", 0, errors.Errorf(
+			ctx,
+			"invalid environment reference name %q at byte offset %d",
+			name,
+			i,
+		)
+	}
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return "", 0, errors.Errorf(
+			ctx,
+			"environment variable %q referenced at byte offset %d is not set",
+			name,
+			i,
+		)
+	}
+	return value, j + 1, nil
 }
 
 func expandTilde(p string) (string, error) {
