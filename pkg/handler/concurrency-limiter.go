@@ -254,7 +254,10 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// eligible set while the request waits; once it changed, the request is
 	// handed back so the pool selects again (see reselectSignal). The host
 	// limiter never does: its budget is shared by every member, so moving a
-	// request between members cannot free a host slot.
+	// request between members cannot free a host slot. Like the timeout
+	// waiter above, the re-check goroutine lives exactly as long as the
+	// queued phase: every select arm below cancels waitCtx, which ends its
+	// Wait, and it reports only by closing stale, which it alone owns.
 	signal := reselectFromContext(r.Context())
 	stale := make(chan struct{})
 	if l.reselectable && signal != nil {

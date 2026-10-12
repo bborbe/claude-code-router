@@ -99,6 +99,11 @@ var realNow = func() libtime.DateTime { return libtime.DateTime(stdtime.Now()) }
 func NewUpstreamPoolHandler(ctx context.Context, members []UpstreamMember) http.Handler {
 	windowed := false
 	for _, m := range members {
+		select {
+		case <-ctx.Done():
+			return &upstreamPoolHandler{members: members, windowed: windowed}
+		default:
+		}
 		if m.Window != nil || m.Days != nil {
 			windowed = true
 		}
@@ -119,6 +124,13 @@ type upstreamPoolHandler struct {
 func (p *upstreamPoolHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sessionID := SessionIDFromContext(r.Context())
 	for {
+		select {
+		case <-r.Context().Done():
+			// Client gone between a hand-back and the next selection: there
+			// is no one left to serve.
+			return
+		default:
+		}
 		eligible := p.eligibleIndices(r.Context())
 		memberIndex := p.selectMember(r.Context(), sessionID)
 		// Publish the selected member's zero-based index into the per-request
