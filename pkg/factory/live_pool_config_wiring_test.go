@@ -111,6 +111,27 @@ func rejectedCount(reg *prometheus.Registry, provider, reason string) float64 {
 	return 0
 }
 
+// gaugeValue reads one gauge series from reg by metric name and a single
+// label, failing the spec when the series is absent.
+func gaugeValue(reg *prometheus.Registry, name, labelName, labelValue string) float64 {
+	families, err := reg.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == labelName && label.GetValue() == labelValue {
+					return metric.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	Fail(name + "{" + labelName + "=" + labelValue + "} not exported")
+	return 0
+}
+
 // berlinAt returns a fixed clock reading the given Berlin wall time.
 func berlinAt(year int, month stdtime.Month, day, hour, minute int) libtime.CurrentDateTimeGetter {
 	clock := libtime.NewCurrentDateTime()
@@ -307,6 +328,51 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 				"queue_timeout",
 			),
 		)
+	})
+
+	Context("exported concurrency limit (one running router)", func() {
+		It("reads 16 by day, 25 from 18:00 and on the weekend, and the host budget 25", func() {
+			srv := newPoolUpstream()
+			defer srv.closeUpstream()
+			u, err := url.Parse(srv.url)
+			Expect(err).NotTo(HaveOccurred())
+			cfg := &pkg.Config{
+				Router: pkg.Router{DefaultProvider: provider},
+				Providers: map[string]pkg.Provider{
+					provider: livePoolProvider(
+						[3]string{srv.url, srv.url, srv.url},
+						[3]int{16, 25, 25},
+					),
+				},
+				UpstreamHostLimits: map[string]pkg.HostLimit{
+					pkg.UpstreamHostKey(u): {MaxConcurrentRequests: 25},
+				},
+			}
+			clock := libtime.NewCurrentDateTime()
+			reg := prometheus.NewRegistry()
+			_, err = factory.CreateRouterFromConfig(
+				context.Background(),
+				cfg,
+				factory.WithMetricsRegisterer(reg),
+				factory.WithCurrentDateTime(clock),
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			limitAt := func(day, hour, minute int) float64 {
+				clock.SetNow(
+					libtime.DateTime(
+						stdtime.Date(2026, stdtime.October, day, hour, minute, 0, 0, berlin),
+					),
+				)
+				return gaugeValue(reg, "ccrouter_provider_limit", "provider", provider)
+			}
+			Expect(limitAt(12, 17, 59)).To(Equal(16.0), "Mon 17:59 — day member")
+			Expect(limitAt(12, 18, 0)).To(Equal(25.0), "Mon 18:00 — night member, no reload")
+			Expect(limitAt(17, 12, 0)).To(Equal(25.0), "Sat 12:00 — weekend member")
+			Expect(
+				gaugeValue(reg, "ccrouter_upstream_limit", "host", pkg.UpstreamHostKey(u)),
+			).To(Equal(25.0))
+		})
 	})
 
 	Context("[req] member label for a request no member saw", func() {

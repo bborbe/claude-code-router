@@ -129,13 +129,20 @@ func (p *upstreamPoolHandler) selectMember(ctx context.Context, sessionID string
 	return p.leastLoaded(ctx)
 }
 
-// memberEligible reports whether member i is eligible for a dispatch:
-// (window absent OR window.Contains(now)) AND (days absent OR
-// days.Contains(now)). The clock is read only when a member carries a
-// window or a days set; a member with neither is always eligible,
-// byte-for-byte today (spec 014 / 017).
+// memberEligible reports whether member i is eligible for a dispatch; see
+// UpstreamMember.Eligible.
 func (p *upstreamPoolHandler) memberEligible(i int) bool {
-	m := p.members[i]
+	return p.members[i].Eligible()
+}
+
+// Eligible reports whether the member is eligible for a dispatch right now:
+// (window absent OR window.Contains(now)) AND (days absent OR
+// days.Contains(now)). The clock is read only when the member carries a
+// window or a days set; a member with neither is always eligible,
+// byte-for-byte today (spec 014 / 017). The pool handler's selection and
+// the ccrouter_provider_limit collector both call it, so the exported limit
+// is computed from the same eligibility rule that routes requests.
+func (m UpstreamMember) Eligible() bool {
 	if m.Window == nil && m.Days == nil {
 		return true
 	}

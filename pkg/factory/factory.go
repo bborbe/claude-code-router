@@ -289,6 +289,10 @@ func CreateRouterFromConfig(
 	// for an uncapped member. The two feed the exported dispatched/queued
 	// gauge pair (registerProviderInFlight).
 	upQueued := make(map[string][]func() int, len(cfg.Providers))
+	// upLimits is each provider's concurrency limit in force, evaluated at
+	// scrape time over its currently eligible members — the denominator the
+	// exported ccrouter_provider_limit gauge pairs with dispatched/queued.
+	upLimits := make(map[string]func() float64, len(cfg.Providers))
 	// One shared HostLimiter per distinct upstream host (spec 019), keyed
 	// by pkg.UpstreamHostKey. Every member resolving to the same host —
 	// across providers and across pool members — is wrapped by the same
@@ -332,6 +336,7 @@ func CreateRouterFromConfig(
 		upCaps[name] = caps
 		upInFlight[name] = inflights
 		upQueued[name] = queueds
+		upLimits[name] = func() float64 { return handler.ProviderLimit(members, caps) }
 		// The TTFT backpressure controller is constructed alongside the
 		// cold-start gate (spec 020) and adjusts that gate's effective
 		// budget. It is nil — inert — unless both the cold budget and the
@@ -437,7 +442,7 @@ func CreateRouterFromConfig(
 	if err := registerUpstreamInFlight(ctx, o.metricsRegisterer, hostLimiters); err != nil {
 		return nil, err
 	}
-	if err := registerProviderInFlight(ctx, o.metricsRegisterer, upInFlight, upQueued); err != nil {
+	if err := registerProviderInFlight(ctx, o.metricsRegisterer, upInFlight, upQueued, upLimits); err != nil {
 		return nil, err
 	}
 	modelRouter := handler.NewModelRouterWithPools(
@@ -613,6 +618,11 @@ func registerUpstreamInFlight(
 	if err := reg.Register(handler.NewUpstreamInFlightCollector(hostLimiters)); err != nil {
 		return errors.Wrapf(ctx, err, "register upstream inflight collector")
 	}
+	// ccrouter_upstream_limit{host}: each host's budget, the denominator for
+	// the in-flight series above.
+	if err := reg.Register(handler.NewUpstreamLimitCollector(hostLimiters)); err != nil {
+		return errors.Wrapf(ctx, err, "register upstream limit collector")
+	}
 	return nil
 }
 
@@ -625,18 +635,24 @@ func registerUpstreamInFlight(
 // exported pair always describes the limiters actually in the request
 // path. Like registerUpstreamInFlight it is registered on the same
 // registerer as the tree's other ccrouter_* series, so a SIGHUP reload
-// (fresh registry) exposes the rebuilt tree's providers. Both maps are
-// complete and never mutated when this runs.
+// (fresh registry) exposes the rebuilt tree's providers. It also registers
+// ccrouter_provider_limit{provider} from limits, the per-provider limit in
+// force, so load and limit are exported as one set. All maps are complete
+// and never mutated when this runs.
 func registerProviderInFlight(
 	ctx context.Context,
 	reg prometheus.Registerer,
 	dispatched map[string][]func() int,
 	queued map[string][]func() int,
+	limits map[string]func() float64,
 ) error {
 	if err := reg.Register(
 		handler.NewProviderInFlightCollector(dispatched, queued),
 	); err != nil {
 		return errors.Wrapf(ctx, err, "register provider inflight collector")
+	}
+	if err := reg.Register(handler.NewProviderLimitCollector(limits)); err != nil {
+		return errors.Wrapf(ctx, err, "register provider limit collector")
 	}
 	return nil
 }
