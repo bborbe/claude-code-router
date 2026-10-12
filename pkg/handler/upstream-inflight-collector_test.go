@@ -28,7 +28,7 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 		Expect(testutil.ToFloat64(c)).To(Equal(0.0))
 
 		inner := newBlockingHandler()
-		done := serveAsync(hl.Wrap(inner), httptest.NewRecorder(), newMessagesRequest())
+		done := serveAsync(hl.Wrap(inner, "", nil), httptest.NewRecorder(), newMessagesRequest())
 		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(1))
 		Eventually(func() float64 { return testutil.ToFloat64(c) }, "1s", "10ms").Should(Equal(1.0))
 
@@ -46,7 +46,7 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 		Expect(testutil.ToFloat64(c)).To(Equal(0.0))
 
 		inner := newBlockingHandler()
-		done := serveAsync(hl.Wrap(inner), httptest.NewRecorder(), newMessagesRequest())
+		done := serveAsync(hl.Wrap(inner, "", nil), httptest.NewRecorder(), newMessagesRequest())
 		Eventually(inner.entryCount, "1s", "10ms").Should(Equal(1))
 		Eventually(func() float64 { return testutil.ToFloat64(c) }, "1s", "10ms").Should(Equal(1.0))
 
@@ -93,13 +93,13 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 		})
 
 		innerA := newBlockingHandler()
-		doneA := serveAsync(hl.Wrap(innerA), httptest.NewRecorder(), newMessagesRequest())
+		doneA := serveAsync(hl.Wrap(innerA, "", nil), httptest.NewRecorder(), newMessagesRequest())
 		Eventually(innerA.entryCount, "1s", "10ms").Should(Equal(1))
 		Eventually(func() float64 { return testutil.ToFloat64(c) }, "1s", "10ms").Should(Equal(1.0))
 
 		innerB := newBlockingHandler()
 		recB := httptest.NewRecorder()
-		doneB := serveAsync(hl.Wrap(innerB), recB, newMessagesRequest())
+		doneB := serveAsync(hl.Wrap(innerB, "", nil), recB, newMessagesRequest())
 		Eventually(doneB, "1s").Should(BeClosed())
 		Expect(recB.Code).To(Equal(http.StatusTooManyRequests))
 		Expect(innerB.entryCount()).To(Equal(0))
@@ -121,7 +121,7 @@ var _ = Describe("UpstreamInFlightCollector", func() {
 
 			func() {
 				defer func() { _ = recover() }()
-				hl.Wrap(panickyHandler{}).ServeHTTP(
+				hl.Wrap(panickyHandler{}, "", nil).ServeHTTP(
 					httptest.NewRecorder(),
 					newMessagesRequest(),
 				)
