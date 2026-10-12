@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: hand requests queued on a pool member over to the new member when a time window switches. A request picked its member once and then waited on that member's own semaphore, so at the weekday 18:00 switch the requests queued for a day slot kept waiting for day slots — each freed day slot went to the next of them, and the night member's free slots stayed unused until the day queue drained (live 2026-10-12: 9 queued at 17:59, 4 still queued at 18:01 while the night member was idle). A member limiter inside a time-windowed pool now re-checks the pool's eligible set every 500ms while a request waits, and once the set changed hands the request back unserved and unrefused; the pool selects again over the new set. The host limiter never hands back — its budget is shared by every member. The 18:00 wiring spec now asserts the hand-over: 9 requests queued on the day member at 17:59 run on the night member at 18:00 while the 16 day requests still run.
+
 ## v0.58.0
 
 - feat: export the concurrency limit in force next to the load gauges, so load and limit plot on one graph. `ccrouter_provider_limit{provider}` is the sum of `maxConcurrentRequests` over the provider's pool members eligible at scrape time — the same time-window/days rule the pool routes by — so a windowed pool's limit moves at its boundaries without a reload (the weekday pool reads `16` by day and `25` from 18:00); `+Inf` while an eligible member is uncapped; with no eligible member it reports the first member's cap, matching the pool's last-resort fallback. `ccrouter_upstream_limit{host}` is each host's `upstreamHostLimits` budget (`+Inf` uncapped). Motivated by the 2026-10-12 analysis, where the binding cap had to be reconstructed from the config plus `max_over_time` to see that the day key's upstream 429s fall exactly at its cap of 16. Eligibility moved onto `UpstreamMember.Eligible` so the pool handler and the collector share one rule. Documented in `docs/metrics.md`.

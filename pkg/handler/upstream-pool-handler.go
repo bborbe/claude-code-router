@@ -8,6 +8,7 @@ import (
 	"context"
 	"hash/fnv"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	stdtime "time"
 
@@ -90,12 +91,31 @@ var realNow = func() libtime.DateTime { return libtime.DateTime(stdtime.Now()) }
 // that session's requests immediately (spec 014 / 017). Each chosen
 // dispatch emits a [route] session=<id> upstream=<url> glog V(2) detail
 // line.
+//
+// In a pool with a time-windowed member, a request still queued for its
+// member's slot when the eligible set changes (the 18:00 switch) is handed
+// back and selected again over the new eligible set, instead of waiting for
+// a slot on a member whose window has closed.
 func NewUpstreamPoolHandler(ctx context.Context, members []UpstreamMember) http.Handler {
-	return &upstreamPoolHandler{members: members}
+	windowed := false
+	for _, m := range members {
+		select {
+		case <-ctx.Done():
+			return &upstreamPoolHandler{members: members, windowed: windowed}
+		default:
+		}
+		if m.Window != nil || m.Days != nil {
+			windowed = true
+		}
+	}
+	return &upstreamPoolHandler{members: members, windowed: windowed}
 }
 
 type upstreamPoolHandler struct {
 	members []UpstreamMember
+	// windowed is true when any member carries a window or a days set, i.e.
+	// the eligible set can change while a request is queued.
+	windowed bool
 	// rr is the keyless round-robin tie-break counter. It is the only
 	// mutable state in the handler; pinning itself is stateless.
 	rr uint64
@@ -103,19 +123,47 @@ type upstreamPoolHandler struct {
 
 func (p *upstreamPoolHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sessionID := SessionIDFromContext(r.Context())
-	memberIndex := p.selectMember(r.Context(), sessionID)
-	// Publish the selected member's zero-based index into the per-request
-	// slot the model router injected (spec 016), so the router's [req]
-	// line can log provider=<name>/<index>. A request this handler never
-	// sees (refused by an outer gate, or a test stub with no pool) leaves
-	// selected false, and the router logs `/-`.
-	if slot := UpstreamIndexSlotFromContext(r.Context()); slot != nil {
-		slot.index = memberIndex
-		slot.selected = true
+	for {
+		select {
+		case <-r.Context().Done():
+			// Client gone between a hand-back and the next selection: there
+			// is no one left to serve.
+			return
+		default:
+		}
+		eligible := p.eligibleIndices(r.Context())
+		memberIndex := p.selectMember(r.Context(), sessionID)
+		// Publish the selected member's zero-based index into the per-request
+		// slot the model router injected (spec 016), so the router's [req]
+		// line can log provider=<name>/<index>. A request this handler never
+		// sees (refused by an outer gate, or a test stub with no pool) leaves
+		// selected false, and the router logs `/-`. A re-selected request
+		// overwrites it with the member that finally served it.
+		if slot := UpstreamIndexSlotFromContext(r.Context()); slot != nil {
+			slot.index = memberIndex
+			slot.selected = true
+		}
+		member := p.members[memberIndex]
+		glog.V(2).Infof("[route] session=%s upstream=%s", sessionID, member.Upstream)
+		if !p.windowed {
+			member.Handler.ServeHTTP(w, r)
+			return
+		}
+		signal := &reselectSignal{
+			stale: func() bool {
+				return !slices.Equal(p.eligibleIndices(r.Context()), eligible)
+			},
+		}
+		member.Handler.ServeHTTP(w, r.WithContext(withReselect(r.Context(), signal)))
+		if !signal.Bounced() {
+			return
+		}
+		glog.V(2).Infof(
+			"[route] session=%s upstream=%s eligible set changed while queued, selecting again",
+			sessionID,
+			member.Upstream,
+		)
 	}
-	member := p.members[memberIndex]
-	glog.V(2).Infof("[route] session=%s upstream=%s", sessionID, member.Upstream)
-	member.Handler.ServeHTTP(w, r)
 }
 
 // selectMember returns the index of the member that serves a request: the

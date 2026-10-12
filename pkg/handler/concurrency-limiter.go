@@ -127,6 +127,7 @@ func NewConcurrencyLimiter(
 		now:          now,
 		queueWait:    queueWait,
 		rejectReason: rejectionReasonQueueTimeout,
+		reselectable: true,
 	}
 }
 
@@ -143,6 +144,11 @@ type concurrencyLimiter struct {
 	// built by HostLimiter.Wrap. The type is shared, so the reason has to
 	// travel with the instance for the two to stay distinguishable.
 	rejectReason string
+	// reselectable is true for a member limiter (NewConcurrencyLimiter) and
+	// false for a host limiter (HostLimiter.Wrap): only a member limiter
+	// hands a queued request back to its pool when the pool's eligible set
+	// changes (see reselectSignal).
+	reselectable bool
 	// now is the injected clock the queue-wait measurement reads; never nil
 	// (the constructor resolves realNow).
 	now func() libtime.DateTime
@@ -244,6 +250,30 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			close(timedOut)
 		}
 	}()
+	// A member limiter below a time-windowed pool re-checks the pool's
+	// eligible set while the request waits; once it changed, the request is
+	// handed back so the pool selects again (see reselectSignal). The host
+	// limiter never does: its budget is shared by every member, so moving a
+	// request between members cannot free a host slot. Like the timeout
+	// waiter above, the re-check goroutine lives exactly as long as the
+	// queued phase: every select arm below cancels waitCtx, which ends its
+	// Wait, and it reports only by closing stale, which it alone owns.
+	signal := reselectFromContext(r.Context())
+	stale := make(chan struct{})
+	if l.reselectable && signal != nil {
+		go func() {
+			for {
+				if err := l.waiter.Wait(waitCtx, libtime.Duration(reselectPollInterval)); err != nil ||
+					waitCtx.Err() != nil {
+					return
+				}
+				if signal.stale() {
+					close(stale)
+					return
+				}
+			}
+		}()
+	}
 	select {
 	case l.sem <- struct{}{}:
 		cancelWait()
@@ -253,6 +283,14 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		l.waiters.Add(-1)
 		l.observeQueueWait(l.now().Time().Sub(queuedAt))
 		writeRateLimited(w, r, 0, l.timeoutReason())
+		return
+	case <-stale:
+		// The member is no longer the pool's choice: give the request back
+		// unserved and unrefused, with nothing written, so the pool can
+		// select again. Like a disconnect, the wait is not observed.
+		cancelWait()
+		l.waiters.Add(-1)
+		signal.bounced.Store(true)
 		return
 	case <-r.Context().Done():
 		// Client disconnected while queued: return without acquiring a
