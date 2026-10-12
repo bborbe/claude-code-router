@@ -78,6 +78,12 @@ type ModelRoute struct {
 //
 //	[req] POST /v1/messages model=m3 alias=MiniMax-M3-highspeed provider=minimax/0 status=200 latency=842ms
 //
+// A 429 line additionally ends in ` reason=<r>` — the same cause the
+// ccrouter_rejected_total counter records (queue_timeout, host_queue_timeout,
+// throttle, cold_start, circuit_open, or upstream for a 429 no router gate
+// claimed), so a single log line tells a router-side refusal from the
+// upstream's own. Other statuses carry no reason field.
+//
 // Non-200 responses are ALWAYS logged; 200 responses are gated by the
 // sampler. `log.DefaultSamplerFactory` gives the canonical OR-combo:
 // at most once per 10s, OR unconditionally when glog `-v` ≥ 4. This
@@ -414,9 +420,10 @@ func newModelRouter(
 		// injects a shared slot into the request context before dispatch;
 		// an upstream pool handler in the dispatch path writes the
 		// zero-based index of the member it selected, and the router reads
-		// it back below for the [req] line. No pool handler in the path
-		// (default-fallback, test stubs) leaves the slot at its zero value
-		// -> a uniform `/0` suffix, never conditionally omitted.
+		// it back below for the [req] line. Every production provider
+		// dispatches through a pool handler, so an unselected slot means no
+		// member saw the request (a provider-level gate refused it first) and
+		// the suffix reads `/-` — always present, never omitted.
 		slot := &upstreamIndexSlot{}
 		r = r.WithContext(ContextWithUpstreamIndex(r.Context(), slot))
 		// Per-request rejection slot: whichever 429-producing gate answers
@@ -434,7 +441,7 @@ func newModelRouter(
 		end := metrics.InFlight.Start(providerName)
 		defer end()
 		target.ServeHTTP(ur, r)
-		memberIndex := slot.index
+		member := slot.memberLabel()
 
 		status := rec.status
 		if status == 0 {
@@ -451,8 +458,14 @@ func newModelRouter(
 		// Split the 429s out of the single 4xx_rate_limited status_class by
 		// cause. A 429 the upstream itself returned carries no recorded
 		// reason and resolves to rejectionReasonUpstream.
+		// reasonField carries the same reason onto the [req] line, so the
+		// log alone attributes a 429 without a metrics scrape — the counter
+		// resets on SIGHUP, the log does not.
+		reasonField := ""
 		if status == http.StatusTooManyRequests {
-			metrics.ObserveRejection(providerName, rejectionReasonOf(rejection))
+			reason := rejectionReasonOf(rejection)
+			metrics.ObserveRejection(providerName, reason)
+			reasonField = " reason=" + reason
 		}
 		glog.V(4).
 			Infof("[inbound.end] %s %s status=%d latency=%s", r.Method, r.URL.Path, status, latency)
@@ -480,14 +493,14 @@ func newModelRouter(
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {
 			glog.V(1).Infof(
-				"[req] %s %s model=%s alias=%s provider=%s/%d status=%d latency=%s in=%s out=%s",
-				r.Method, r.URL.Path, origModel, aliasResolved, providerName, memberIndex, status, latency, in, out,
+				"[req] %s %s model=%s alias=%s provider=%s/%s status=%d latency=%s in=%s out=%s%s",
+				r.Method, r.URL.Path, origModel, aliasResolved, providerName, member, status, latency, in, out, reasonField,
 			)
 			return
 		}
 		glog.V(1).Infof(
-			"[req] %s %s model=%s provider=%s/%d status=%d latency=%s in=%s out=%s",
-			r.Method, r.URL.Path, origModel, providerName, memberIndex, status, latency, in, out,
+			"[req] %s %s model=%s provider=%s/%s status=%d latency=%s in=%s out=%s%s",
+			r.Method, r.URL.Path, origModel, providerName, member, status, latency, in, out, reasonField,
 		)
 	})
 }

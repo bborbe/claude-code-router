@@ -37,6 +37,7 @@ type RouterOptionFunc func(*routerOptions)
 type routerOptions struct {
 	metricsRegisterer prometheus.Registerer
 	currentDateTime   libtime.CurrentDateTimeGetter
+	waiterDuration    libtime.WaiterDuration
 }
 
 // WithMetricsRegisterer overrides the Prometheus registerer used for
@@ -56,6 +57,17 @@ func WithMetricsRegisterer(reg prometheus.Registerer) RouterOptionFunc {
 func WithCurrentDateTime(clock libtime.CurrentDateTimeGetter) RouterOptionFunc {
 	return func(o *routerOptions) {
 		o.currentDateTime = clock
+	}
+}
+
+// WithWaiterDuration overrides the waiter that times every member and host
+// limiter's queue wait (maxConcurrentWaitSeconds). Defaults to
+// libtime.NewWaiterDuration(). Tests pass the counterfeiter WaiterDuration
+// mock to decide exactly when a queued request times out instead of
+// sleeping through a real timer.
+func WithWaiterDuration(waiter libtime.WaiterDuration) RouterOptionFunc {
+	return func(o *routerOptions) {
+		o.waiterDuration = waiter
 	}
 }
 
@@ -183,6 +195,17 @@ func providerKeys(ctx context.Context, cfg *pkg.Config) []string {
 // (spec DB 5).
 const defaultMaxConcurrentWaitSeconds = 30
 
+// resolveMaxConcurrentWait turns a configured maxConcurrentWaitSeconds into
+// the queue timeout, applying defaultMaxConcurrentWaitSeconds when it is
+// absent, 0, or negative. Member limiters and host limiters share it so the
+// two cannot resolve the same config value differently.
+func resolveMaxConcurrentWait(waitSeconds int) time.Duration {
+	if waitSeconds <= 0 {
+		waitSeconds = defaultMaxConcurrentWaitSeconds
+	}
+	return time.Duration(waitSeconds) * time.Second
+}
+
 // defaultThrottleMaxDelaySeconds is the pacing-delay upper bound applied
 // when an enabled provider's throttleMaxDelaySeconds is absent, 0, or
 // negative (spec DB 4).
@@ -243,6 +266,7 @@ func CreateRouterFromConfig(
 	o := &routerOptions{
 		metricsRegisterer: prometheus.DefaultRegisterer,
 		currentDateTime:   libtime.NewCurrentDateTime(),
+		waiterDuration:    libtime.NewWaiterDuration(),
 	}
 	for _, opt := range opts {
 		select {
@@ -298,6 +322,7 @@ func CreateRouterFromConfig(
 			cfg.DefaultToken,
 			cfg.UpstreamHostLimits,
 			o.currentDateTime,
+			o.waiterDuration,
 			metrics,
 			hostLimiters,
 		)
@@ -465,6 +490,7 @@ func buildUpstreamMembers(
 	defaultToken string,
 	hostLimits map[string]pkg.HostLimit,
 	now libtime.CurrentDateTimeGetter,
+	waiter libtime.WaiterDuration,
 	metrics *handler.Metrics,
 	hostLimiters map[string]*handler.HostLimiter,
 ) ([]handler.UpstreamMember, []int, []func() int, []func() int, error) {
@@ -517,15 +543,12 @@ func buildUpstreamMembers(
 			token,
 		)
 		proxy := handler.NewAnthropicProxyHandler(upstream, transport)
-		waitSeconds := up.MaxConcurrentWaitSeconds
-		if waitSeconds <= 0 {
-			waitSeconds = defaultMaxConcurrentWaitSeconds
-		}
 		memberHandler := handler.NewConcurrencyLimiter(
 			proxy,
 			name,
 			up.MaxConcurrentRequests,
-			time.Duration(waitSeconds)*time.Second,
+			resolveMaxConcurrentWait(up.MaxConcurrentWaitSeconds),
+			waiter,
 			now.Now,
 			metrics.QueueWaitSeconds,
 		)
@@ -541,6 +564,7 @@ func buildUpstreamMembers(
 			hostLimiters,
 			hostLimits,
 			pkg.UpstreamHostKey(upstream),
+			waiter,
 		).Wrap(memberHandler, name, metrics.QueueWaitSeconds)
 		caps = append(caps, up.MaxConcurrentRequests)
 		inflights = append(inflights, inFlight)
@@ -626,18 +650,16 @@ func hostLimiterFor(
 	hostLimiters map[string]*handler.HostLimiter,
 	limits map[string]pkg.HostLimit,
 	hostKey string,
+	waiter libtime.WaiterDuration,
 ) *handler.HostLimiter {
 	if limiter, ok := hostLimiters[hostKey]; ok {
 		return limiter
 	}
 	limit := limits[hostKey]
-	waitSeconds := limit.MaxConcurrentWaitSeconds
-	if waitSeconds <= 0 {
-		waitSeconds = defaultMaxConcurrentWaitSeconds
-	}
 	limiter := handler.NewHostLimiter(
 		limit.MaxConcurrentRequests,
-		time.Duration(waitSeconds)*time.Second,
+		resolveMaxConcurrentWait(limit.MaxConcurrentWaitSeconds),
+		waiter,
 	)
 	hostLimiters[hostKey] = limiter
 	return limiter

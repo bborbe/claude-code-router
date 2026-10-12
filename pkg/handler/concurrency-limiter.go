@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -90,11 +91,18 @@ func writeRateLimited(
 // driven from a test. The wait is still an elapsed-time measurement, so the
 // injected getter is read twice and subtracted rather than compared to any
 // absolute instant.
+//
+// waiter times the queue wait: a queued request is refused once
+// waiter.Wait(ctx, maxConcurrentWait) returns nil. It is required — the
+// factory passes libtime.NewWaiterDuration() — so a test can substitute the
+// counterfeiter WaiterDuration mock and decide exactly when a queued request
+// times out, instead of sleeping through a real timer.
 func NewConcurrencyLimiter(
 	next http.Handler,
 	provider string,
 	maxConcurrentRequests int,
 	maxConcurrentWait time.Duration,
+	waiter libtime.WaiterDuration,
 	now func() libtime.DateTime,
 	queueWait *prometheus.HistogramVec,
 ) http.Handler {
@@ -104,13 +112,21 @@ func NewConcurrencyLimiter(
 	if now == nil {
 		now = realNow
 	}
+	if waiter == nil {
+		// A nil waiter would panic on the first queued request inside the
+		// waiter goroutine, where net/http's recover does not reach — it
+		// would take the whole process down, and only under load.
+		waiter = libtime.NewWaiterDuration()
+	}
 	return &concurrencyLimiter{
-		next:      next,
-		provider:  provider,
-		sem:       make(chan struct{}, maxConcurrentRequests),
-		wait:      maxConcurrentWait,
-		now:       now,
-		queueWait: queueWait,
+		next:         next,
+		provider:     provider,
+		sem:          make(chan struct{}, maxConcurrentRequests),
+		wait:         maxConcurrentWait,
+		waiter:       waiter,
+		now:          now,
+		queueWait:    queueWait,
+		rejectReason: rejectionReasonQueueTimeout,
 	}
 }
 
@@ -119,6 +135,14 @@ type concurrencyLimiter struct {
 	provider string
 	sem      chan struct{}
 	wait     time.Duration
+	// waiter times the queue wait (see NewConcurrencyLimiter); never nil.
+	waiter libtime.WaiterDuration
+	// rejectReason is the ccrouter_rejected_total reason recorded when a
+	// queued request times out: rejectionReasonQueueTimeout for a member or
+	// provider limiter, rejectionReasonHostQueueTimeout for a host limiter
+	// built by HostLimiter.Wrap. The type is shared, so the reason has to
+	// travel with the instance for the two to stay distinguishable.
+	rejectReason string
 	// now is the injected clock the queue-wait measurement reads; never nil
 	// (the constructor resolves realNow).
 	now func() libtime.DateTime
@@ -130,6 +154,18 @@ type concurrencyLimiter struct {
 	// on entering the queued path and decremented on every exit from it, so
 	// a request that takes a free slot immediately is never counted.
 	waiters atomic.Int64
+}
+
+// timeoutReason is the reason recorded for a queue timeout. A limiter built
+// as a struct literal that forgot rejectReason would otherwise record ""
+// — which recordRejection treats as unclaimed, so the router would count the
+// router's own 429 as reason="upstream". Falling back to queue_timeout keeps
+// every limiter timeout attributed to the router.
+func (l *concurrencyLimiter) timeoutReason() string {
+	if l.rejectReason == "" {
+		return rejectionReasonQueueTimeout
+	}
+	return l.rejectReason
 }
 
 // observeQueueWait records how long a request spent in the waiting path.
@@ -189,15 +225,34 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// never depends on the clock's absolute value.
 	queuedAt := l.now().Time()
 
-	timer := time.NewTimer(l.wait)
-	defer timer.Stop()
+	// The waiter runs in its own goroutine so the wait can race the
+	// semaphore in one select. waitCtx is cancelled as soon as the select
+	// returns, so the waiter goroutine ends with the queued phase rather than
+	// outliving it for the length of the upstream round-trip. timedOut is
+	// closed when the wait ended while the queued phase is still live — a
+	// completed wait (nil error), or a waiter failing on its own, which is
+	// refused rather than left to wait without a bound. A waiter ended by
+	// cancellation or client disconnect (waitCtx done) never reads as a
+	// timeout. The deferred cancel is a backstop; every select arm also
+	// cancels explicitly so the waiter stops before the upstream round-trip.
+	waitCtx, cancelWait := context.WithCancel(r.Context())
+	defer cancelWait()
+	timedOut := make(chan struct{})
+	go func() {
+		err := l.waiter.Wait(waitCtx, libtime.Duration(l.wait))
+		if err == nil || waitCtx.Err() == nil {
+			close(timedOut)
+		}
+	}()
 	select {
 	case l.sem <- struct{}{}:
+		cancelWait()
 		l.observeQueueWait(l.now().Time().Sub(queuedAt))
-	case <-timer.C:
+	case <-timedOut:
+		cancelWait()
 		l.waiters.Add(-1)
 		l.observeQueueWait(l.now().Time().Sub(queuedAt))
-		writeRateLimited(w, r, 0, rejectionReasonQueueTimeout)
+		writeRateLimited(w, r, 0, l.timeoutReason())
 		return
 	case <-r.Context().Done():
 		// Client disconnected while queued: return without acquiring a
@@ -206,6 +261,7 @@ func (l *concurrencyLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// not observed either: the request was neither admitted nor
 		// refused by the limiter, so it belongs in neither the queue-wait
 		// distribution nor the rejection counter.
+		cancelWait()
 		l.waiters.Add(-1)
 		return
 	}

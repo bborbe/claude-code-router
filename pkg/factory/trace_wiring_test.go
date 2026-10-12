@@ -35,6 +35,14 @@ func captureStderr(fn func()) string {
 		buf, _ := io.ReadAll(r)
 		done <- string(buf)
 	}()
+	// Restore in a defer: fn may run Gomega assertions, and a failing one
+	// unwinds via panic — without the defer stderr would stay pointed at the
+	// pipe and later specs' output would vanish into it.
+	defer func() {
+		glog.Flush()
+		_ = w.Close()
+		os.Stderr = origStderr
+	}()
 	fn()
 	glog.Flush()
 	_ = w.Close()

@@ -44,10 +44,17 @@ var QueueWaitBucketsSeconds = []float64{0.1, 0.5, 1, 2.5, 5, 10, 15, 20, 25, 30,
 
 const (
 	// rejectionReasonQueueTimeout is the ccrouter_rejected_total reason for
-	// a request the concurrency limiter could not admit within its wait
-	// window (concurrency-limiter.go). It is the router's own queue
-	// timeout, not an upstream refusal.
+	// a request the per-member (or per-provider) concurrency limiter could
+	// not admit within its wait window (concurrency-limiter.go). It is the
+	// router's own queue timeout, not an upstream refusal.
 	rejectionReasonQueueTimeout = "queue_timeout"
+	// rejectionReasonHostQueueTimeout is the reason for a request the shared
+	// per-upstream-host limiter could not admit within its wait window
+	// (host-limiter.go, spec 019). It is split from queue_timeout so a
+	// saturated host budget and a saturated member cap are distinguishable —
+	// they call for different config changes (upstreamHostLimits vs the
+	// member's maxConcurrentRequests).
+	rejectionReasonHostQueueTimeout = "host_queue_timeout"
 	// rejectionReasonThrottle is the reason for a request the throttle
 	// gate's bounded pacing queue could not admit within the max delay
 	// (throttle-gate.go, spec 018).
@@ -75,6 +82,7 @@ const (
 // appear only once it fired, which is exactly the hole this enum closes.
 var rejectionReasons = []string{
 	rejectionReasonQueueTimeout,
+	rejectionReasonHostQueueTimeout,
 	rejectionReasonThrottle,
 	rejectionReasonColdStart,
 	rejectionReasonCircuitOpen,
@@ -314,7 +322,7 @@ func (m *Metrics) addRejectionCollectors() {
 	m.RejectedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ccrouter_rejected_total",
-			Help: "Total number of /v1/* requests the router answered with HTTP 429, labeled by provider and reason (queue_timeout|throttle|cold_start|circuit_open|upstream). Splits the single 4xx_rate_limited status_class of ccrouter_requests_total into its causes: queue_timeout is the concurrency limiter's own wait window, throttle the pacing queue's overflow, cold_start the cold-start admission gate's refusal, circuit_open the breaker refusing while open or half-open, and upstream a 429 the upstream itself returned.",
+			Help: "Total number of /v1/* requests the router answered with HTTP 429, labeled by provider and reason (queue_timeout|host_queue_timeout|throttle|cold_start|circuit_open|upstream). Splits the single 4xx_rate_limited status_class of ccrouter_requests_total into its causes: queue_timeout is a member or provider concurrency limiter's own wait window, host_queue_timeout the shared upstreamHostLimits budget's wait window, throttle the pacing queue's overflow, cold_start the cold-start admission gate's refusal, circuit_open the breaker refusing while open or half-open, and upstream a 429 the upstream itself returned.",
 		},
 		[]string{"provider", "reason"},
 	)

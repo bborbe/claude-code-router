@@ -702,7 +702,20 @@ providers:
 			rel.SeedConfig(initialCfg)
 
 			registerSighup()
-			go rel.RunSighupLoop(ctx)
+			// The loop runs on a child context the spec cancels on exit, and
+			// the spec waits for the goroutine to return. Left running, the
+			// loop's reload of the absent config file logs through glog after
+			// the spec ends and races the next spec's flag.Set on glog's flags.
+			loopCtx, cancelLoop := context.WithCancel(ctx)
+			loopDone := make(chan struct{})
+			go func() {
+				defer close(loopDone)
+				rel.RunSighupLoop(loopCtx)
+			}()
+			defer func() {
+				cancelLoop()
+				Eventually(loopDone, "2s").Should(BeClosed())
+			}()
 			defer restoreSighup()
 
 			// SIGHUP must not cancel the context

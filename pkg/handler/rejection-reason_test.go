@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				1,
 				50*stdtime.Millisecond,
+				libtime.NewWaiterDuration(),
 				nil, metrics.QueueWaitSeconds,
 			)
 
@@ -125,6 +127,70 @@ var _ = Describe("Rejection reason", func() {
 			Expect(rejectionHistogramSampleCount(reg, "seibert-vllm-default")).To(Equal(float64(1)))
 		})
 
+		It("records reason=host_queue_timeout when the shared host budget times it out", func() {
+			// The host limiter reuses the concurrencyLimiter type, so before
+			// the split a host-slot timeout recorded queue_timeout and was
+			// indistinguishable from a member-cap timeout.
+			started := make(chan struct{}, 1)
+			release := make(chan struct{})
+			blocking := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				started <- struct{}{}
+				<-release
+			})
+			host := NewHostLimiter(1, 50*stdtime.Millisecond, libtime.NewWaiterDuration())
+			limiter := host.Wrap(blocking, "seibert-vllm-default", metrics.QueueWaitSeconds)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				holder := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				limiter.ServeHTTP(httptest.NewRecorder(), holder)
+			}()
+			<-started
+
+			rec := httptest.NewRecorder()
+			limiter.ServeHTTP(rec, req)
+
+			close(release)
+			wg.Wait()
+
+			Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
+			Expect(slot.reason).To(Equal(rejectionReasonHostQueueTimeout))
+			Expect(slot.reason).NotTo(Equal(rejectionReasonQueueTimeout))
+		})
+
+		It(
+			"falls back to reason=queue_timeout for a limiter literal that omits rejectReason",
+			func() {
+				// HostLimiter.Wrap builds the type as a literal; a future literal
+				// that forgot the field must still attribute its timeout to the
+				// router, never leave it unclaimed (which reads as "upstream").
+				sem := make(chan struct{}, 1)
+				sem <- struct{}{} // every slot held, so the request queues
+				limiter := &concurrencyLimiter{
+					next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						Fail("a timed-out request must never reach next")
+					}),
+					sem:  sem,
+					wait: stdtime.Second,
+					// The wait completes at once: no real timer runs.
+					waiter: libtime.WaiterDurationFunc(
+						func(_ context.Context, _ libtime.Duration) error {
+							return nil
+						},
+					),
+					now: realNow,
+				}
+
+				rec := httptest.NewRecorder()
+				limiter.ServeHTTP(rec, req)
+
+				Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
+				Expect(slot.reason).To(Equal(rejectionReasonQueueTimeout))
+			},
+		)
+
 		It("leaves the reason empty when the limiter admits the request", func() {
 			limiter := NewConcurrencyLimiter(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +199,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				4,
 				stdtime.Second,
+				libtime.NewWaiterDuration(),
 				nil, metrics.QueueWaitSeconds,
 			)
 
@@ -361,6 +428,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				1,
 				stdtime.Second,
+				libtime.NewWaiterDuration(),
 				nil, metrics.QueueWaitSeconds,
 			)
 
@@ -396,6 +464,7 @@ var _ = Describe("Rejection reason", func() {
 				"seibert-vllm-default",
 				4,
 				stdtime.Second,
+				libtime.NewWaiterDuration(),
 				nil, metrics.QueueWaitSeconds,
 			)
 

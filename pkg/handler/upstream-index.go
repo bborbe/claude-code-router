@@ -4,7 +4,10 @@
 
 package handler
 
-import "context"
+import (
+	"context"
+	"strconv"
+)
 
 // upstreamIndexContextKey is an unexported type to avoid collisions with
 // other context values.
@@ -20,12 +23,27 @@ type upstreamIndexContextKey struct{}
 // The slot is a pointer so the pool handler can publish without replacing
 // the router's request object: both sides reach the same allocation via
 // the request context, and because each request gets its own slot the
-// value is per-request and race-free under concurrent requests. A request
-// whose dispatch path contains no upstream pool handler leaves the slot at
-// its zero value, so the router logs a uniform `/0` — never a conditional
-// omission.
+// value is per-request and race-free under concurrent requests.
+//
+// selected is set together with index by the pool handler. A request that
+// never reached a pool member — refused first by a provider-level gate (the
+// circuit breaker, the throttle gate, the cold-start gate) — leaves it false,
+// and the router logs `/-` rather than `/0`: the zero index would name the
+// first declared member (on a weekday/night/weekend pool, the weekday-day
+// member) as the one that refused a request no member ever saw.
 type upstreamIndexSlot struct {
-	index int
+	index    int
+	selected bool
+}
+
+// memberLabel is the `/<suffix>` the router's [req] line appends to the
+// provider name: the selected member's zero-based index, or "-" when no pool
+// member was selected for the request.
+func (s *upstreamIndexSlot) memberLabel() string {
+	if !s.selected {
+		return "-"
+	}
+	return strconv.Itoa(s.index)
 }
 
 // ContextWithUpstreamIndex returns a copy of ctx carrying the shared
