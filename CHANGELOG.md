@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.58.0
 
 - feat: export the concurrency limit in force next to the load gauges, so load and limit plot on one graph. `ccrouter_provider_limit{provider}` is the sum of `maxConcurrentRequests` over the provider's pool members eligible at scrape time — the same time-window/days rule the pool routes by — so a windowed pool's limit moves at its boundaries without a reload (the weekday pool reads `16` by day and `25` from 18:00); `+Inf` while an eligible member is uncapped; with no eligible member it reports the first member's cap, matching the pool's last-resort fallback. `ccrouter_upstream_limit{host}` is each host's `upstreamHostLimits` budget (`+Inf` uncapped). Motivated by the 2026-10-12 analysis, where the binding cap had to be reconstructed from the config plus `max_over_time` to see that the day key's upstream 429s fall exactly at its cap of 16. Eligibility moved onto `UpstreamMember.Eligible` so the pool handler and the collector share one rule. Documented in `docs/metrics.md`.
 
