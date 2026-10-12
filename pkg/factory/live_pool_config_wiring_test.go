@@ -15,8 +15,9 @@
 //     stay distinguishable, because they call for different config changes;
 //   - the 18:00 switch on one running router: admission rises from the day
 //     member's 16 to the host budget's 25 by the clock alone, with no
-//     restart or reload — bounded by the host while day requests still hold
-//     their slots.
+//     restart or reload — requests queued on the day member at 17:59 are
+//     handed over to the night member at 18:00 instead of waiting for day
+//     slots, bounded by the host while day requests still hold their slots.
 
 package factory_test
 
@@ -440,7 +441,7 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 
 	Context("18:00 switch on one running router (no restart, no reload)", func() {
 		It(
-			"raises admission from the day cap 16 to the host budget 25 as the clock crosses 18:00",
+			"hands the requests queued on the day member over to the night member as the clock crosses 18:00",
 			func() {
 				// One upstream server backed by the Counterfeiter HttpHandler mock.
 				// The stub sorts requests into lanes by URL path prefix: each lane
@@ -502,15 +503,27 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 				clock.SetNow(
 					libtime.DateTime(stdtime.Date(2026, stdtime.October, 12, 17, 59, 0, 0, berlin)),
 				)
-				// The queue wait is timed by the counterfeiter WaiterDuration mock:
-				// a queued request times out only when the spec sends on expire,
-				// so each refusal is one deterministic event rather than a real
-				// 1s timer.
+				// Every wait is timed by the counterfeiter WaiterDuration mock, so
+				// nothing in the spec sleeps. Two kinds of wait share it, told apart
+				// by duration: the 1s queue timeout (maxConcurrentWaitSeconds: 1)
+				// ends only when the spec sends on expire, and the member limiter's
+				// eligible-set re-check (any other duration) ends only when the spec
+				// sends on recheck — so each refusal and each re-check is one
+				// deterministic event rather than a real timer.
 				expire := make(chan struct{})
+				recheck := make(chan struct{})
+				var timeoutWaits, recheckWaits atomic.Int32
 				waiter := &libtimemocks.WaiterDuration{}
-				waiter.WaitStub = func(ctx context.Context, _ libtime.Duration) error {
+				waiter.WaitStub = func(ctx context.Context, d libtime.Duration) error {
+					release := recheck
+					if d == libtime.Duration(stdtime.Second) {
+						timeoutWaits.Add(1)
+						release = expire
+					} else {
+						recheckWaits.Add(1)
+					}
 					select {
-					case <-expire:
+					case <-release:
 						return nil
 					case <-ctx.Done():
 						return ctx.Err()
@@ -526,64 +539,83 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 				)
 				Expect(err).NotTo(HaveOccurred())
 
-				admit := func(n int) []chan struct{} {
-					dones := make([]chan struct{}, 0, n)
+				type pending struct {
+					rec  *httptest.ResponseRecorder
+					done chan struct{}
+				}
+				admit := func(n int) []pending {
+					ps := make([]pending, 0, n)
 					for i := 0; i < n; i++ {
-						dones = append(
-							dones,
-							serveAsync(
-								h,
-								httptest.NewRecorder(),
-								newMessagesRequest("deepseek-v4-flash"),
-							),
-						)
+						rec := httptest.NewRecorder()
+						ps = append(ps, pending{
+							rec:  rec,
+							done: serveAsync(h, rec, newMessagesRequest("deepseek-v4-flash")),
+						})
 					}
-					return dones
+					return ps
 				}
 				// refused sends one request past the binding cap: it queues (one
-				// more Wait call), the spec expires exactly that wait, and the
-				// request is answered 429. Exactly one request is queued at each
-				// call, so the single send on expire reaches that one waiter.
+				// more queue-timeout wait), the spec expires exactly that wait, and
+				// the request is answered 429. Exactly one request waits on a queue
+				// timeout at each call, so the single send on expire reaches it.
 				refused := func() {
-					waitsBefore := waiter.WaitCallCount()
+					before := timeoutWaits.Load()
 					rec := httptest.NewRecorder()
 					done := serveAsync(h, rec, newMessagesRequest("deepseek-v4-flash"))
-					Eventually(waiter.WaitCallCount).Should(Equal(waitsBefore + 1))
-					_, d := waiter.WaitArgsForCall(waitsBefore)
-					Expect(
-						d,
-					).To(Equal(libtime.Duration(stdtime.Second)), "maxConcurrentWaitSeconds: 1")
+					Eventually(timeoutWaits.Load).Should(Equal(before + 1))
 					expire <- struct{}{}
 					Eventually(done, "2s").Should(BeClosed())
 					Expect(rec.Code).To(Equal(http.StatusTooManyRequests))
 				}
+				queued := func() float64 {
+					return gaugeValue(reg, "ccrouter_provider_queued", "provider", provider)
+				}
 
 				By("17:59 — the day member's 16 binds while the host has room")
-				dayDones := admit(16)
+				day := admit(16)
 				Eventually(lanes["/day"].count).Should(BeNumerically("==", 16))
 				refused()
 				Expect(rejectedCount(reg, provider, "queue_timeout")).To(Equal(float64(1)))
 				Expect(rejectedCount(reg, provider, "host_queue_timeout")).To(Equal(float64(0)))
 
+				By("17:59 — 9 more queue for a day slot; 16 running + 9 waiting fill the host's 25")
+				handedOver := admit(9)
+				Eventually(queued).Should(Equal(float64(9)))
+				Eventually(recheckWaits.Load).Should(BeNumerically(">=", 9))
+
+				By("a re-check before 18:00 finds the same eligible set — nobody moves")
+				recheckBefore := recheckWaits.Load()
+				for i := 0; i < 9; i++ {
+					recheck <- struct{}{}
+				}
+				Eventually(recheckWaits.Load).Should(BeNumerically(">=", recheckBefore+9))
+				Expect(queued()).To(Equal(float64(9)))
+				Expect(lanes["/night"].count()).To(BeNumerically("==", 0))
+
 				By(
-					"18:00 — same router, night member eligible; the 16 day requests still hold host slots",
+					"18:00 — same router, night member eligible: the 9 queued day requests move to it at once",
 				)
 				clock.SetNow(
 					libtime.DateTime(stdtime.Date(2026, stdtime.October, 12, 18, 0, 0, 0, berlin)),
 				)
-				nightDones := admit(9)
+				for i := 0; i < 9; i++ {
+					recheck <- struct{}{}
+				}
 				Eventually(lanes["/night"].count).Should(BeNumerically("==", 9))
 				Expect(lanes["/day"].count()).To(BeNumerically("==", 16))
+				Eventually(queued).Should(Equal(float64(0)))
+
+				By("the host's 25 is the bound now — the next request waits for a host slot")
 				refused()
 				Expect(rejectedCount(reg, provider, "host_queue_timeout")).To(Equal(float64(1)))
 				Expect(rejectedCount(reg, provider, "queue_timeout")).To(Equal(float64(1)))
 
 				By("the day requests drain — the night member fills to the full 25")
 				lanes["/day"].open()
-				for _, done := range dayDones {
-					Eventually(done, "2s").Should(BeClosed())
+				for _, p := range day {
+					Eventually(p.done, "2s").Should(BeClosed())
 				}
-				nightDones = append(nightDones, admit(16)...)
+				night := append(handedOver, admit(16)...)
 				Eventually(lanes["/night"].count).Should(BeNumerically("==", 25))
 				Expect(lanes["/day"].count()).To(BeNumerically("==", 0))
 				refused()
@@ -592,8 +624,11 @@ var _ = Describe("CreateRouterFromConfig live three-member pool", func() {
 				Expect(rejectedCount(reg, provider, "upstream")).To(Equal(float64(0)))
 
 				lanes["/night"].open()
-				for _, done := range nightDones {
-					Eventually(done, "2s").Should(BeClosed())
+				for _, p := range night {
+					Eventually(p.done, "2s").Should(BeClosed())
+				}
+				for _, p := range handedOver {
+					Expect(p.rec.Code).To(Equal(http.StatusOK))
 				}
 
 				By(
