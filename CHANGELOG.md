@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- docs: record the measured per-user ceiling of `vllm.seibert.tools` (16 per key owner, probed 2026-10-13; the docs said 8) and the weekday-daytime capacity decision for `seibert-vllm-default`: keep the day member at 16, matching the ceiling, accepting an occasional upstream 429 that Claude Code retries.
+
 ## v0.58.1
 
 - fix: hand requests queued on a pool member over to the new member when a time window switches. A request picked its member once and then waited on that member's own semaphore, so at the weekday 18:00 switch the requests queued for a day slot kept waiting for day slots — each freed day slot went to the next of them, and the night member's free slots stayed unused until the day queue drained (live 2026-10-12: 9 queued at 17:59, 4 still queued at 18:01 while the night member was idle). A member limiter inside a time-windowed pool now re-checks the pool's eligible set every 500ms while a request waits, and once the set changed hands the request back unserved and unrefused; the pool selects again over the new set. The host limiter never hands back — its budget is shared by every member. The 18:00 wiring spec now asserts the hand-over: 9 requests queued on the day member at 17:59 run on the night member at 18:00 while the 16 day requests still run.
