@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.58.2
 
 - docs: record the measured per-user ceiling of `vllm.seibert.tools` (16 per key owner, probed 2026-10-13; the docs said 8) and the weekday-daytime capacity decision for `seibert-vllm-default`: keep the day member at 16, matching the ceiling, accepting an occasional upstream 429 that Claude Code retries.
 
