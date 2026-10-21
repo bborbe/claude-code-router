@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.58.3
 
 - chore: update Go to 1.27.3 and github.com/bborbe/argument/v2 to v2.13.6, github.com/bborbe/errors to v1.6.3, github.com/bborbe/http to v1.26.30, github.com/bborbe/log to v1.7.4, github.com/bborbe/run to v1.11.2, github.com/bborbe/service to v1.11.0, github.com/bborbe/time to v1.27.17, github.com/onsi/ginkgo/v2 to v2.33.1
 
