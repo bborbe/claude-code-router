@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: add a cluster build arm so `make build BUILD_TARGET=<context> REF=<sha> VERSION=<tag>` builds and pushes the image from inside the cluster
+
 ## v0.58.5
 
 - chore: restate the do-not-merge contract in the gate workflow

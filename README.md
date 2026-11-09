@@ -139,6 +139,15 @@ make precommit   # gofmt, lint, vet, test, vulncheck, gosec, osv-scanner, trivy
 make run         # run locally on 127.0.0.1:8788 with -logtostderr -v=2
 ```
 
+## Build
+
+Two arms share one `make build`:
+
+- **Local (default).** `make build` builds `docker.io/bborbe/claude-code-router:<version>` on the local Docker daemon. It still requires `HEAD` to be at the built tag.
+- **Cluster.** `make build BUILD_TARGET=sun REF=<full 40-char sha> VERSION=<tag>` renders `hack/build-job.yaml` and runs it as a Kubernetes Job in that cluster, pushing `docker.io/bborbe/claude-code-router:<tag>` to Docker Hub. `BUILD_TARGET` names a kubectl context or one of the aliases `sun`, `nukedev`, `nukeprod`. Provision the `build` namespace and the `buildkit-push` secret first with `hack/build-cluster-bootstrap.sh <context>`.
+
+`make upload` and `make clean` are no-ops on the cluster arm: the cluster pushes the image and keeps no local copy.
+
 ## License
 
 BSD-2. See [LICENSE](LICENSE).
