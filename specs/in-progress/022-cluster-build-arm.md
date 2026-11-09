@@ -1,6 +1,6 @@
 ---
 status: approved
-approved: "2026-11-09T18:38:03Z"
+approved: "2026-11-09T20:11:22Z"
 branch: dark-factory/cluster-build-arm
 ---
 
@@ -142,9 +142,8 @@ Every release of `claude-code-router` continues to require this Mac: a warm Go c
 
 | # | Prompt focus | Covers DBs | Covers ACs | Depends on |
 |---|---|---|---|---|
-| 1 | Vendor the five `hack/` files: executable bits, a `build-job.yaml` that parses | — | 2 | — |
-| 2 | `Makefile.docker` arm split (guard wrap, `upload`/`clean` guards, `BUILD_REPO_URL` and `IMAGE` with the owner prefix), the Dockerfile module-resolution change, the `## Unreleased` and README sections | 1-8 | 1, 3-12 | prompt 1 |
+| 1 | Copy the five `hack/` files (executable bits, a `build-job.yaml` that parses and carries the Job kind), add the `BUILD_TARGET` split to `Makefile.docker` (guard wrap, `upload`/`clean` guards, `BUILD_REPO_URL` and `IMAGE` with the owner prefix), make the Dockerfile resolve modules without a vendored tree, and add the `## Unreleased` and README sections | 1-8 | 1-12 | — |
 
-Two prompts. Prompt 1 is inert — it adds files nothing references yet, so `make precommit` stays green and the local arm is untouched — which means the split never ships a half-wired `Makefile.docker` on the default branch. Prompt 2 then wires against files already on disk. The split is safe because this repository runs `workflow: worktree`, where each prompt gets its own worktree on its own prompt branch (`dark-factory/docs/workflows.md` § `worktree`), so the recorded `git fetch origin dark-factory/<branch>` collision — which discards a second prompt's commit on a shared scratch ref — does not apply here.
+**One prompt, deliberately — this is a correction of an earlier two-row split.** That split shipped only its **second** row: the generator produced the wiring prompt but not the `hack/` vendor prompt, and the wiring prompt carried a hard precondition on the vendor prompt's output, so the run stopped before making any change and reported `status: failed`. dark-factory's prompt generator is a single batch with no re-run verb, so an under-produced decomposition cannot be repaired by retrying — only by unapproving and regenerating the spec. One prompt removes the inter-prompt precondition entirely and lands the change in one commit.
 
-The size is genuinely large (8 DBs × 12 ACs, ~4 layers), which is the cost of one migration carrying both a build-file split and a Dockerfile fix; splitting further would separate the Dockerfile change from the AC that proves it.
+The size is genuinely large (8 DBs × 12 ACs, ~4 layers), which is the cost of one migration carrying both a build-file split and a Dockerfile fix. That cost is accepted here rather than split, because the split's precondition failure is the more expensive outcome — it burned a cluster run and a 26-minute slot.
