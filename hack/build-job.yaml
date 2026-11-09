@@ -130,13 +130,16 @@ spec:
           # Unconfined here is deliberate and is NOT an oversight left over from
           # the init containers above: rootless buildkitd with
           # --oci-worker-no-process-sandbox needs both profiles relaxed to run
-          # nested containers. Tightening them breaks every build; the
-          # unprivileged uid and the dropped capabilities are the boundary.
+          # nested containers. Tightening them breaks every build.
+          #
+          # The boundary is the unprivileged uid, not a capabilities drop. This
+          # container needs SETUID/SETGID for rootlesskit's newuidmap, and
+          # `drop: ["ALL"]` was measured on 2026-11-09 to break the build with
+          #   failed to setup UID/GID map: newuidmap ... operation not permitted
+          # The clone container above is the one that runs with drop: ["ALL"].
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
-            capabilities:
-              drop: ["ALL"]
             seccompProfile:
               type: Unconfined
             appArmorProfile:
