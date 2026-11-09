@@ -3,10 +3,20 @@
 # SERVICE must be set by the including Makefile.
 
 DOCKER_REGISTRY ?= docker.io
+BUILD_TARGET ?= local
+NAMESPACE ?= build
+DOCKERFILE ?= Dockerfile
+PUSH ?= true
+PUSH_SECRET ?= buildkit-push
+TIMEOUT ?= 3600
+BUILD_REPO_URL ?= https://github.com/bborbe/$(SERVICE).git
+IMAGE ?= $(DOCKER_REGISTRY)/bborbe/$(SERVICE)
 
 ifeq ($(VERSION),)
 	VERSION := $(shell git describe --tags `git rev-list --tags --max-count=1`)
 endif
+
+ifeq ($(BUILD_TARGET),local)
 
 .PHONY: build
 build: check-version-tag check-go-mod
@@ -23,6 +33,28 @@ build: check-version-tag check-go-mod
 	--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 	-t $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION) \
 	-f Dockerfile .
+
+else
+
+.PHONY: build
+build:
+	@if [ "$(origin VERSION)" != "command line" ] && [ "$(origin VERSION)" != "environment" ]; then \
+		echo "ERROR: VERSION is required for a cluster build; pass VERSION=<tag> on the command line or in the environment" >&2; \
+		exit 1; \
+	fi
+	BUILD_TARGET=$(BUILD_TARGET) \
+	NAMESPACE=$(NAMESPACE) \
+	REPO_URL='$(BUILD_REPO_URL)' \
+	REF=$(REF) \
+	TAG=$(VERSION) \
+	DOCKERFILE=$(DOCKERFILE) \
+	IMAGE='$(IMAGE)' \
+	PUSH=$(PUSH) \
+	PUSH_SECRET=$(PUSH_SECRET) \
+	TIMEOUT=$(TIMEOUT) \
+	hack/build-cluster.sh
+
+endif
 
 .PHONY: check-version-tag
 check-version-tag:
@@ -48,6 +80,8 @@ check-go-mod:
 		echo "go.mod not found, skipping go mod vendor."; \
 	fi
 
+ifeq ($(BUILD_TARGET),local)
+
 .PHONY: upload
 upload:
 	docker push $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION)
@@ -57,6 +91,18 @@ clean:
 	docker rmi $(DOCKER_REGISTRY)/bborbe/$(SERVICE):$(VERSION) || true
 	docker image prune -f || true
 	rm -rf vendor
+
+else
+
+.PHONY: upload
+upload:
+	@echo "skip upload — the cluster arm pushes from inside the cluster"
+
+.PHONY: clean
+clean:
+	@echo "skip clean — the cluster arm publishes no local image"
+
+endif
 
 # Publish-only: no k8s in this repo. Deployment manifests live in the
 # quant repo (per the go-dockerfile-guide). apply is a no-op placeholder.
