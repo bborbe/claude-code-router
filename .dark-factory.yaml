@@ -1,7 +1,8 @@
-autoRelease: true
+autoRelease: false
 autoGeneratePrompts: true
 validationPrompt: docs/dod.md
-workflow: direct
+workflow: worktree
+pr: true
 env:
   GOPATH: /home/node/go
   GOCACHE: /home/node/.cache/go-build
