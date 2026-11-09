@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.59.0
 
 - feat: add a cluster build arm so `make build BUILD_TARGET=<context> REF=<sha> VERSION=<tag>` builds and pushes the image from inside the cluster
 
