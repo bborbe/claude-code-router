@@ -6,7 +6,7 @@ ARG BUILD_GIT_COMMIT=none
 ARG BUILD_DATE=unknown
 COPY . /workspace
 WORKDIR /workspace
-RUN go mod download
+RUN if [ ! -d vendor ]; then go mod download; fi
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -X github.com/bborbe/claude-code-router/pkg.version=${BUILD_GIT_VERSION}" -a -installsuffix cgo -o /main
 
 FROM ${DOCKER_REGISTRY}/alpine:3.24 AS alpine

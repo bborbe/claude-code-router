@@ -28,7 +28,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: __JOB_NAME__
-  namespace: build
+  namespace: __NAMESPACE__
   labels:
     app.kubernetes.io/name: image-build
     app.kubernetes.io/component: build
@@ -135,6 +135,8 @@ spec:
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
+            capabilities:
+              drop: ["ALL"]
             seccompProfile:
               type: Unconfined
             appArmorProfile:
