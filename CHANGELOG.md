@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update github.com/bborbe/argument/v2 to v2.13.10, github.com/bborbe/http to v1.26.33, github.com/bborbe/log to v1.7.8, github.com/bborbe/time to v1.27.26
+
 ## v0.59.0
 
 - feat: add a cluster build arm so `make build BUILD_TARGET=<context> REF=<sha> VERSION=<tag>` builds and pushes the image from inside the cluster
