@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.59.1
 
 - chore: update github.com/bborbe/argument/v2 to v2.13.10, github.com/bborbe/http to v1.26.33, github.com/bborbe/log to v1.7.8, github.com/bborbe/time to v1.27.26
 
