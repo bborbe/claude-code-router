@@ -91,6 +91,16 @@ type ModelRoute struct {
 // event and giving full visibility once the operator bumps verbosity
 // via `/setloglevel/4`.
 //
+// A non-2xx response additionally emits one `[req.body]` line at the
+// same V(1), carrying the upstream's own response body — the only
+// record of WHY a provider rejected the request, otherwise discarded:
+//
+//	[req.body] POST /v1/messages provider=seibert-api/0 status=401 body_len=57 body={"error":"invalid api key"}
+//
+// The body is bounded to BodySampleMaxBytes and bearer tokens are
+// redacted via RedactBearerTokensInBody. 200s never emit it: their
+// bodies are large, streaming, and already sampled at V(4).
+//
 // At V(2), alias resolution and route match get their own `[alias]` /
 // `[route]` detail lines (independent of the sampler — V(2) detail is
 // already operator-opt-in, additional gating buys nothing).
@@ -489,6 +499,30 @@ func newModelRouter(
 		// path so the 10s window is paced by real success density.
 		if status == http.StatusOK && !sampler.IsSample() {
 			return
+		}
+		// Non-2xx: the upstream's own response body is the only record of WHY
+		// a provider rejected the request, and it is otherwise discarded. Emit
+		// it at V(1) — the level [req] already logs at, reachable without the
+		// loopback admin endpoint — bounded to BodySampleMaxBytes and with
+		// bearer tokens redacted. 200s are excluded: their bodies are large,
+		// streaming, and already available via the V(4) sampler.
+		if status < http.StatusOK || status >= http.StatusMultipleChoices {
+			raw := ur.Tail()
+			body := decodeIfEncoded(raw, rec.Header().Get("Content-Encoding"))
+			if body == nil {
+				// Undecodable encoding: log the raw prefix rather than
+				// claiming an empty body.
+				body = raw
+			}
+			total := len(body)
+			if total > BodySampleMaxBytes {
+				body = body[:BodySampleMaxBytes]
+			}
+			glog.V(1).Infof(
+				"[req.body] %s %s provider=%s/%s status=%d body_len=%d body=%s",
+				r.Method, r.URL.Path, providerName, member, status, total,
+				RedactBearerTokensInBody(body),
+			)
 		}
 		in, out := usage.logLineValue()
 		if aliasResolved != "" {
