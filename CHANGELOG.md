@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- feat: log the upstream response body on every non-2xx at V(1) as a `[req.body]` line, bounded to `BodySampleMaxBytes` and bearer-redacted, so a provider rejection is diagnosable without the loopback admin endpoint
+
 ## v0.59.2
 
 - chore: update Go to 1.27.4 and github.com/bborbe/argument/v2 to v2.13.11, github.com/bborbe/http to v1.26.34, github.com/bborbe/log to v1.7.9, github.com/bborbe/run to v1.11.11, github.com/bborbe/service to v1.11.3, github.com/bborbe/time to v1.27.28

@@ -555,6 +555,46 @@ var _ = Describe("ModelRouter", func() {
 			Expect(latency[1]).To(MatchRegexp(`^\d+(\.\d+)?(m?s)$`))
 		})
 
+		It("emits [req.body] with the upstream body on a non-2xx at V(1)", func() {
+			// Default verbosity (V(1)) — the level [req] already logs at and
+			// the deployed router runs at. The 401 body must be readable
+			// without bumping to V(4) or reaching the loopback admin endpoint.
+			_ = flag.Set("v", "1")
+			failing := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"invalid api key","auth":"Bearer sk-secret-123"}`))
+			})
+			mux = handler.NewModelRouter(
+				[]handler.ModelRoute{
+					{Pattern: "MiniMax-*", ProviderName: "seibert-api", Handler: failing},
+				},
+				"default-fallback",
+				fallback,
+				nil,
+				alwaysSample,
+				testMetrics,
+				testDateTime,
+			)
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+			})
+			Expect(
+				out,
+			).To(MatchRegexp(`\[req\.body\] POST /v1/messages provider=seibert-api/- status=401 body_len=\d+ body=.*invalid api key`))
+			// Redaction is falsifiable: the seeded token must not survive.
+			Expect(out).ToNot(ContainSubstring("sk-secret-123"))
+			Expect(out).To(ContainSubstring("Bearer <redacted>"))
+		})
+
+		It("emits no [req.body] line on a 200", func() {
+			_ = flag.Set("v", "1")
+			out := captureStderr(func() {
+				mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+			})
+			Expect(out).ToNot(ContainSubstring("[req.body]"))
+		})
+
 		Context("sampler gating", func() {
 			It("suppresses 200 [req] lines when the sampler returns false", func() {
 				never := liblog.SamplerFunc(func() bool { return false })
