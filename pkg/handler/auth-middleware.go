@@ -17,13 +17,16 @@ import (
 // Loopback requests bypass the key check entirely but still have the
 // header stripped and still record the presented key in context, so an
 // upstream never observes the caller's API key and the router can route
-// by it. If allowedKeys is empty, the wrapper is a no-op and returns
-// next unchanged — the request path is byte-for-byte identical to a
-// release without key routing (feature-off default, AC 1).
+// by it.
+//
+// The header is stripped on EVERY path, including the feature-off default
+// where allowedKeys is empty. An empty registry turns off key ROUTING —
+// no rejection, and no key recorded in the context — but never the strip.
+// A caller that sends x-api-key alongside its Authorization (pi does;
+// Claude Code does not) would otherwise have the extra Anthropic-style
+// header forwarded to the provider, where it takes precedence over the
+// bearer and is rejected as an invalid API key.
 func NewAuthMiddleware(next http.Handler, allowedKeys map[string]struct{}) http.Handler {
-	if len(allowedKeys) == 0 {
-		return next
-	}
 	return &authMiddleware{next: next, allowedKeys: allowedKeys}
 }
 
@@ -34,7 +37,10 @@ type authMiddleware struct {
 
 func (a *authMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	presented := r.Header.Get("X-Api-Key")
-	if !IsLoopbackRemoteAddr(r.RemoteAddr) {
+	// An empty registry means key routing is off: no rejection and no key
+	// recorded in the context. The strip below still runs, on this path as
+	// on every other — see NewAuthMiddleware's contract.
+	if len(a.allowedKeys) > 0 && !IsLoopbackRemoteAddr(r.RemoteAddr) {
 		if presented == "" || !a.accepts(presented) {
 			glog.Infof("auth rejected remote=%s", r.RemoteAddr)
 			http.Error(w, "auth required", http.StatusUnauthorized)
@@ -43,7 +49,7 @@ func (a *authMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	clone := r.Clone(r.Context())
 	clone.Header.Del("X-Api-Key")
-	if presented != "" {
+	if presented != "" && len(a.allowedKeys) > 0 {
 		clone = clone.WithContext(ContextWithPresentedApiKey(clone.Context(), presented))
 	}
 	a.next.ServeHTTP(w, clone)

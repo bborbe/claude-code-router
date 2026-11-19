@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: strip `X-Api-Key` from the forwarded request on every path, including when no `allowedApiKeys` are configured — an empty registry turns off key routing, never the strip, so an upstream no longer observes a caller's API key merely because routing is unconfigured
+
 ## v0.60.0
 
 - feat: log the upstream response body on every non-2xx at V(1) as a `[req.body]` line, bounded to `BodySampleMaxBytes` and bearer-redacted, so a provider rejection is diagnosable without the loopback admin endpoint

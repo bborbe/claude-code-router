@@ -19,8 +19,8 @@ import (
 
 // countingInner records how many requests reached it, which headers it
 // observed, and the request context, so specs can assert both that the
-// middleware let a request through and that x-api-key was stripped (or, in
-// the feature-off case, left intact) before the wrapped handler saw it.
+// middleware let a request through and that x-api-key was stripped before
+// the wrapped handler saw it.
 type countingInner struct {
 	calls int
 	seen  http.Header
@@ -60,21 +60,24 @@ var _ = Describe("AuthMiddleware", func() {
 	}
 
 	It(
-		"returns next unchanged when the key set is empty and passes requests through untouched",
+		"strips x-api-key when the key set is empty, without rejecting or recording the key",
 		func() {
 			mw = handler.NewAuthMiddleware(inner, map[string]struct{}{})
 			Expect(
 				mw,
-			).To(BeIdenticalTo(http.Handler(inner)), "empty key set must return next unchanged")
+			).NotTo(BeIdenticalTo(http.Handler(inner)), "empty key set must still wrap so the header is stripped")
 
 			mw.ServeHTTP(rec, newRequest("10.0.0.1:12345", "secret"))
 
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(inner.calls).To(Equal(1))
-			// Feature-off contract (AC 1): the inbound request is not mutated —
-			// the wrapped handler still observes the x-api-key header, and no
-			// key is recorded in the request context.
-			Expect(inner.seen.Get("X-Api-Key")).To(Equal("secret"))
+			// Feature-off contract: an empty registry turns off key routing
+			// — no rejection, no key recorded in the context — but the
+			// inbound x-api-key is still stripped, so an upstream never
+			// observes the caller's API key merely because routing is
+			// unconfigured.
+			Expect(inner.seen).NotTo(HaveKey("X-Api-Key"))
+			Expect(inner.seen).NotTo(HaveKey("x-api-key"))
 			Expect(handler.PresentedApiKeyFromContext(inner.ctx)).To(Equal(""))
 		},
 	)
