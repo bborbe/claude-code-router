@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.60.1
 
 - fix: strip `X-Api-Key` from the forwarded request on every path, including when no `allowedApiKeys` are configured — an empty registry turns off key routing, never the strip, so an upstream no longer observes a caller's API key merely because routing is unconfigured
 
