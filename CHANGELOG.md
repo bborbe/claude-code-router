@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.60.2
 
 - fix: answer a client-canceled proxy request (`context canceled`, e.g. Esc in Claude Code) with 499 at info level instead of 502 at error level — a client abort no longer reads as an upstream failure and no longer counts against the circuit breaker or TTFT backpressure
 
