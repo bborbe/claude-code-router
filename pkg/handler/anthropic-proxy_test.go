@@ -5,6 +5,7 @@
 package handler_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -90,6 +91,35 @@ var _ = Describe("AnthropicProxyHandler", func() {
 		h.ServeHTTP(rec, req)
 
 		Expect(stub.captured.Header.Get("Authorization")).To(Equal("Bearer sk-oauth-bearer-secret"))
+	})
+
+	It("returns 499 when the client canceled the request", func() {
+		h := handler.NewAnthropicProxyHandler(
+			upstreamURL,
+			errTransport{err: context.Canceled},
+		)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+
+		h.ServeHTTP(rec, req)
+
+		Expect(rec.Code).To(Equal(handler.StatusClientClosedRequest))
+	})
+
+	It("returns 499 when the request context is already done", func() {
+		h := handler.NewAnthropicProxyHandler(
+			upstreamURL,
+			errTransport{err: errors.New("use of closed network connection")},
+		)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`)).
+			WithContext(ctx)
+
+		h.ServeHTTP(rec, req)
+
+		Expect(rec.Code).To(Equal(handler.StatusClientClosedRequest))
 	})
 
 	It(
