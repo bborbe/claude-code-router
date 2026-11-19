@@ -5,6 +5,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -41,6 +43,10 @@ func DefaultProxyTransport() *http.Transport {
 	}
 }
 
+// StatusClientClosedRequest is the non-standard 499 status (nginx
+// convention) recorded when the client aborts before upstream answered.
+const StatusClientClosedRequest = 499
+
 // NewAnthropicProxyHandler returns an HTTP handler that reverse-proxies
 // every incoming request to upstream (typically https://api.anthropic.com).
 //
@@ -56,6 +62,12 @@ func DefaultProxyTransport() *http.Transport {
 // internal error details (IPs, TLS handshake failures, connection
 // strings) are not leaked.
 //
+// A client that aborts the request (Claude Code on Esc or an interrupted
+// run) surfaces here as context.Canceled. That is not an upstream failure:
+// it is answered with 499 Client Closed Request, logged at info level, and
+// stays below the >=500 threshold the circuit breaker and TTFT backpressure
+// count as failures.
+//
 // If transport is nil, DefaultProxyTransport is used.
 func NewAnthropicProxyHandler(upstream *url.URL, transport http.RoundTripper) http.Handler {
 	if transport == nil {
@@ -63,6 +75,12 @@ func NewAnthropicProxyHandler(upstream *url.URL, transport http.RoundTripper) ht
 	}
 	errorHandler := libhttp.ProxyErrorHandlerFunc(
 		func(resp http.ResponseWriter, req *http.Request, err error) {
+			if errors.Is(err, context.Canceled) || req.Context().Err() != nil {
+				glog.V(1).
+					Infof("[proxy] %s %s -> client canceled: %v", req.Method, req.URL.Path, err)
+				resp.WriteHeader(StatusClientClosedRequest)
+				return
+			}
 			glog.Errorf("[proxy] %s %s -> upstream error: %v", req.Method, req.URL.Path, err)
 			resp.WriteHeader(http.StatusBadGateway)
 			_, _ = resp.Write([]byte("upstream unavailable"))

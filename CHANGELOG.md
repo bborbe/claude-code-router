@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- fix: answer a client-canceled proxy request (`context canceled`, e.g. Esc in Claude Code) with 499 at info level instead of 502 at error level — a client abort no longer reads as an upstream failure and no longer counts against the circuit breaker or TTFT backpressure
+
 ## v0.60.1
 
 - fix: strip `X-Api-Key` from the forwarded request on every path, including when no `allowedApiKeys` are configured — an empty registry turns off key routing, never the strip, so an upstream no longer observes a caller's API key merely because routing is unconfigured
