@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/andybalholm/brotli"
 )
 
 // TailBufferBytes caps the number of response-body bytes retained for
@@ -33,19 +35,26 @@ const TailBufferBytes = 2 << 20 // 2 MiB
 const decodedTailCapBytes = 8 << 20 // 8 MiB
 
 // decodeIfEncoded returns tail decompressed when contentEncoding names a
-// supported encoding (currently: gzip only), or tail unchanged when the
+// supported encoding (gzip, or brotli "br"), or tail unchanged when the
 // encoding is empty or "identity" (both are no-op encodings per RFC 9110
-// §8.4). For any other encoding value ("br", "deflate", "zstd", chained
+// §8.4). For any other encoding value ("deflate", "zstd", chained
 // encodings, unknown tokens) the helper returns nil so the caller's
 // len(tail) == 0 guard short-circuits to noUsage — spec 006 defers those
 // encodings and requires the [req] line to log in=- out=-.
 //
+// Brotli is not deferred any more: Cloudflare serves `Content-Encoding:
+// br` to any client that advertises it, Claude Code advertises it, the
+// router forwards the client's Accept-Encoding verbatim, and the result
+// was an opaque compressed `[req.body]` line plus in=- out=- on the
+// usage path (spec 021 observation). gzip stays first because it is the
+// encoding Go's own transport negotiates.
+//
 // Decompression is bounded by decodedTailCapBytes to defend against
-// decompression bombs. A truncated gzip stream, corrupt bytes, or an
-// I/O error returns nil (again short-circuiting to noUsage via the
-// caller's empty-tail guard). This function itself does not panic;
-// io.ReadAll and gzip.NewReader return errors on every failure shape
-// observed on real Anthropic + Cloudflare traffic.
+// decompression bombs. A truncated stream, corrupt bytes, or an I/O
+// error returns nil (again short-circuiting to noUsage via the caller's
+// empty-tail guard). This function itself does not panic; io.ReadAll and
+// the readers return errors on every failure shape observed on real
+// Anthropic + Cloudflare traffic.
 func decodeIfEncoded(tail []byte, contentEncoding string) []byte {
 	enc := strings.ToLower(strings.TrimSpace(contentEncoding))
 	switch enc {
@@ -57,14 +66,22 @@ func decodeIfEncoded(tail []byte, contentEncoding string) []byte {
 			return nil
 		}
 		defer func() { _ = gz.Close() }()
-		decoded, err := io.ReadAll(io.LimitReader(gz, decodedTailCapBytes))
-		if err != nil {
-			return nil
-		}
-		return decoded
+		return readDecoded(gz)
+	case "br", "brotli":
+		return readDecoded(brotli.NewReader(bytes.NewReader(tail)))
 	default:
 		return nil
 	}
+}
+
+// readDecoded reads at most decodedTailCapBytes from r, returning nil on
+// any read error so an undecodable body is never mistaken for a short one.
+func readDecoded(r io.Reader) []byte {
+	decoded, err := io.ReadAll(io.LimitReader(r, decodedTailCapBytes))
+	if err != nil {
+		return nil
+	}
+	return decoded
 }
 
 // usageRecorder wraps a *statusRecorder and tees every byte written to

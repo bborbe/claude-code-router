@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	bberrors "github.com/bborbe/errors"
 	liblog "github.com/bborbe/log"
@@ -98,8 +100,14 @@ type ModelRoute struct {
 //	[req.body] POST /v1/messages provider=seibert-api/0 status=401 body_len=57 body={"error":"invalid api key"}
 //
 // The body is bounded to BodySampleMaxBytes and bearer tokens are
-// redacted via RedactBearerTokensInBody. 200s never emit it: their
-// bodies are large, streaming, and already sampled at V(4).
+// redacted via RedactBearerTokensInBody. A body that cannot be decoded
+// (unknown Content-Encoding) or is not valid UTF-8 is not printed at
+// all; the line carries a placeholder naming the encoding instead:
+//
+//	[req.body] POST /v1/messages provider=anthropic-subscription/0 status=400 body_len=161 body=<binary content-encoding="br">
+//
+// 200s never emit it: their bodies are large, streaming, and already
+// sampled at V(4).
 //
 // At V(2), alias resolution and route match get their own `[alias]` /
 // `[route]` detail lines (independent of the sampler — V(2) detail is
@@ -507,21 +515,10 @@ func newModelRouter(
 		// bearer tokens redacted. 200s are excluded: their bodies are large,
 		// streaming, and already available via the V(4) sampler.
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			raw := ur.Tail()
-			body := decodeIfEncoded(raw, rec.Header().Get("Content-Encoding"))
-			if body == nil {
-				// Undecodable encoding: log the raw prefix rather than
-				// claiming an empty body.
-				body = raw
-			}
-			total := len(body)
-			if total > BodySampleMaxBytes {
-				body = body[:BodySampleMaxBytes]
-			}
+			rendered, total := renderUpstreamBody(ur.Tail(), rec.Header().Get("Content-Encoding"))
 			glog.V(1).Infof(
 				"[req.body] %s %s provider=%s/%s status=%d body_len=%d body=%s",
-				r.Method, r.URL.Path, providerName, member, status, total,
-				RedactBearerTokensInBody(body),
+				r.Method, r.URL.Path, providerName, member, status, total, rendered,
 			)
 		}
 		in, out := usage.logLineValue()
@@ -537,6 +534,29 @@ func newModelRouter(
 			r.Method, r.URL.Path, origModel, providerName, member, status, latency, in, out, reasonField,
 		)
 	})
+}
+
+// renderUpstreamBody returns the loggable form of an upstream response
+// body plus the byte count to report. A body that decodes to valid UTF-8
+// is returned redacted and bounded to BodySampleMaxBytes; anything else —
+// an encoding this package cannot decode, or decoded bytes that are not
+// text — is replaced by a placeholder naming the encoding, because raw
+// bytes corrupt a text log line and any 0x0a inside them splits it in
+// two. `total` is the captured length, reported so an opaque body still
+// says how much arrived.
+func renderUpstreamBody(raw []byte, contentEncoding string) (rendered string, total int) {
+	body := decodeIfEncoded(raw, contentEncoding)
+	if body == nil {
+		return fmt.Sprintf("<binary content-encoding=%q>", contentEncoding), len(raw)
+	}
+	total = len(body)
+	if total > BodySampleMaxBytes {
+		body = body[:BodySampleMaxBytes]
+	}
+	if !utf8.Valid(body) {
+		return fmt.Sprintf("<binary content-encoding=%q>", contentEncoding), total
+	}
+	return string(RedactBearerTokensInBody(body)), total
 }
 
 // rewriteModelField parses body as a JSON object, sets the top-level

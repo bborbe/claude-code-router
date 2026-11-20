@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/andybalholm/brotli"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -689,12 +690,12 @@ var _ = Describe("extractUsage", func() {
 			Expect(usage.Output).To(Equal("89"))
 		})
 
-		It("returns noUsage for unsupported encodings (br)", func() {
+		It("returns noUsage for unsupported encodings (zstd)", func() {
 			// Even if the bytes are structurally valid JSON with a usage block,
-			// an unsupported encoding must not extract — spec 006 defers br/
+			// an unsupported encoding must not extract — spec 006 still defers
 			// deflate/zstd. The [req] line logs in=- out=-.
 			raw := []byte(`{"usage":{"input_tokens":31,"output_tokens":47}}`)
-			usage := handler.ExtractUsage(raw, "application/json", "br")
+			usage := handler.ExtractUsage(raw, "application/json", "zstd")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})
@@ -721,11 +722,72 @@ var _ = Describe("extractUsage", func() {
 		})
 
 		It("returns noUsage for chained encodings (gzip, br)", func() {
-			// The decoder currently supports only single-encoding gzip; a
-			// chained header is treated as an unknown encoding and yields
-			// noUsage (spec 006 Failure Modes).
+			// The decoder supports single encodings only; a chained header is
+			// treated as an unknown encoding and yields noUsage (spec 006
+			// Failure Modes).
 			raw := []byte(`{"usage":{"input_tokens":13,"output_tokens":19}}`)
 			usage := handler.ExtractUsage(raw, "application/json", "gzip, br")
+			Expect(usage.Input).To(Equal("-"))
+			Expect(usage.Output).To(Equal("-"))
+		})
+	})
+
+	// Cloudflare serves `Content-Encoding: br` to any client that
+	// advertises it, and Claude Code does — so an Anthropic error body
+	// arrives brotli-compressed and used to reach the `[req.body]` line as
+	// raw bytes, with the usage path logging in=- out=-.
+	Describe("Content-Encoding: br decompression", func() {
+		brotliBytes := func(raw []byte) []byte {
+			var buf bytes.Buffer
+			bw := brotli.NewWriter(&buf)
+			_, err := bw.Write(raw)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(bw.Close()).To(Succeed())
+			return buf.Bytes()
+		}
+
+		It("decompresses brotli JSON and extracts usage", func() {
+			// Anti-fake: input=173, output=284 — distinct from every gzip case.
+			raw := []byte(`{"id":"msg_b1","usage":{"input_tokens":173,"output_tokens":284}}`)
+			tail := brotliBytes(raw)
+			usage := handler.ExtractUsage(tail, "application/json", "br")
+			Expect(usage.Input).To(Equal("173"))
+			Expect(usage.Output).To(Equal("284"))
+		})
+
+		It("decompresses brotli split-event SSE and combines input+output tokens", func() {
+			// Anti-fake: input=641, output=752.
+			raw := []byte(
+				"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_b2\",\"usage\":{\"input_tokens\":641,\"output_tokens\":1}}}\n\n" +
+					"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":752}}\n\n",
+			)
+			tail := brotliBytes(raw)
+			usage := handler.ExtractUsage(tail, "text/event-stream", "br")
+			Expect(usage.Input).To(Equal("641"))
+			Expect(usage.Output).To(Equal("752"))
+		})
+
+		It("treats Content-Encoding case-insensitively (BR == br)", func() {
+			// Anti-fake: input=97, output=123.
+			raw := []byte(`{"usage":{"input_tokens":97,"output_tokens":123}}`)
+			tail := brotliBytes(raw)
+			usage := handler.ExtractUsage(tail, "application/json", "BR")
+			Expect(usage.Input).To(Equal("97"))
+			Expect(usage.Output).To(Equal("123"))
+		})
+
+		It("accepts the long-form encoding name (brotli)", func() {
+			// Anti-fake: input=52, output=68.
+			raw := []byte(`{"usage":{"input_tokens":52,"output_tokens":68}}`)
+			tail := brotliBytes(raw)
+			usage := handler.ExtractUsage(tail, "application/json", "brotli")
+			Expect(usage.Input).To(Equal("52"))
+			Expect(usage.Output).To(Equal("68"))
+		})
+
+		It("returns noUsage on corrupt brotli bytes (no panic)", func() {
+			corrupt := []byte{0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04}
+			usage := handler.ExtractUsage(corrupt, "application/json", "br")
 			Expect(usage.Input).To(Equal("-"))
 			Expect(usage.Output).To(Equal("-"))
 		})

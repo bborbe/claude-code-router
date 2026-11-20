@@ -3,6 +3,7 @@ module github.com/bborbe/claude-code-router
 go 1.27.4
 
 require (
+	github.com/andybalholm/brotli v1.3.0
 	github.com/bborbe/argument/v2 v2.13.11
 	github.com/bborbe/errors v1.6.6
 	github.com/bborbe/http v1.26.34
