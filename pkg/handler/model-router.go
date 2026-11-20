@@ -550,13 +550,24 @@ func renderUpstreamBody(raw []byte, contentEncoding string) (rendered string, to
 		return fmt.Sprintf("<binary content-encoding=%q>", contentEncoding), len(raw)
 	}
 	total = len(body)
-	if total > BodySampleMaxBytes {
-		body = body[:BodySampleMaxBytes]
-	}
 	if !utf8.Valid(body) {
 		return fmt.Sprintf("<binary content-encoding=%q>", contentEncoding), total
 	}
-	return string(RedactBearerTokensInBody(body)), total
+	if total > BodySampleMaxBytes {
+		// Cut on a rune boundary: a mid-rune slice is invalid UTF-8, and
+		// validating after the cut would misreport a plain text body as
+		// binary.
+		cut := BodySampleMaxBytes
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
+		body = body[:cut]
+	}
+	// CR/LF are valid UTF-8 but would still split the log line, so a
+	// decoded body is flattened onto one line.
+	rendered = string(RedactBearerTokensInBody(body))
+	rendered = strings.NewReplacer("\r", " ", "\n", " ").Replace(rendered)
+	return rendered, total
 }
 
 // rewriteModelField parses body as a JSON object, sets the top-level

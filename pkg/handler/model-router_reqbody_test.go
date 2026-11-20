@@ -104,6 +104,32 @@ var _ = Describe("ModelRouter [req.body] encoding", func() {
 		Expect(out).To(ContainSubstring("status=400"))
 	})
 
+	It("keeps a large text body readable when the cut lands mid-rune", func() {
+		// BodySampleMaxBytes falls on the middle of the multi-byte rune, so a
+		// naive slice would leave invalid UTF-8 and misreport text as binary.
+		payload := strings.Repeat("a", handler.BodySampleMaxBytes-1) + "€ tail"
+		newMux([]byte(payload), "")
+
+		out := captureStderr(func() {
+			mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+		})
+		Expect(out).ToNot(ContainSubstring("<binary"))
+		Expect(out).To(ContainSubstring("aaaa"))
+	})
+
+	It("flattens a decoded body containing newlines onto one line", func() {
+		// CR/LF are valid UTF-8, so the binary guard does not catch them —
+		// but they still end the log line early.
+		payload := []byte("{\"error\":\"line one\nline two\r\nline three\"}")
+		newMux(payload, "")
+
+		out := captureStderr(func() {
+			mux.ServeHTTP(rec, post(`{"model":"MiniMax-M3-highspeed"}`))
+		})
+		Expect(strings.Count(out, "[req.body]")).To(Equal(1))
+		Expect(out).To(ContainSubstring("line one line two  line three"))
+	})
+
 	It("never logs raw bytes when a decoded body is not valid UTF-8", func() {
 		// A corrupt stream that brotli tolerates but that yields bytes no
 		// text log can carry.

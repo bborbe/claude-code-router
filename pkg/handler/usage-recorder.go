@@ -46,8 +46,8 @@ const decodedTailCapBytes = 8 << 20 // 8 MiB
 // br` to any client that advertises it, Claude Code advertises it, the
 // router forwards the client's Accept-Encoding verbatim, and the result
 // was an opaque compressed `[req.body]` line plus in=- out=- on the
-// usage path (spec 021 observation). gzip stays first because it is the
-// encoding Go's own transport negotiates.
+// usage path. gzip stays first because it is the encoding Go's own
+// transport negotiates.
 //
 // Decompression is bounded by decodedTailCapBytes to defend against
 // decompression bombs. A truncated stream, corrupt bytes, or an I/O
