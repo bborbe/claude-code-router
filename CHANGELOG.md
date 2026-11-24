@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: remove stale vulnerability ignore IDs that no longer apply
+
 ## v0.60.3
 
 - fix: decode `Content-Encoding: br` response bodies and never print raw bytes on the `[req.body]` line — a brotli-compressed provider error now logs its JSON (and token usage extracts again), while an undecodable body logs `body=<binary content-encoding="br">` instead of corrupting the log line
