@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
+## Unreleased
+
+- chore: update github.com/bborbe/argument/v2 to v2.13.13, github.com/bborbe/errors to v1.7.1, github.com/bborbe/http to v1.28.0, github.com/bborbe/log to v1.7.10, github.com/bborbe/run to v1.13.0, github.com/bborbe/service to v1.12.2, github.com/bborbe/time to v1.27.30
+
 ## v0.60.4
 
 - chore: remove stale vulnerability ignore IDs that no longer apply
